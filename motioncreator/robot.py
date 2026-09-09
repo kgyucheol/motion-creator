@@ -1,0 +1,281 @@
+"""MuJoCo FK and bounded, weighted whole-body IK. No dynamics stepping."""
+from pathlib import Path
+import hashlib
+import numpy as np
+import mujoco
+from scipy.optimize import least_squares
+from scipy.spatial.transform import Rotation
+
+ROOT = Path(__file__).resolve().parents[1]
+MODEL_PATH = ROOT / 'assets/g1/g1.xml'
+HANDLES = {
+    'pelvis': ('pelvis', (0, 0, 0), '골반'),
+    'left_knee': ('left_knee_link', (0, 0, 0), '왼 무릎'),
+    'right_knee': ('right_knee_link', (0, 0, 0), '오른 무릎'),
+    'left_foot': ('left_ankle_roll_link', (.035, 0, -.035), '왼발'),
+    'right_foot': ('right_ankle_roll_link', (.035, 0, -.035), '오른발'),
+    'left_hand': ('left_wrist_yaw_link', (.055, 0, 0), '왼손'),
+    'right_hand': ('right_wrist_yaw_link', (.055, 0, 0), '오른손'),
+    'left_elbow': ('left_elbow_link', (0, 0, 0), '왼 팔꿈치'),
+    'right_elbow': ('right_elbow_link', (0, 0, 0), '오른 팔꿈치'),
+    'left_shoulder': ('left_shoulder_pitch_link', (0, 0, 0), '왼 어깨'),
+    'right_shoulder': ('right_shoulder_pitch_link', (0, 0, 0), '오른 어깨'),
+}
+FEET = ('left_foot', 'right_foot')
+ROTATABLE = ('pelvis', 'left_hand', 'right_hand', *FEET)
+HINGES = {key: key + '_joint' for key in ('left_elbow', 'right_elbow', 'left_knee', 'right_knee')}
+
+
+def skew(v):
+    x, y, z = v
+    return np.array([[0., -z, y], [z, 0., -x], [-y, x, 0.]])
+
+
+def right_jacobian(v):
+    theta = np.linalg.norm(v)
+    k = skew(v)
+    if theta < 1e-5:
+        return np.eye(3) - .5*k + k@k/6
+    return np.eye(3) - (1-np.cos(theta))/theta**2*k + (theta-np.sin(theta))/theta**3*(k@k)
+
+
+def left_jacobian_inverse(v):
+    theta = np.linalg.norm(v)
+    k = skew(v)
+    coefficient = 1/12 if theta < 1e-5 else (1 - .5*theta/np.tan(theta/2))/theta**2
+    return np.eye(3) - .5*k + coefficient*(k@k)
+
+
+def quat_matrix(wxyz):
+    return Rotation.from_quat(np.asarray(wxyz)[[1, 2, 3, 0]]).as_matrix()
+
+
+def matrix_quat(matrix):
+    return Rotation.from_matrix(matrix).as_quat()[[3, 0, 1, 2]]
+
+
+class Robot:
+    def __init__(self):
+        self.model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+        m = self.model
+        self.names = [m.joint(i).name for i in range(1, m.njnt)]
+        self.ids = {k: m.body(v[0]).id for k, v in HANDLES.items()}
+        self.q_indices = np.r_[0:3, 7:m.nq]
+        self.v_indices = np.r_[0:3, 6:m.nv]
+        self.lower = np.r_[[-4, -4, .20], m.jnt_range[1:, 0]]
+        self.upper = np.r_[[4, 4, 1.5], m.jnt_range[1:, 1]]
+        self.home = m.qpos0.copy()
+        for side in ('left', 'right'):
+            for name, value in [('hip_pitch', -.12), ('knee', .24), ('ankle_pitch', -.12), ('elbow', .15)]:
+                self.home[m.joint(f'{side}_{name}_joint').qposadr[0]] = value
+        d = self.data(self.home)
+        # The model uses radius-5 mm contact spheres at z=-30 mm.
+        self.home[2] -= min(self.point(d, k)[0][2] for k in FEET)
+        self.visual_ids = [i for i in range(m.ngeom) if m.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH and m.geom_group[i] == 1]
+        self.fingerprint = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()
+
+    def validate_q(self, value):
+        q = np.array(value, dtype=float, copy=True)
+        if q.shape != (self.model.nq,) or not np.isfinite(q).all():
+            raise ValueError(f'qpos must contain {self.model.nq} finite numbers')
+        norm = np.linalg.norm(q[3:7])
+        if abs(norm - 1.) > 1e-4:
+            raise ValueError('Root quaternion must be normalized (wxyz)')
+        q[3:7] /= norm
+        x = q[self.q_indices]
+        if np.any(x < self.lower - 1e-7) or np.any(x > self.upper + 1e-7):
+            raise ValueError('Pose exceeds model joint or workspace limits')
+        return q.copy()
+
+    def data(self, q):
+        d = mujoco.MjData(self.model)
+        d.qpos[:] = q
+        mujoco.mj_forward(self.model, d)
+        return d
+
+    def point(self, d, key):
+        b = self.ids[key]
+        r = d.xmat[b].reshape(3, 3)
+        return d.xpos[b] + r @ np.array(HANDLES[key][1]), r
+
+    def distance(self, a, b):
+        def ancestors(n):
+            out = []
+            while n:
+                out.append(n)
+                n = int(self.model.body_parentid[n])
+            return out + [0]
+        aa, bb = ancestors(self.ids[a]), ancestors(self.ids[b])
+        return min(i + bb.index(n) for i, n in enumerate(aa) if n in bb)
+
+    def solve(self, q, anchor, focus=None, target=None, pins=FEET, resistance=1., mode='elastic', targets=None, max_nfev=50,
+              posture_reference=None, posture_weight=.055, selected_targets=None, orientation_targets=None,
+              joint_targets=None):
+        q, anchor = self.validate_q(q), self.validate_q(anchor)
+        selected_targets = dict(selected_targets or {})
+        orientation_targets = dict(orientation_targets or {})
+        joint_targets = dict(joint_targets or {})
+        if focus is not None:
+            selected_targets[focus] = target
+        if any(k not in HANDLES for k in [*pins, *selected_targets, *orientation_targets]):
+            raise ValueError('Unknown handle')
+        if set(selected_targets) & set(pins):
+            raise ValueError('선택한 부위에 고정된 부위가 있습니다. 이동하려면 먼저 고정을 해제하세요.')
+        if any(k not in ROTATABLE for k in orientation_targets):
+            raise ValueError('회전은 골반·손·발에서 지원합니다. 팔꿈치·무릎은 관절각 목표를 사용하세요.')
+        if set(orientation_targets) & set(pins) & set(FEET):
+            raise ValueError('발 방향이 고정되어 있습니다. 회전하려면 발 고정을 해제하세요.')
+        if any(k not in self.names for k in joint_targets):
+            raise ValueError('Unknown joint')
+        for key, value in joint_targets.items():
+            i = self.names.index(key)
+            if not np.isfinite(value) or not self.lower[3+i] <= value <= self.upper[3+i]:
+                raise ValueError('Joint target exceeds joint limits')
+        ad = self.data(anchor)
+        base_targets = {k: self.point(ad, k) for k in HANDLES}
+        desired = {k: (p.copy(), r.copy()) for k, (p, r) in base_targets.items()}
+        if targets:
+            desired.update(targets)
+        for key, value in selected_targets.items():
+            t = np.asarray(value, dtype=float)
+            if t.shape != (3,) or not np.isfinite(t).all() or np.max(np.abs(t)) > 5:
+                raise ValueError('Target must be a finite XYZ point within 5 m')
+            desired[key] = (t, desired[key][1])
+        for key, value in orientation_targets.items():
+            quat = np.asarray(value, dtype=float)
+            if quat.shape != (4,) or not np.isfinite(quat).all() or abs(np.linalg.norm(quat)-1) > 1e-4:
+                raise ValueError('Orientation target must be a normalized xyzw quaternion')
+            desired[key] = (desired[key][0], Rotation.from_quat(quat).as_matrix())
+        active = set(selected_targets) | set(orientation_targets)
+        weights = {}
+        for k in HANDLES:
+            if k in pins:
+                weights[k] = 180.
+                desired[k] = (base_targets[k][0], desired[k][1] if k in orientation_targets else base_targets[k][1])
+            elif k in selected_targets or k in orientation_targets:
+                weights[k] = 28.
+            elif targets:
+                weights[k] = 4.
+            elif mode == 'elastic':
+                distance = min(self.distance(key, k) for key in (active or {'pelvis'}))
+                weights[k] = resistance * (.12 + 3.0 * min(distance / 10, 1) ** 2)
+            else:
+                weights[k] = .015
+        d = self.data(q)
+        rotate_base = 'pelvis' in orientation_targets
+        n_basic = len(self.q_indices)
+        n = n_basic + (3 if rotate_base else 0)
+        base_rotation = quat_matrix(q[3:7])
+        posture_q = anchor if posture_reference is None else self.validate_q(posture_reference)
+        posture_x = posture_q[self.q_indices]
+        if rotate_base:
+            posture_x = np.r_[posture_x, Rotation.from_matrix(base_rotation.T @ quat_matrix(posture_q[3:7])).as_rotvec()]
+        jp, jr = np.zeros((3, self.model.nv)), np.zeros((3, self.model.nv))
+        rotation_map = np.eye(3)
+
+        def jacobian(point, body):
+            mujoco.mj_jac(self.model, d, jp, jr, point, body)
+            p, r = jp[:, self.v_indices].copy(), jr[:, self.v_indices].copy()
+            if rotate_base:
+                p = np.column_stack([p, jp[:, 3:6] @ rotation_map])
+                r = np.column_stack([r, jr[:, 3:6] @ rotation_map])
+            return p, r
+
+        def evaluate(x, jac=False):
+            nonlocal rotation_map
+            d.qpos[:] = q
+            d.qpos[self.q_indices] = x[:n_basic]
+            if rotate_base:
+                d.qpos[3:7] = matrix_quat(base_rotation @ Rotation.from_rotvec(x[-3:]).as_matrix())
+                rotation_map = right_jacobian(x[-3:])
+            mujoco.mj_kinematics(self.model, d)
+            mujoco.mj_comPos(self.model, d)
+            residuals, matrices = [], []
+            for k in HANDLES:
+                p, r = self.point(d, k)
+                tp, tr = desired[k]
+                residuals.append(weights[k] * (p-tp))
+                if jac:
+                    jpos, jrot = jacobian(p, self.ids[k])
+                    matrices.append(weights[k] * jpos)
+                if k in orientation_targets or (k in pins and k in FEET):
+                    w = 90. if k in pins and k in FEET else 18.
+                    err = Rotation.from_matrix(r @ tr.T).as_rotvec()
+                    residuals.append(w * err)
+                    if jac:
+                        matrices.append(w * left_jacobian_inverse(err) @ jrot)
+                if k in FEET:
+                    for offset in ((-.085, -.03, 0), (-.085, .03, 0), (.085, -.03, 0), (.085, .03, 0)):
+                        corner = p + r @ offset
+                        residuals.append(np.array([120 * min(0., corner[2])]))
+                        if jac:
+                            cj, _ = jacobian(corner, self.ids[k])
+                            matrices.append(120*cj[2:3] if corner[2] < 0 else np.zeros((1, n)))
+            for key, value in joint_targets.items():
+                index = 3 + self.names.index(key)
+                residuals.append(np.array([24.*(x[index]-value)]))
+                if jac:
+                    row = np.zeros((1, n)); row[0, index] = 24.; matrices.append(row)
+            residuals.append(posture_weight*(x-posture_x))
+            if jac:
+                matrices.append(posture_weight*np.eye(n))
+                return np.vstack(matrices)
+            return np.concatenate(residuals)
+
+        initial = q[self.q_indices]
+        lower, upper = self.lower, self.upper
+        if rotate_base:
+            initial = np.r_[initial, np.zeros(3)]
+            lower, upper = np.r_[lower, [-np.pi]*3], np.r_[upper, [np.pi]*3]
+        result = least_squares(evaluate, np.clip(initial, lower+1e-9, upper-1e-9),
+                               jac=lambda x: evaluate(x, True), bounds=(lower, upper),
+                               max_nfev=max_nfev, ftol=1e-5, xtol=1e-6, gtol=1e-5)
+        answer = q.copy()
+        answer[self.q_indices] = result.x[:n_basic]
+        if rotate_base:
+            answer[3:7] = matrix_quat(base_rotation @ Rotation.from_rotvec(result.x[-3:]).as_matrix())
+        rd = self.data(answer)
+        pin_error = max((np.linalg.norm(self.point(rd, k)[0]-base_targets[k][0]) for k in pins), default=0.)
+        angle_error = max((np.linalg.norm(Rotation.from_matrix(self.point(rd, k)[1] @ base_targets[k][1].T).as_rotvec()) for k in pins if k in FEET), default=0.)
+        rejected = bool(pin_error > .003 or angle_error > .015)
+        if rejected:
+            answer = q; rd = self.data(answer)
+        errors = {key: float(np.linalg.norm(self.point(rd, key)[0]-desired[key][0]))*1000
+                  for key in set(selected_targets) | set(orientation_targets)}
+        rotation_errors = {key: float(Rotation.from_matrix(self.point(rd, key)[1] @ desired[key][1].T).magnitude()*180/np.pi) for key in orientation_targets}
+        joint_errors = {key: float(abs(answer[7+self.names.index(key)]-value)*180/np.pi) for key, value in joint_targets.items()}
+        angular_error = max([*rotation_errors.values(), *joint_errors.values()], default=0.)
+        error = max(errors.values(), default=0.)
+        return answer, {'target_error_mm': error, 'pin_error_mm': float(pin_error*1000),
+                        'rejected': rejected, 'converged': error < 10 and angular_error < 2 and not rejected,
+                        'evaluations': result.nfev, 'target_errors_mm': errors,
+                        'angle_error_deg': angular_error, 'rotation_errors_deg': rotation_errors,
+                        'joint_errors_deg': joint_errors}
+
+    def state(self, q):
+        d = self.data(q)
+        handles = {k: {'position': p.tolist(), 'quaternion': Rotation.from_matrix(r).as_quat().tolist(), 'label': HANDLES[k][2]}
+                   for k in HANDLES for p, r in [self.point(d, k)]}
+        geoms = {str(i): {'position': d.geom_xpos[i].tolist(), 'quaternion': Rotation.from_matrix(d.geom_xmat[i].reshape(3, 3)).as_quat().tolist()}
+                 for i in self.visual_ids}
+        floor_min = min(self.point(d, k)[0][2] + (self.point(d, k)[1] @ np.array(o))[2]
+                        for k in FEET for o in ((-.085, -.03, 0), (-.085, .03, 0), (.085, -.03, 0), (.085, .03, 0)))
+        return {'qpos': np.asarray(q).tolist(), 'handles': handles, 'geoms': geoms,
+                'com': d.subtree_com[self.ids['pelvis']].tolist(), 'floor_min_mm': float(floor_min * 1000),
+                'hinges': {k: {'joint_name': name, 'angle': float(q[self.model.joint(name).qposadr[0]]),
+                              'limits': self.model.joint(name).range.tolist(),
+                              'axis_world': d.xaxis[self.model.joint(name).id].tolist(),
+                              'position': d.xanchor[self.model.joint(name).id].tolist()} for k, name in HINGES.items()}}
+
+    def export_visual(self, path):
+        import trimesh
+        scene = trimesh.Scene()
+        m = self.model
+        for i in self.visual_ids:
+            mid = m.geom_dataid[i]
+            va, vn = m.mesh_vertadr[mid], m.mesh_vertnum[mid]
+            fa, fn = m.mesh_faceadr[mid], m.mesh_facenum[mid]
+            mesh = trimesh.Trimesh(m.mesh_vert[va:va+vn].copy(), m.mesh_face[fa:fa+fn].copy(), process=False)
+            mesh.visual = trimesh.visual.ColorVisuals(mesh, face_colors=np.tile((m.geom_rgba[i] * 255).astype(np.uint8), (len(mesh.faces), 1)))
+            scene.add_geometry(mesh, node_name=f'geom_{i}', geom_name=f'geom_{i}')
+        Path(path).write_bytes(scene.export(file_type='glb'))

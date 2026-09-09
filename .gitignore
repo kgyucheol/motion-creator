@@ -1,0 +1,12 @@
+.conda/
+.conda-protomotions/
+external/
+.conda-pkgs/
+__pycache__/
+.pytest_cache/
+*.pyc
+frontend/node_modules/
+frontend/dist/
+frontend/.wrangler/
+frontend/.vinext/
+*.log

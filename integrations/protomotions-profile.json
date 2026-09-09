@@ -1,0 +1,11 @@
+{
+  "format": "motioncreator.protomotions-profile.v1",
+  "repository": "https://github.com/NVlabs/ProtoMotions",
+  "revision": "607ca7a0bb92e261120bcab8d9f97f28b3130ffc",
+  "robot": "g1",
+  "target_mjcf": "protomotions/data/assets/mjcf/g1_holo_compat.xml",
+  "target_mjcf_sha256": "f9a455ff0b2822b3d3f68e55b02cd7e21c601a84cf3173237b7bfaf494492846",
+  "source_mjcf_sha256": "e128addc6beb0633b171c67db9340c5667570e16ce6ec167f8b94a72de517bda",
+  "root_body": "pelvis",
+  "contact_bodies": ["left_ankle_roll_link", "right_ankle_roll_link"]
+}

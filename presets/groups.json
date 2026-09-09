@@ -1,0 +1,13 @@
+{
+  "format": "motioncreator.groups.v1",
+  "groups": [
+    {
+      "id": "both-hands",
+      "name": "양손",
+      "members": [
+        "left_hand",
+        "right_hand"
+      ]
+    }
+  ]
+}

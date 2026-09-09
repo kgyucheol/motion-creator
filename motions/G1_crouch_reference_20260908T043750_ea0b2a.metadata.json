@@ -1,0 +1,60 @@
+{
+  "format": "motioncreator.g1.v1",
+  "model_sha256": "e128addc6beb0633b171c67db9340c5667570e16ce6ec167f8b94a72de517bda",
+  "joint_names": [
+    "left_hip_pitch_joint",
+    "left_hip_roll_joint",
+    "left_hip_yaw_joint",
+    "left_knee_joint",
+    "left_ankle_pitch_joint",
+    "left_ankle_roll_joint",
+    "right_hip_pitch_joint",
+    "right_hip_roll_joint",
+    "right_hip_yaw_joint",
+    "right_knee_joint",
+    "right_ankle_pitch_joint",
+    "right_ankle_roll_joint",
+    "waist_yaw_joint",
+    "waist_roll_joint",
+    "waist_pitch_joint",
+    "left_shoulder_pitch_joint",
+    "left_shoulder_roll_joint",
+    "left_shoulder_yaw_joint",
+    "left_elbow_joint",
+    "left_wrist_roll_joint",
+    "left_wrist_pitch_joint",
+    "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint",
+    "right_shoulder_roll_joint",
+    "right_shoulder_yaw_joint",
+    "right_elbow_joint",
+    "right_wrist_roll_joint",
+    "right_wrist_pitch_joint",
+    "right_wrist_yaw_joint"
+  ],
+  "quaternion_order": "wxyz",
+  "coordinate_system": "right-handed, +X forward, +Y left, +Z up",
+  "units": {
+    "position": "m",
+    "angle": "rad",
+    "time": "s"
+  },
+  "root_angular_velocity_frame": "local body frame (MuJoCo free joint)",
+  "root_linear_velocity_frame": "world",
+  "contact_order": [
+    "left_foot",
+    "right_foot"
+  ],
+  "contact_semantics": "authored support flags, not measured contact forces",
+  "validation": {
+    "kind": "kinematic only",
+    "max_pin_error_mm": 0.007652800073957732,
+    "minimum_sole_height_mm": -0.006683134326581094,
+    "max_joint_speed_rad_s": 1.2973312737814795,
+    "self_collision_checked": false,
+    "dynamic_balance_checked": false
+  },
+  "interpolation": "quintic easing with IK projection for shared pins; sampled finite-difference velocities",
+  "fps": 30,
+  "samples": 121
+}
