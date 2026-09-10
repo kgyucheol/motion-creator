@@ -1,6 +1,7 @@
 """MuJoCo FK and bounded, weighted whole-body IK. No dynamics stepping."""
 from pathlib import Path
 import hashlib
+import xml.etree.ElementTree as ET
 import numpy as np
 import mujoco
 from scipy.optimize import least_squares
@@ -24,6 +25,25 @@ HANDLES = {
 FEET = ('left_foot', 'right_foot')
 ROTATABLE = ('pelvis', 'left_hand', 'right_hand', *FEET)
 HINGES = {key: key + '_joint' for key in ('left_elbow', 'right_elbow', 'left_knee', 'right_knee')}
+BASIC_HANDLES = tuple(HANDLES)
+PART_LABELS = {'hip_pitch': '고관절 피치', 'hip_roll': '고관절 롤', 'hip_yaw': '고관절 요',
+               'knee': '무릎', 'ankle_pitch': '발목 피치', 'ankle_roll': '발목 롤',
+               'shoulder_pitch': '어깨 피치', 'shoulder_roll': '어깨 롤', 'shoulder_yaw': '어깨 요',
+               'elbow': '팔꿈치', 'wrist_roll': '손목 롤', 'wrist_pitch': '손목 피치', 'wrist_yaw': '손목 요',
+               'waist_yaw': '허리 요', 'waist_roll': '허리 롤', 'waist_pitch': '허리 피치'}
+# Derive anchor locations and body bindings from the same MJCF as FK/IK.
+JOINT_HANDLES = {}
+for body in ET.parse(MODEL_PATH).iter('body'):
+    for joint in body.findall('joint'):
+        name = joint.get('name', '')
+        if not name.endswith('_joint') or joint.get('type', 'hinge') != 'hinge':
+            continue
+        part = name.removesuffix('_joint')
+        side = '왼 ' if part.startswith('left_') else '오른 ' if part.startswith('right_') else ''
+        part = part.removeprefix('left_').removeprefix('right_')
+        JOINT_HANDLES[name] = (body.get('name'), tuple(float(x) for x in joint.get('pos', '0 0 0').split()), side + PART_LABELS[part])
+HANDLES.update(JOINT_HANDLES)
+HINGES.update({name: name for name in JOINT_HANDLES})
 
 
 def skew(v):
@@ -146,9 +166,11 @@ class Robot:
             if quat.shape != (4,) or not np.isfinite(quat).all() or abs(np.linalg.norm(quat)-1) > 1e-4:
                 raise ValueError('Orientation target must be a normalized xyzw quaternion')
             desired[key] = (desired[key][0], Rotation.from_quat(quat).as_matrix())
-        active = set(selected_targets) | set(orientation_targets)
+        active = set(selected_targets) | set(orientation_targets) | set(joint_targets)
+        # Extra selectable anchors must not add passive resistance everywhere.
+        solve_handles = tuple(dict.fromkeys([*BASIC_HANDLES, *pins, *selected_targets, *orientation_targets]))
         weights = {}
-        for k in HANDLES:
+        for k in solve_handles:
             if k in pins:
                 weights[k] = 180.
                 desired[k] = (base_targets[k][0], desired[k][1] if k in orientation_targets else base_targets[k][1])
@@ -191,7 +213,7 @@ class Robot:
             mujoco.mj_kinematics(self.model, d)
             mujoco.mj_comPos(self.model, d)
             residuals, matrices = [], []
-            for k in HANDLES:
+            for k in solve_handles:
                 p, r = self.point(d, k)
                 tp, tr = desired[k]
                 residuals.append(weights[k] * (p-tp))

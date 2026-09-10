@@ -119,7 +119,7 @@ def test_antipodal_quaternions_do_not_generate_spurious_rotation(robot):
 def test_orientation_only_api_request(robot):
     with TestClient(app) as client:
         state = client.get('/api/init').json()['state']
-        assert len(state['hinges']) == 4 and 'poles' not in state
+        assert len(state['hinges']) == 33 and 'poles' not in state
         payload = {'qpos': robot.home.tolist(), 'anchor': robot.home.tolist(),
                    'orientations': {'left_hand': target_rotation(robot, robot.home, 'left_hand', [.15, 0, 0]).tolist()}}
         response = client.post('/api/solve-group', json=payload)

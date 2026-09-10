@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene } from '../lib/robot-scene.ts';
+import { RobotScene, canRotateSelection } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees } from '../lib/pose-transforms.ts';
 
 function fixture() {
@@ -61,4 +61,47 @@ test('local and world rotation increments use different axes for a rotated hand'
   const wrong = incrementRotation(initial, 0, 20, 'world');
   assert.ok(Math.abs(new THREE.Quaternion(...local).dot(new THREE.Quaternion(...world))) > 1-1e-10);
   assert.ok(Math.abs(new THREE.Quaternion(...local).dot(new THREE.Quaternion(...wrong))) < .99);
+});
+
+test('a new wrist axis uses a single ring at its physical anchor', () => {
+  const viewer = fixture();
+  const name = 'left_wrist_pitch_joint';
+  viewer.state.handles[name] = { position: [.2, .3, .8], quaternion: [0, 0, 0, 1] };
+  viewer.state.hinges = { [name]: { position: [.2, .3, .8], axis_world: [0, 1, 0] } };
+  viewer.markers = {}; viewer.labels = {};
+  viewer.pivot = new THREE.Object3D();
+  viewer.markerVisible = true;
+  viewer.transformMode = 'rotate';
+  viewer.gizmo.setSpace = (space) => { viewer.gizmo.space = space; };
+  viewer.gizmo.attach = (object) => { viewer.gizmo.object = object; };
+  viewer.gizmo.detach = () => { viewer.gizmo.object = null; };
+  viewer.select(name, ['left_foot', 'right_foot']);
+  assert.equal(canRotateSelection([name]), true);
+  assert.equal(canRotateSelection([name, 'right_wrist_pitch_joint']), false);
+  assert.equal(viewer.gizmo.object, viewer.pivot);
+  assert.equal(viewer.gizmo.space, 'local');
+  assert.equal(viewer.gizmo.showX, false);
+  assert.equal(viewer.gizmo.showY, false);
+  assert.equal(viewer.gizmo.showZ, true);
+  assert.deepEqual(viewer.pivot.position.toArray(), [.2, .3, .8]);
+  assert.ok(new THREE.Vector3(0, 0, 1).applyQuaternion(viewer.pivot.quaternion).distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-10);
+});
+
+test('Alt picking cycles through coincident joint markers and ignores hidden handles', () => {
+  const viewer = fixture();
+  viewer.renderer = { domElement: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } };
+  viewer.ray = new THREE.Raycaster(); viewer.pointer = new THREE.Vector2();
+  viewer.camera.position.set(0, 0, 2); viewer.camera.lookAt(0, 0, 0); viewer.camera.updateMatrixWorld();
+  viewer.markers = Object.fromEntries(['left_wrist_roll_joint', 'left_wrist_pitch_joint', 'left_wrist_yaw_joint', 'left_hand'].map(name => {
+    const mesh = new THREE.Mesh(new THREE.SphereGeometry(.03), new THREE.MeshBasicMaterial());
+    mesh.name = name; mesh.visible = name !== 'left_hand'; mesh.updateMatrixWorld();
+    return [name, mesh];
+  }));
+  const event = { clientX: 50, clientY: 50, altKey: true };
+  const visited = [];
+  for (let i = 0; i < 3; i++) { viewer.selected = viewer.pick(event); visited.push(viewer.selected); }
+  assert.equal(new Set(visited).size, 3);
+  assert.ok(!visited.includes('left_hand'));
+  assert.equal(viewer.pick(event), visited[0]);
+  Object.values(viewer.markers).forEach(mesh => { mesh.geometry.dispose(); mesh.material.dispose(); });
 });

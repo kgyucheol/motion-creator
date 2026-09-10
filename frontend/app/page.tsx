@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import TaskWorkbench from './task-workbench';
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, Box, ChevronLeft, ChevronRight, Trash2, Download, Check, AlertCircle } from 'lucide-react';
-import { RobotScene, canRotateSelection, type PoseState, type TransformMode } from '../lib/robot-scene';
+import { RobotScene, canRotateSelection, isJointHandle, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation } from '../lib/pose-transforms';
 
 type Keyframe = { name: string; duration: number; qpos: number[]; pins: string[] };
@@ -12,6 +12,7 @@ type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: bool
 type GroupPreset = { id: string; name: string; members: string[] };
 const feet = ['left_foot', 'right_foot'];
 const order = ['pelvis', 'left_hand', 'right_hand', 'left_foot', 'right_foot', 'left_knee', 'right_knee', 'left_elbow', 'right_elbow', 'left_shoulder', 'right_shoulder'];
+const jointSection = (key: string) => key.startsWith('waist_') ? '허리 · 3축' : `${key.startsWith('left_') ? '왼쪽' : '오른쪽'} ${/hip|knee|ankle/.test(key) ? '다리 · 6축' : '팔 · 7축'}`;
 const copy = <T,>(value: T): T => structuredClone(value);
 function selectionCenter(pose: PoseState, members: string[]) {
   return [0, 1, 2].map(i => members.reduce((sum, key) => sum + pose.handles[key].position[i], 0) / members.length);
@@ -34,6 +35,7 @@ export default function Editor() {
   const [project, setProject] = useState<Project | null>(null);
   const [selected, setSelected] = useState('pelvis');
   const [members, setMembers] = useState<string[]>(['pelvis']);
+  const [handleLayer, setHandleLayer] = useState<'body' | 'joints'>('joints');
   const [groups, setGroups] = useState<GroupPreset[]>([]);
   const [groupName, setGroupName] = useState('');
   const [groupId, setGroupId] = useState('');
@@ -105,12 +107,13 @@ export default function Editor() {
     finally { setBusy(false); current.current.busy = false; }
   }
   function applySelection(next: string[], active: string, hover = false) {
+    if (!hover) setHandleLayer(isJointHandle(active) ? 'joints' : 'body');
     current.current.selected = active;
     current.current.members = next;
     setSelected(active); setMembers(next); setInfo(null);
     if (scene.current && !hover) scene.current.selectionLocked = true;
     const previousMode = current.current.transformMode;
-    const nextMode = previousMode === 'rotate' && !canRotateSelection(next) ? 'translate' : previousMode;
+    const nextMode = next.length === 1 && isJointHandle(active) && !hover ? 'rotate' : previousMode === 'rotate' && !canRotateSelection(next) ? 'translate' : previousMode;
     current.current.transformMode = nextMode; setTransformMode(nextMode);
     scene.current?.select(active, current.current.pins, next);
     scene.current?.setTransformMode(nextMode, space);
@@ -179,7 +182,7 @@ export default function Editor() {
     const c = current.current;
     if (!c.state || c.busy || c.playing || inFlight.current || dragActive.current) return;
     if (next === 'rotate' && !canRotateSelection(c.members)) {
-      setMessage('회전은 손·발·골반 또는 단일 팔꿈치·무릎에서 사용할 수 있습니다. 어깨는 관절각 패널을 사용하세요.');
+      setMessage('관절축 회전은 한 관절씩 선택하세요. 여러 관절을 함께 선택한 경우 W로 IK 이동할 수 있습니다.');
       return;
     }
     current.current.transformMode = next;
@@ -236,6 +239,7 @@ export default function Editor() {
   }, [transformMode, space]);
   useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !taskOpen); scene.current.keyboardEnabled = !taskOpen; } }, [busy, playing, taskOpen]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
+  useEffect(() => { scene.current?.setHandleLayer(handleLayer); }, [handleLayer]);
   useEffect(() => { scene.current?.setBox(box.position, box.size, box.visible); }, [box]);
   useEffect(() => {
     if (!project || !state || playing) return;
@@ -350,6 +354,7 @@ export default function Editor() {
   const jointDirty = !!state && jointDraft.some((v, i) => Math.abs(v - state.qpos[7+i]*180/Math.PI) > .001);
   const activeFrame = project?.keyframes[frameIndex];
   const duration = project?.keyframes.slice(1).reduce((sum, f) => sum + f.duration, 0) ?? 0;
+  const visibleOrder = handleLayer === 'joints' ? project?.joint_names ?? [] : order;
 
   return <div className="editor">
     {taskOpen && state && <TaskWorkbench initialQ={state.qpos} onClose={() => { setTaskOpen(false); scene.current?.setEditable(true); }}/>}
@@ -360,12 +365,16 @@ export default function Editor() {
       <input ref={file} type="file" accept=".json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void run(async () => { await loadProject(JSON.parse(await f.text())); setMessage('프로젝트를 불러왔습니다.'); }); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">
-      <div className="panel-heading"><span>BODY CONTROLS</span><small>11개 부위</small></div>
+      <div className="panel-heading"><span>BODY CONTROLS</span><small>{handleLayer === 'joints' ? '29개 관절' : '11개 부위'}</small></div>
+      <div className="segmented"><button className={handleLayer === 'body' ? 'chosen' : ''} disabled={disabled} onClick={() => setHandleLayer('body')}>주요 부위 11</button><button className={handleLayer === 'joints' ? 'chosen' : ''} disabled={disabled} onClick={() => setHandleLayer('joints')}>전체 관절 29</button></div>
       <p className="hint">클릭으로 선택 · Shift+클릭으로 추가/해제 · W 이동 · E 회전 · F 선택 보기</p>
-      <div className="body-list">{order.map(key => <div key={key} className={`body-row ${members.includes(key) ? 'active' : ''}`}>
-        <button className="body-select" disabled={disabled} aria-pressed={members.includes(key)} onClick={e => select(key, e.shiftKey)}><span className={`part-dot ${pins.includes(key) ? 'locked' : ''}`}/>{state?.handles[key].label ?? key}</button>
+      {handleLayer === 'joints' && <p className="hint">관절 선택 후 회전 링을 드래그하세요. 겹친 관절은 Alt+클릭으로 전환하거나 아래 목록에서 선택하세요.</p>}
+      <div className="body-list">{visibleOrder.map((key, i) => <div key={key}>
+        {handleLayer === 'joints' && (i === 0 || jointSection(key) !== jointSection(visibleOrder[i-1])) && <div className="joint-section">{jointSection(key)}</div>}
+        <div className={`body-row ${members.includes(key) ? 'active' : ''}`}>
+        <button className="body-select" title={key} disabled={disabled} aria-pressed={members.includes(key)} onClick={e => select(key, e.shiftKey)}><span className={`part-dot ${pins.includes(key) ? 'locked' : ''}`}/>{state?.handles[key].label ?? key}{isJointHandle(key) && <small className="joint-list-angle">{((state?.hinges[key]?.angle ?? 0)*180/Math.PI).toFixed(1)}°</small>}</button>
         <button className={`pin-button ${pins.includes(key) ? 'is-pinned' : ''}`} disabled={disabled} onClick={() => togglePin(key)} aria-label={`${state?.handles[key].label ?? key} ${pins.includes(key) ? '고정 해제' : '고정'}`} title="공간상 위치 고정"><LockKeyhole size={14}/></button>
-      </div>)}</div>
+      </div></div>)}</div>
       <div className="section-divider"/>
       <div className="panel-heading"><span>SELECTION GROUPS</span><small>{members.length}개 선택</small></div>
       <select className="group-control" aria-label="그룹 프리셋 선택" value={groupId} disabled={disabled} onChange={e => {
@@ -415,11 +424,13 @@ export default function Editor() {
       <p className="hint">{members.map(k => state?.handles[k].label ?? k).join(' · ')}</p>
       <button className="wide" disabled={!state} onClick={() => scene.current?.focusSelection()}>선택 부위 보기 <kbd>F</kbd></button>
       {transformMode === 'rotate' && hinge ? <>
-        <label className="inspector-label">관절 굽힘 각도 <small>°</small></label>
-        <input className="group-control" aria-label="관절 굽힘 각도" type="number" step="1" min={hinge.limits[0]*180/Math.PI} max={hinge.limits[1]*180/Math.PI} value={Number((jointDraft[hingeIndex] ?? hinge.angle*180/Math.PI).toFixed(2))} disabled={disabled} onChange={e => changeJoint(hingeIndex, +e.target.value)}/>
+        <label className="inspector-label">관절각 <small>°</small></label>
+        <p className="hint">{hinge.joint_name}<br/>범위 {(hinge.limits[0]*180/Math.PI).toFixed(1)}° ~ {(hinge.limits[1]*180/Math.PI).toFixed(1)}°</p>
+        <input className="joint-selected-slider" aria-label="선택 관절각 슬라이더" type="range" step=".1" min={hinge.limits[0]*180/Math.PI} max={hinge.limits[1]*180/Math.PI} value={jointDraft[hingeIndex] ?? hinge.angle*180/Math.PI} disabled={disabled} onChange={e => changeJoint(hingeIndex, +e.target.value)}/>
+        <input className="group-control" aria-label="선택 관절각" type="number" step="1" min={hinge.limits[0]*180/Math.PI} max={hinge.limits[1]*180/Math.PI} value={Number((jointDraft[hingeIndex] ?? hinge.angle*180/Math.PI).toFixed(2))} disabled={disabled} onChange={e => changeJoint(hingeIndex, +e.target.value)}/>
         <button className="wide" disabled={disabled} onClick={() => applyHingeAngle((jointDraft[hingeIndex] ?? hinge.angle*180/Math.PI)*Math.PI/180)}>관절각 적용</button>
         <div className="group-actions"><button disabled={disabled} onClick={() => applyHingeAngle(hinge.angle-Math.PI/180)}>−1°</button><button disabled={disabled} onClick={() => applyHingeAngle(hinge.angle+Math.PI/180)}>+1°</button></div>
-        <p className="hint">링 하나로 실제 관절축의 굽힘 각도를 조정합니다. 월드/로컬 선택과 관계없이 관절축을 사용하며, 손·발 등 고정 조건을 함께 유지합니다.</p>
+        <p className="hint">링 하나로 실제 관절축의 각도를 조정합니다. 월드/로컬 선택과 관계없이 관절축을 사용하며, 손·발 등 고정 조건을 함께 유지합니다. 슬라이더·숫자 입력 후에는 관절각 적용을 누르세요.</p>
       </> : transformMode === 'rotate' ? <>
         <label className="inspector-label">기준 부위 방향 · 월드 XYZ <small>°</small></label>
         <div className="xyz">{rotation.map((v, i) => <label key={i}><span className={`axis-${i}`}>{'XYZ'[i]}</span><input aria-label={`목표 ${'XYZ'[i]} 회전각`} type="number" step="1" value={Number(v.toFixed(2))} disabled={disabled || rotationBlocked} onChange={e => setRotation(t => t.map((n, j) => i === j ? +e.target.value : n))}/></label>)}</div>
@@ -431,7 +442,7 @@ export default function Editor() {
         <div className="xyz">{target.map((v, i) => <label key={i}><span className={`axis-${i}`}>{'XYZ'[i]}</span><input aria-label={`목표 ${'XYZ'[i]} 위치`} type="number" step="0.01" value={Number(v.toFixed(4))} disabled={disabled || selectionPinned} onChange={e => setTarget(t => t.map((n, j) => i === j ? +e.target.value : n))}/></label>)}</div>
         <button className="wide" disabled={disabled || selectionPinned} onClick={() => numericMove(target)}>목표 위치 적용</button>
         <div className="nudge"><span>1cm · 월드</span>{['X', 'Y', 'Z'].map((a, i) => <div key={a}><button aria-label={`${a} 마이너스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionCenter(state!, members).map((n, j) => i === j ? n - .01 : n))}>−</button><span>{a}</span><button aria-label={`${a} 플러스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionCenter(state!, members).map((n, j) => i === j ? n + .01 : n))}>+</button></div>)}</div>
-        <p className="hint">고정된 부위를 이동하려면 자물쇠를 해제하세요.</p>
+        <p className="hint">고정된 부위를 이동하려면 자물쇠를 해제하세요. {isJointHandle(selected) && 'W는 관절 중심의 위치를 IK로 이동합니다. 해당 관절 자체의 회전각을 바꾸려면 E를 누르세요.'}</p>
       </>}
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>
       <div className="section-divider"/>

@@ -14,7 +14,8 @@ export type PoseState = {
 export type TransformMode = 'translate' | 'rotate';
 export const ROTATABLE = ['pelvis', 'left_hand', 'right_hand', 'left_foot', 'right_foot'];
 export const HINGE_HANDLES = ['left_elbow', 'right_elbow', 'left_knee', 'right_knee'];
-export const canRotateSelection = (members: string[]) => members.every(k => ROTATABLE.includes(k)) || members.length === 1 && HINGE_HANDLES.includes(members[0]);
+export const isJointHandle = (key: string) => key.endsWith('_joint');
+export const canRotateSelection = (members: string[]) => members.length > 0 && (members.every(k => ROTATABLE.includes(k)) || members.length === 1 && (HINGE_HANDLES.includes(members[0]) || isJointHandle(members[0])));
 type Callbacks = {
   select: (key: string, additive: boolean, hover: boolean) => void;
   begin: () => void;
@@ -52,6 +53,7 @@ export class RobotScene {
   box: THREE.Mesh;
   com: THREE.Mesh;
   markerVisible = true;
+  handleLayer: 'body' | 'joints' = 'body';
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
   hingeDrag: { quaternion: THREE.Quaternion; angle: number; lastTwist: number; delta: number; limits: number[] } | null = null;
@@ -168,16 +170,23 @@ export class RobotScene {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
     this.ray.setFromCamera(this.pointer, this.camera);
-    return this.ray.intersectObjects(Object.values(this.markers).filter(m => m.visible), false)[0]?.object.name;
+    const keys = [...new Set(this.ray.intersectObjects(Object.values(this.markers).filter(m => m.visible), false).map(hit => hit.object.name))];
+    return event.altKey ? keys[(keys.indexOf(this.selected) + 1) % keys.length] : keys[0];
   }
   hover = (event: PointerEvent) => {
-    if (!this.editable || event.buttons || event.shiftKey || this.selectionLocked || this.members.length > 1 || this.gizmo.dragging || this.gizmo.axis) return;
+    if (!this.editable || event.buttons || event.shiftKey || event.altKey || this.selectionLocked || this.members.length > 1 || this.gizmo.dragging || this.gizmo.axis) return;
     const key = this.pick(event);
     if (key && key !== this.selected) this.callbacks.select(key, false, true);
   };
   click = (event: PointerEvent) => {
     if (!this.editable || this.gizmo.dragging || event.button !== 0) return;
     const key = this.pick(event);
+    if (event.altKey && key) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.callbacks.select(key, event.shiftKey, false);
+      return;
+    }
     if (event.shiftKey && key) {
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -227,6 +236,7 @@ export class RobotScene {
     this.members = members;
     this.pins = pins;
     Object.entries(this.markers).forEach(([k, mesh]) => {
+      mesh.visible = this.markerVisible && (isJointHandle(k) === (this.handleLayer === 'joints') || members.includes(k));
       const mat = mesh.material as THREE.MeshBasicMaterial;
       mat.color.set(members.includes(k) ? '#80f2c7' : pins.includes(k) ? '#f1bc65' : '#56bdec');
       mat.opacity = members.includes(k) ? .64 : .28;
@@ -257,7 +267,7 @@ export class RobotScene {
     }
     for (const [key, h] of Object.entries(state.handles)) {
       if (!this.markers[key]) {
-        const geometry = new THREE.SphereGeometry(key === 'pelvis' ? .06 : .042, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2);
+        const geometry = new THREE.SphereGeometry(key === 'pelvis' ? .06 : isJointHandle(key) ? .028 : .042, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2);
         geometry.rotateX(Math.PI / 2);
         const mesh = new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color: '#56bdec', transparent: true, opacity: .3, side: THREE.DoubleSide, depthWrite: false, depthTest: false }));
         mesh.name = key;
@@ -282,7 +292,7 @@ export class RobotScene {
     Object.entries(this.markers).forEach(([k, mesh]) => {
       const p = mesh.position.clone().project(this.camera);
       const label = this.labels[k];
-      label.style.display = this.markerVisible && p.z < 1 && (this.members.includes(k) || this.pins.includes(k)) ? 'block' : 'none';
+      label.style.display = mesh.visible && p.z < 1 && (this.members.includes(k) || this.pins.includes(k)) ? 'block' : 'none';
       label.style.transform = `translate(${(p.x + 1) * rect.width / 2 + 15}px,${(1 - p.y) * rect.height / 2 - 12}px)`;
     });
   }
@@ -297,6 +307,10 @@ export class RobotScene {
   showHandles(show: boolean) {
     this.markerVisible = show;
     Object.values(this.markers).forEach(m => { m.visible = show; });
+    this.select(this.selected, this.pins, this.members);
+  }
+  setHandleLayer(layer: 'body' | 'joints') {
+    this.handleLayer = layer;
     this.select(this.selected, this.pins, this.members);
   }
   setEditable(editable: boolean) { this.editable = editable; this.select(this.selected, this.pins, this.members); }

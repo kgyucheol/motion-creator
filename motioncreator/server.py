@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from .robot import Robot, ROOT, FEET
+from .robot import Robot, ROOT, FEET, HANDLES
 from .motion import new_project, validate_project, compile_motion, save_bundle
 from .presets import GroupStore
 
@@ -39,7 +39,7 @@ class ProjectInput(BaseModel):
 class GroupSolveInput(PoseInput):
     model_config = {'extra': 'forbid'}
     anchor: list[float]
-    targets: dict[str, list[float]] = Field(default_factory=dict, max_length=11)
+    targets: dict[str, list[float]] = Field(default_factory=dict, max_length=len(HANDLES))
     orientations: dict[str, list[float]] = Field(default_factory=dict, max_length=5)
     joints: dict[str, float] = Field(default_factory=dict, max_length=29)
     pins: list[str] = Field(default_factory=lambda: list(FEET))
