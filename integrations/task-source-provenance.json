@@ -1,0 +1,13 @@
+{
+  "ardy": {
+    "url": "https://github.com/nv-tlabs/ardy",
+    "revision": "693f74d13b3d04a0a22ce127ee79c929dd89756b"
+  },
+  "sonic": {
+    "url": "https://github.com/NVlabs/GR00T-WholeBodyControl",
+    "revision": "087f9ac01d46f6d8e4d0b73c01ae64799f292a38",
+    "parameters_sha256": "6ef75cba2eace50e451d1dc3d0d32ec7b9a624ceb5c356fb55dc5ce6323d351c",
+    "observation_source": "gear_sonic_deploy/src/g1/g1_deploy_onnx_ref/src/g1_deploy_onnx_ref.cpp",
+    "adapter": "Original release only; G1 mode_id=0 scalar + 3 zeros; step5 future reference at 50 Hz; CPU ONNX Runtime"
+  }
+}

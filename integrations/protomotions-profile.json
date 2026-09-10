@@ -5,7 +5,14 @@
   "robot": "g1",
   "target_mjcf": "protomotions/data/assets/mjcf/g1_holo_compat.xml",
   "target_mjcf_sha256": "f9a455ff0b2822b3d3f68e55b02cd7e21c601a84cf3173237b7bfaf494492846",
-  "source_mjcf_sha256": "e128addc6beb0633b171c67db9340c5667570e16ce6ec167f8b94a72de517bda",
+  "source_mjcf_sha256": "7c0e0f81344c3cc3aa2b199b983c4ef049904c6e195d15199523c68f4ffc684e",
   "root_body": "pelvis",
-  "contact_bodies": ["left_ankle_roll_link", "right_ankle_roll_link"]
+  "contact_bodies": [
+    "left_ankle_roll_link",
+    "right_ankle_roll_link"
+  ],
+  "legacy_source_mjcf_sha256": [
+    "e128addc6beb0633b171c67db9340c5667570e16ce6ec167f8b94a72de517bda"
+  ],
+  "source_profile_note": "Current checked-in G1 29-DoF asset explicitly revalidated on 2026-09-10; previous known source fingerprint retained for old exports."
 }

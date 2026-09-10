@@ -1,5 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
+import TaskWorkbench from './task-workbench';
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, Box, ChevronLeft, ChevronRight, Trash2, Download, Check, AlertCircle } from 'lucide-react';
 import { RobotScene, canRotateSelection, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation } from '../lib/pose-transforms';
@@ -25,6 +26,7 @@ async function api<T>(path: string, body?: unknown, method = body === undefined 
 }
 
 export default function Editor() {
+  const [taskOpen, setTaskOpen] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('task'));
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<RobotScene | null>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -232,7 +234,7 @@ export default function Editor() {
     const pose = current.current.state;
     if (pose) setTarget(selectionCenter(pose, members));
   }, [transformMode, space]);
-  useEffect(() => { scene.current?.setEditable(!busy && !playing); }, [busy, playing]);
+  useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !taskOpen); scene.current.keyboardEnabled = !taskOpen; } }, [busy, playing, taskOpen]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
   useEffect(() => { scene.current?.setBox(box.position, box.size, box.visible); }, [box]);
   useEffect(() => {
@@ -350,10 +352,11 @@ export default function Editor() {
   const duration = project?.keyframes.slice(1).reduce((sum, f) => sum + f.duration, 0) ?? 0;
 
   return <div className="editor">
+    {taskOpen && state && <TaskWorkbench initialQ={state.qpos} onClose={() => { setTaskOpen(false); scene.current?.setEditable(true); }}/>}
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><b>G1 / 29 DOF</b></div>
       <div className="project-title"><span className="status-dot"/>{project ? <input aria-label="프로젝트 이름" value={project.name} onChange={e => setProject({ ...project, name: e.target.value })}/> : '연결 중'}</div>
-      <div className="top-actions"><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled} onClick={exportProject}><Save size={16}/> 저장 / NPZ</button></div>
+      <div className="top-actions"><button disabled={disabled} onClick={() => { setPlaying(false); scene.current?.setEditable(false); setTaskOpen(true); }}><Box size={16}/>상자 태스크</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled} onClick={exportProject}><Save size={16}/> 저장 / NPZ</button></div>
       <input ref={file} type="file" accept=".json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void run(async () => { await loadProject(JSON.parse(await f.text())); setMessage('프로젝트를 불러왔습니다.'); }); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">
