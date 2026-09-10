@@ -42,6 +42,7 @@ export class RobotScene {
   pins: string[] = [];
   state?: PoseState;
   editable = true;
+  keyboardEnabled = true;
   destroyed = false;
   frame = 0;
   dirty = true;
@@ -190,7 +191,7 @@ export class RobotScene {
 
   keydown = (event: KeyboardEvent) => {
     const target = event.target as HTMLElement | null;
-    if (event.repeat || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || this.gizmo.dragging
+    if (this.keyboardEnabled === false || event.repeat || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || this.gizmo.dragging
         || target?.isContentEditable || target?.closest('input, textarea, select')) return;
     const key = event.code || event.key.toLowerCase();
     if (key === 'KeyF' || key === 'f') {

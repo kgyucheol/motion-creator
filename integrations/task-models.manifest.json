@@ -1,0 +1,122 @@
+[
+  {
+    "provider": "sonic",
+    "repo": "nvidia/GEAR-SONIC",
+    "revision": "6733128a3d8a523b1418b06bca3cdf61c8b0987f",
+    "file": "model_encoder.onnx",
+    "sha256": "013ab0287236aa2721e13f1e936d699db982302d0de0bfcdae76d5c3245362d3",
+    "bytes": 50100513
+  },
+  {
+    "provider": "sonic",
+    "repo": "nvidia/GEAR-SONIC",
+    "revision": "6733128a3d8a523b1418b06bca3cdf61c8b0987f",
+    "file": "model_decoder.onnx",
+    "sha256": "c7241a123eaa36b5d64bad19540efde93cac1ad443bd4572fd12ca99898118ed",
+    "bytes": 40900688
+  },
+  {
+    "provider": "sonic",
+    "repo": "nvidia/GEAR-SONIC",
+    "revision": "6733128a3d8a523b1418b06bca3cdf61c8b0987f",
+    "file": "observation_config.yaml",
+    "sha256": "466d05947c78af6c76388adfb86e3a2a77b2a1d921a64883ed3d085ebf58de1b",
+    "bytes": 2336
+  },
+  {
+    "provider": "sonic",
+    "repo": "nvidia/GEAR-SONIC",
+    "revision": "6733128a3d8a523b1418b06bca3cdf61c8b0987f",
+    "file": "config.json",
+    "sha256": "326dcc509ad93509cf262871256a74f508f43a8430f61ec6abe8034e985ce948",
+    "bytes": 2428
+  },
+  {
+    "provider": "sonic",
+    "repo": "nvidia/GEAR-SONIC",
+    "revision": "6733128a3d8a523b1418b06bca3cdf61c8b0987f",
+    "file": "LICENSE",
+    "sha256": "24ab66be50d1aca4fc5e029ef76ce4ceaac6557ea21665caf4b140695a76ffee",
+    "bytes": 8886
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "config.yaml",
+    "sha256": "d34bcd2a43e5bade030e2779bd11e0c3d8ce7eeea6b636e7504efe9a404ec757",
+    "bytes": 1556
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "denoiser.safetensors",
+    "sha256": "0c16ac26c1ab75e511cd24bb25bd9ad92078a2460b4ce78529788b5da22647a2",
+    "bytes": 631581872
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "tokenizer.safetensors",
+    "sha256": "6f2f75f738b8d6fb1b196d3253c7accc90494b9c12669b35968425fef54c8896",
+    "bytes": 143166728
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "stats/motion/mean.npy",
+    "sha256": "b6d2c72548475e9c82a80899429c955840796a06a82c88e646e7a0125f997407",
+    "bytes": 3472
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "stats/motion/std.npy",
+    "sha256": "ee6069988035de4339b44fd229f169456d4bd86671fc4dbcfd293c4d41caa1a8",
+    "bytes": 3472
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "stats/post_quantization/mean.npy",
+    "sha256": "78d5bbd3d22ca1866770a370f0fb9da15663cbbc63a0b8851f124dae78a2f8c0",
+    "bytes": 640
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "stats/post_quantization/std.npy",
+    "sha256": "289d21ca46aa8300cd213993a64efbd03d35440178de19b38cc8ee76d69499a1",
+    "bytes": 640
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "stats/pre_quantization/mean.npy",
+    "sha256": "14bf165f6cf79276bc45ea24d6101f320b9007854b2ddb86babdd057af287a8c",
+    "bytes": 640
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "stats/pre_quantization/std.npy",
+    "sha256": "413dbb9b736a41d033a5c0dbd0a632970b0e23737f39dd8eb0e859fe7a7e9556",
+    "bytes": 640
+  },
+  {
+    "provider": "ardy",
+    "repo": "nvidia/ARDY-G1-RP-25FPS-Horizon52",
+    "revision": "059b8007df0ba194a006a877b59a563955ac7b70",
+    "file": "LICENSE",
+    "sha256": "11ccdcb47db87ac30b63765b5e5154403026c4fbb52c19919d99d912ec454e19",
+    "bytes": 10229
+  }
+]

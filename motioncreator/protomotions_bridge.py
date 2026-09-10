@@ -41,7 +41,7 @@ def convert_reference(source, output=None, upstream=UPSTREAM):
     if revision != profile['revision']:
         raise ValueError('ProtoMotions revision differs from the verified profile')
     data, meta = load_reference(source)
-    if meta.get('model_sha256') != profile['source_mjcf_sha256']:
+    if meta.get('model_sha256') not in [profile['source_mjcf_sha256'], *profile.get('legacy_source_mjcf_sha256', [])]:
         raise ValueError('Source G1 model differs from the verified profile')
     if len(data['time']) < 2:
         raise ValueError('ProtoMotions에는 2프레임 이상이 필요합니다. 같은 자세를 복제해 유지 시간을 지정하세요.')
@@ -97,6 +97,7 @@ def convert_reference(source, output=None, upstream=UPSTREAM):
     report = {
         'format': 'motioncreator.protomotions-export.v1', 'upstream': profile,
         'source_file': source.name, 'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+        'source_model_sha256': meta.get('model_sha256'),
         'source_reference_schema': meta.get('reference_schema', 'motioncreator.reference.v1'),
         'fps': fps, 'samples': len(qpos), 'duration_s': float(data['time'][-1]),
         'body_names': kin.body_names, 'joint_names': kin.dof_names,

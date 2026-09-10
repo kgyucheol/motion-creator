@@ -96,3 +96,13 @@ def test_single_frame_and_wrong_model_are_rejected(source, tmp_path):
     meta['model_sha256']='unknown'; d['metadata_json']=np.array(json.dumps(meta))
     invalid=tmp_path/'invalid.npz'; np.savez(invalid,**d)
     with pytest.raises(ValueError, match='Source G1 model'): convert_reference(invalid)
+
+
+def test_previous_known_model_fingerprint_still_loads(source,tmp_path):
+    from motioncreator.protomotions_bridge import PROFILE_PATH
+    profile=json.loads(PROFILE_PATH.read_text())
+    data=dict(np.load(source,allow_pickle=False)); meta=json.loads(str(data['metadata_json']))
+    meta['model_sha256']=profile['legacy_source_mjcf_sha256'][0]
+    data['metadata_json']=np.array(json.dumps(meta)); legacy=tmp_path/'legacy.npz';np.savez(legacy,**data)
+    converted=convert_reference(legacy)
+    assert converted['report']['source_model_sha256']==meta['model_sha256']

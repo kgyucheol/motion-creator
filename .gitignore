@@ -10,3 +10,6 @@ frontend/dist/
 frontend/.wrangler/
 frontend/.vinext/
 *.log
+
+.conda-policy/
+tasks/

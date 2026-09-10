@@ -12,6 +12,8 @@ from .presets import GroupStore
 robot = Robot()
 groups = GroupStore()
 app = FastAPI(title='G1 Motion Creator', version='1.0.0')
+from .task_api import router as task_router
+app.include_router(task_router)
 app.add_middleware(CORSMiddleware, allow_origins=['http://127.0.0.1:3000', 'http://localhost:3000'], allow_methods=['GET', 'POST', 'DELETE'], allow_headers=['Content-Type'])
 
 
