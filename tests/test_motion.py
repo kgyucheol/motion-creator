@@ -83,7 +83,7 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
         assert data['root_quat_wxyz'].shape == (61, 4)
         assert np.allclose(np.linalg.norm(data['root_quat_wxyz'], axis=1), 1)
         assert json.loads(str(data['metadata_json']))['quaternion_order'] == 'wxyz'
-        assert data['handle_pos'].shape == (61, 40, 3)
+        assert data['handle_pos'].shape == (61, 42, 3)
 
 
 def test_invalid_projects_and_pin_conflicts(robot):
@@ -105,7 +105,7 @@ def test_api_init_solve_and_bad_inputs(robot):
     with TestClient(app) as client:
         assert client.get('/api/health').json()['nq'] == 36
         init = client.get('/api/init').json()
-        assert len(init['state']['handles']) == 40
+        assert len(init['state']['handles']) == 42
         assert set(init['joint_names']) <= init['state']['handles'].keys()
         target = robot.home[:3].copy(); target[2] -= .1
         payload = {'qpos': robot.home.tolist(), 'anchor': robot.home.tolist(), 'focus': 'pelvis', 'target': target.tolist(), 'pins': list(FEET)}

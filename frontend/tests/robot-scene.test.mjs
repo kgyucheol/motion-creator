@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection } from '../lib/robot-scene.ts';
+import { RobotScene, canRotateSelection, jointControls } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees } from '../lib/pose-transforms.ts';
 
 function fixture() {
@@ -103,5 +103,29 @@ test('Alt picking cycles through coincident joint markers and ignores hidden han
   assert.equal(new Set(visited).size, 3);
   assert.ok(!visited.includes('left_hand'));
   assert.equal(viewer.pick(event), visited[0]);
+  Object.values(viewer.markers).forEach(mesh => { mesh.geometry.dispose(); mesh.material.dispose(); });
+});
+
+test('left and right hip axes collapse separately into three-axis controls', () => {
+  const names = ['left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint', 'left_knee_joint',
+    'right_hip_pitch_joint', 'right_hip_roll_joint', 'right_hip_yaw_joint', 'right_knee_joint'];
+  assert.deepEqual(jointControls(names), ['left_hip', 'left_knee_joint', 'right_hip', 'right_knee_joint']);
+  assert.ok(canRotateSelection(['left_hip', 'right_hip']));
+  const viewer = fixture();
+  viewer.state.handles.left_hip = { position: [0, .12, .65], quaternion: [0, 0, 0, 1] };
+  viewer.state.hinges = {};
+  viewer.markers = Object.fromEntries([...names, 'left_hip', 'right_hip'].map(name => [name, new THREE.Mesh(new THREE.SphereGeometry(.02), new THREE.MeshBasicMaterial())]));
+  viewer.labels = {};
+  viewer.pivot = new THREE.Object3D(); viewer.markerVisible = true; viewer.handleLayer = 'joints';
+  viewer.transformMode = 'rotate'; viewer.space = 'world';
+  viewer.gizmo.setSpace = () => {};
+  viewer.gizmo.attach = () => {};
+  viewer.gizmo.detach = () => {};
+  viewer.select('left_hip', []);
+  assert.deepEqual(viewer.pivot.position.toArray(), [0, .12, .65]);
+  assert.ok(viewer.gizmo.showX && viewer.gizmo.showY && viewer.gizmo.showZ);
+  assert.ok(viewer.markers.left_hip.visible && viewer.markers.right_hip.visible);
+  assert.equal(viewer.markers.left_hip_yaw_joint.visible, false);
+  assert.equal(viewer.markers.right_hip_roll_joint.visible, false);
   Object.values(viewer.markers).forEach(mesh => { mesh.geometry.dispose(); mesh.material.dispose(); });
 });

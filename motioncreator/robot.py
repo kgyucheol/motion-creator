@@ -24,6 +24,7 @@ HANDLES = {
 }
 FEET = ('left_foot', 'right_foot')
 ROTATABLE = ('pelvis', 'left_hand', 'right_hand', *FEET)
+BASIC_ROTATABLE = ROTATABLE
 HINGES = {key: key + '_joint' for key in ('left_elbow', 'right_elbow', 'left_knee', 'right_knee')}
 BASIC_HANDLES = tuple(HANDLES)
 PART_LABELS = {'hip_pitch': '고관절 피치', 'hip_roll': '고관절 롤', 'hip_yaw': '고관절 요',
@@ -44,6 +45,11 @@ for body in ET.parse(MODEL_PATH).iter('body'):
         JOINT_HANDLES[name] = (body.get('name'), tuple(float(x) for x in joint.get('pos', '0 0 0').split()), side + PART_LABELS[part])
 HANDLES.update(JOINT_HANDLES)
 HINGES.update({name: name for name in JOINT_HANDLES})
+HIP_HANDLES = ('left_hip', 'right_hip')
+for side, key in zip(('left', 'right'), HIP_HANDLES):
+    body, offset, _ = JOINT_HANDLES[f'{side}_hip_roll_joint']
+    HANDLES[key] = (body, offset, ('왼' if side == 'left' else '오른') + ' 고관절')
+ROTATABLE = (*ROTATABLE, *HIP_HANDLES)
 
 
 def skew(v):
@@ -80,6 +86,8 @@ class Robot:
         m = self.model
         self.names = [m.joint(i).name for i in range(1, m.njnt)]
         self.ids = {k: m.body(v[0]).id for k, v in HANDLES.items()}
+        # Hip translation/pivot follows the roll anchor; orientation includes all three hip axes.
+        self.orientation_ids = {**self.ids, **{f'{side}_hip': m.body(f'{side}_hip_yaw_link').id for side in ('left', 'right')}}
         self.q_indices = np.r_[0:3, 7:m.nq]
         self.v_indices = np.r_[0:3, 6:m.nv]
         self.lower = np.r_[[-4, -4, .20], m.jnt_range[1:, 0]]
@@ -116,7 +124,7 @@ class Robot:
     def point(self, d, key):
         b = self.ids[key]
         r = d.xmat[b].reshape(3, 3)
-        return d.xpos[b] + r @ np.array(HANDLES[key][1]), r
+        return d.xpos[b] + r @ np.array(HANDLES[key][1]), d.xmat[self.orientation_ids[key]].reshape(3, 3)
 
     def distance(self, a, b):
         def ancestors(n):
@@ -142,7 +150,7 @@ class Robot:
         if set(selected_targets) & set(pins):
             raise ValueError('선택한 부위에 고정된 부위가 있습니다. 이동하려면 먼저 고정을 해제하세요.')
         if any(k not in ROTATABLE for k in orientation_targets):
-            raise ValueError('회전은 골반·손·발에서 지원합니다. 팔꿈치·무릎은 관절각 목표를 사용하세요.')
+            raise ValueError('방향 회전은 골반·손·발·통합 고관절에서 지원합니다. 개별 관절은 관절각 목표를 사용하세요.')
         if set(orientation_targets) & set(pins) & set(FEET):
             raise ValueError('발 방향이 고정되어 있습니다. 회전하려면 발 고정을 해제하세요.')
         if any(k not in self.names for k in joint_targets):
@@ -195,8 +203,10 @@ class Robot:
         jp, jr = np.zeros((3, self.model.nv)), np.zeros((3, self.model.nv))
         rotation_map = np.eye(3)
 
-        def jacobian(point, body):
+        def jacobian(point, body, orientation_body=None):
             mujoco.mj_jac(self.model, d, jp, jr, point, body)
+            if orientation_body is not None and orientation_body != body:
+                mujoco.mj_jacBody(self.model, d, None, jr, orientation_body)
             p, r = jp[:, self.v_indices].copy(), jr[:, self.v_indices].copy()
             if rotate_base:
                 p = np.column_stack([p, jp[:, 3:6] @ rotation_map])
@@ -218,7 +228,7 @@ class Robot:
                 tp, tr = desired[k]
                 residuals.append(weights[k] * (p-tp))
                 if jac:
-                    jpos, jrot = jacobian(p, self.ids[k])
+                    jpos, jrot = jacobian(p, self.ids[k], self.orientation_ids[k])
                     matrices.append(weights[k] * jpos)
                 if k in orientation_targets or (k in pins and k in FEET):
                     w = 90. if k in pins and k in FEET else 18.

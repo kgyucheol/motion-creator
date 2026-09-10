@@ -65,4 +65,4 @@ def test_new_joint_groups_translation_pins_and_export(robot, tmp_path):
         assert data['qpos'].shape == (3, 36)
         assert data['joint_names'].tolist() == robot.names
         assert set(robot.names) <= set(data['handle_names'].tolist())
-        assert data['handle_pos'].shape[1] == data['handle_quat_wxyz'].shape[1] == 40
+        assert data['handle_pos'].shape[1] == data['handle_quat_wxyz'].shape[1] == 42

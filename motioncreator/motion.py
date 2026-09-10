@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import mujoco
 from scipy.spatial.transform import Rotation
-from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE, quat_matrix, matrix_quat
+from .robot import Robot, ROOT, FEET, HANDLES, BASIC_ROTATABLE as ROTATABLE, quat_matrix, matrix_quat
 
 FORMAT = 'motioncreator.g1.v1'
 

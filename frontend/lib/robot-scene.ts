@@ -12,9 +12,12 @@ export type PoseState = {
   hinges: Record<string, { joint_name: string; angle: number; limits: number[]; axis_world: number[]; position: number[] }>;
 };
 export type TransformMode = 'translate' | 'rotate';
-export const ROTATABLE = ['pelvis', 'left_hand', 'right_hand', 'left_foot', 'right_foot'];
+export const HIP_HANDLES = ['left_hip', 'right_hip'];
+export const ROTATABLE = ['pelvis', 'left_hand', 'right_hand', 'left_foot', 'right_foot', ...HIP_HANDLES];
 export const HINGE_HANDLES = ['left_elbow', 'right_elbow', 'left_knee', 'right_knee'];
-export const isJointHandle = (key: string) => key.endsWith('_joint');
+export const isJointHandle = (key: string) => key.endsWith('_joint') || HIP_HANDLES.includes(key);
+export const isHipAxis = (key: string) => /^(left|right)_hip_(pitch|roll|yaw)_joint$/.test(key);
+export const jointControls = (names: string[]) => names.flatMap(key => isHipAxis(key) ? key.endsWith('_pitch_joint') ? [key.replace('_pitch_joint', '')] : [] : [key]);
 export const canRotateSelection = (members: string[]) => members.length > 0 && (members.every(k => ROTATABLE.includes(k)) || members.length === 1 && (HINGE_HANDLES.includes(members[0]) || isJointHandle(members[0])));
 type Callbacks = {
   select: (key: string, additive: boolean, hover: boolean) => void;
@@ -236,7 +239,7 @@ export class RobotScene {
     this.members = members;
     this.pins = pins;
     Object.entries(this.markers).forEach(([k, mesh]) => {
-      mesh.visible = this.markerVisible && (isJointHandle(k) === (this.handleLayer === 'joints') || members.includes(k));
+      mesh.visible = this.markerVisible && (isJointHandle(k) === (this.handleLayer === 'joints') && !isHipAxis(k) || members.includes(k));
       const mat = mesh.material as THREE.MeshBasicMaterial;
       mat.color.set(members.includes(k) ? '#80f2c7' : pins.includes(k) ? '#f1bc65' : '#56bdec');
       mat.opacity = members.includes(k) ? .64 : .28;
