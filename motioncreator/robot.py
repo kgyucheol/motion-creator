@@ -50,6 +50,13 @@ for side, key in zip(('left', 'right'), HIP_HANDLES):
     body, offset, _ = JOINT_HANDLES[f'{side}_hip_roll_joint']
     HANDLES[key] = (body, offset, ('왼' if side == 'left' else '오른') + ' 고관절')
 ROTATABLE = (*ROTATABLE, *HIP_HANDLES)
+for key, joint, label in [('waist', 'waist_roll_joint', '허리'),
+                          ('left_ankle', 'left_ankle_roll_joint', '왼 발목'),
+                          ('right_ankle', 'right_ankle_roll_joint', '오른 발목')]:
+    body, offset, _ = JOINT_HANDLES[joint]
+    HANDLES[key] = (body, offset, label)
+# Ankles expose motor-angle targets, not an arbitrary 3-D orientation target.
+ROTATABLE = (*ROTATABLE, 'waist')
 
 
 def skew(v):
@@ -87,7 +94,7 @@ class Robot:
         self.names = [m.joint(i).name for i in range(1, m.njnt)]
         self.ids = {k: m.body(v[0]).id for k, v in HANDLES.items()}
         # Hip translation/pivot follows the roll anchor; orientation includes all three hip axes.
-        self.orientation_ids = {**self.ids, **{f'{side}_hip': m.body(f'{side}_hip_yaw_link').id for side in ('left', 'right')}}
+        self.orientation_ids = {**self.ids, **{f'{side}_hip': m.body(f'{side}_hip_yaw_link').id for side in ('left', 'right')}, 'waist': m.body('torso_link').id}
         self.q_indices = np.r_[0:3, 7:m.nq]
         self.v_indices = np.r_[0:3, 6:m.nv]
         self.lower = np.r_[[-4, -4, .20], m.jnt_range[1:, 0]]
@@ -150,7 +157,7 @@ class Robot:
         if set(selected_targets) & set(pins):
             raise ValueError('선택한 부위에 고정된 부위가 있습니다. 이동하려면 먼저 고정을 해제하세요.')
         if any(k not in ROTATABLE for k in orientation_targets):
-            raise ValueError('방향 회전은 골반·손·발·통합 고관절에서 지원합니다. 개별 관절은 관절각 목표를 사용하세요.')
+            raise ValueError('방향 회전은 골반·손·발·통합 고관절·허리에서 지원합니다. 개별 관절과 통합 발목은 관절각 목표를 사용하세요.')
         if set(orientation_targets) & set(pins) & set(FEET):
             raise ValueError('발 방향이 고정되어 있습니다. 회전하려면 발 고정을 해제하세요.')
         if any(k not in self.names for k in joint_targets):

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection, jointControls } from '../lib/robot-scene.ts';
+import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees } from '../lib/pose-transforms.ts';
 
 function fixture() {
@@ -128,4 +128,58 @@ test('left and right hip axes collapse separately into three-axis controls', () 
   assert.equal(viewer.markers.left_hip_yaw_joint.visible, false);
   assert.equal(viewer.markers.right_hip_roll_joint.visible, false);
   Object.values(viewer.markers).forEach(mesh => { mesh.geometry.dispose(); mesh.material.dispose(); });
+});
+
+test('29 motors remain addressable through 21 joint controls', () => {
+  const names = [...Object.values(COMBINED_JOINTS).flat(), 'left_knee_joint', 'right_knee_joint',
+    ...['left', 'right'].flatMap(side => ['shoulder_pitch', 'shoulder_roll', 'shoulder_yaw', 'elbow', 'wrist_roll', 'wrist_pitch', 'wrist_yaw'].map(part => `${side}_${part}_joint`))];
+  assert.equal(new Set(names).size, 29);
+  const controls = jointControls(names);
+  assert.equal(controls.length, 21);
+  for (const key of Object.keys(COMBINED_JOINTS)) assert.ok(controls.includes(key));
+  assert.ok(canRotateSelection(['waist']));
+  assert.ok(canRotateSelection(['left_ankle']));
+  assert.equal(canRotateSelection(['left_ankle', 'right_ankle']), false);
+});
+
+test('ankle rings follow real axes and send only the corresponding motor angle', () => {
+  const viewer = fixture();
+  const initialFrame = new THREE.Quaternion().setFromEuler(new THREE.Euler(.2, -.35, .6));
+  const x = new THREE.Vector3(1, 0, 0).applyQuaternion(initialFrame);
+  const y = new THREE.Vector3(0, 1, 0).applyQuaternion(initialFrame);
+  viewer.state.handles.left_ankle = { position: [.1, .2, .05], quaternion: [0, 0, 0, 1] };
+  viewer.state.hinges = {
+    left_ankle_roll_joint: { axis_world: x.toArray(), angle: .1, limits: [-.25, .25] },
+    left_ankle_pitch_joint: { axis_world: y.toArray(), angle: -.1, limits: [-.8, .5] },
+  };
+  viewer.markers = {}; viewer.labels = {}; viewer.pivot = new THREE.Object3D();
+  viewer.markerVisible = true; viewer.transformMode = 'rotate'; viewer.space = 'world';
+  viewer.gizmo.setSpace = space => { viewer.gizmo.space = space; };
+  viewer.gizmo.attach = object => { viewer.gizmo.object = object; };
+  viewer.gizmo.detach = () => {};
+  viewer.select('left_ankle', []);
+  assert.equal(viewer.gizmo.space, 'local');
+  assert.ok(viewer.gizmo.showX && viewer.gizmo.showY);
+  assert.equal(viewer.gizmo.showZ, false);
+  assert.deepEqual(viewer.pivot.position.toArray(), [.1, .2, .05]);
+  assert.ok(new THREE.Vector3(1, 0, 0).applyQuaternion(viewer.pivot.quaternion).distanceTo(x) < 1e-10);
+  assert.ok(new THREE.Vector3(0, 1, 0).applyQuaternion(viewer.pivot.quaternion).distanceTo(y) < 1e-10);
+  for (const axis of ['Z', 'E', 'XYZE', null]) assert.equal(jointForRing('left_ankle', axis), null);
+  for (const [axis, part, component] of [['X', 'roll', 'x'], ['Y', 'pitch', 'y']]) {
+    const ring = jointForRing('left_ankle', axis);
+    assert.deepEqual(ring, { key: `left_ankle_${part}_joint`, component });
+    const joint = viewer.state.hinges[ring.key];
+    viewer.hingeDrag = { quaternion: initialFrame.clone(), angle: joint.angle, limits: joint.limits, delta: 0, lastTwist: 0, ...ring };
+    const calls = [];
+    viewer.callbacks = { jointAngle: (name, value) => calls.push([name, value]) };
+    const direction = axis === 'X' ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+    viewer.pivot.quaternion.copy(initialFrame).multiply(new THREE.Quaternion().setFromAxisAngle(direction, .1));
+    viewer.applyHingeDrag(); viewer.applyHingeDrag();
+    assert.equal(calls[0][0], ring.key);
+    assert.ok(Math.abs(calls[0][1] - joint.angle - .1) < 1e-10);
+    assert.ok(Math.abs(calls[1][1] - calls[0][1]) < 1e-10);
+    viewer.pivot.quaternion.copy(initialFrame).multiply(new THREE.Quaternion().setFromAxisAngle(direction, 1));
+    viewer.applyHingeDrag();
+    assert.equal(calls[2][1], joint.limits[1]);
+  }
 });

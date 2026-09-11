@@ -64,4 +64,4 @@ def test_combined_hip_groups_and_motion_export(tmp_path):
     with np.load(tmp_path / bundle['files'][1], allow_pickle=False) as data:
         assert data['qpos'].shape == (3, 36)
         assert set(hips) <= set(data['handle_names'])
-        assert data['handle_pos'].shape[1] == data['handle_quat_wxyz'].shape[1] == 42
+        assert data['handle_pos'].shape[1] == data['handle_quat_wxyz'].shape[1] == 45

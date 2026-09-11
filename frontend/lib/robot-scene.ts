@@ -13,11 +13,29 @@ export type PoseState = {
 };
 export type TransformMode = 'translate' | 'rotate';
 export const HIP_HANDLES = ['left_hip', 'right_hip'];
-export const ROTATABLE = ['pelvis', 'left_hand', 'right_hand', 'left_foot', 'right_foot', ...HIP_HANDLES];
+export const ANKLE_HANDLES = ['left_ankle', 'right_ankle'];
+export const COMBINED_JOINTS: Record<string, string[]> = {
+  left_hip: ['left_hip_yaw_joint', 'left_hip_pitch_joint', 'left_hip_roll_joint'],
+  right_hip: ['right_hip_yaw_joint', 'right_hip_pitch_joint', 'right_hip_roll_joint'],
+  waist: ['waist_yaw_joint', 'waist_pitch_joint', 'waist_roll_joint'],
+  left_ankle: ['left_ankle_roll_joint', 'left_ankle_pitch_joint'],
+  right_ankle: ['right_ankle_roll_joint', 'right_ankle_pitch_joint'],
+};
+export const ROTATABLE = ['pelvis', 'left_hand', 'right_hand', 'left_foot', 'right_foot', ...HIP_HANDLES, 'waist'];
 export const HINGE_HANDLES = ['left_elbow', 'right_elbow', 'left_knee', 'right_knee'];
-export const isJointHandle = (key: string) => key.endsWith('_joint') || HIP_HANDLES.includes(key);
-export const isHipAxis = (key: string) => /^(left|right)_hip_(pitch|roll|yaw)_joint$/.test(key);
-export const jointControls = (names: string[]) => names.flatMap(key => isHipAxis(key) ? key.endsWith('_pitch_joint') ? [key.replace('_pitch_joint', '')] : [] : [key]);
+export const isJointHandle = (key: string) => key.endsWith('_joint') || Object.hasOwn(COMBINED_JOINTS, key);
+export const isCombinedAxis = (key: string) => Object.values(COMBINED_JOINTS).some(names => names.includes(key));
+export const jointControls = (names: string[]) => [...new Set(names.map(key => Object.entries(COMBINED_JOINTS).find(([, axes]) => axes.includes(key))?.[0] ?? key))];
+export function jointForRing(key: string, axis: string | null): { key: string; component: 'x' | 'y' | 'z' } | null {
+  if (ANKLE_HANDLES.includes(key)) return axis === 'X' ? { key: key + '_roll_joint', component: 'x' }
+    : axis === 'Y' ? { key: key + '_pitch_joint', component: 'y' } : null;
+  return { key, component: 'z' };
+}
+export function ankleFrame(state: PoseState, key: string) {
+  const x = new THREE.Vector3().fromArray(state.hinges[key + '_roll_joint'].axis_world).normalize();
+  const y = new THREE.Vector3().fromArray(state.hinges[key + '_pitch_joint'].axis_world).normalize();
+  return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, x.clone().cross(y).normalize()));
+}
 export const canRotateSelection = (members: string[]) => members.length > 0 && (members.every(k => ROTATABLE.includes(k)) || members.length === 1 && (HINGE_HANDLES.includes(members[0]) || isJointHandle(members[0])));
 type Callbacks = {
   select: (key: string, additive: boolean, hover: boolean) => void;
@@ -59,7 +77,7 @@ export class RobotScene {
   handleLayer: 'body' | 'joints' = 'body';
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
-  hingeDrag: { quaternion: THREE.Quaternion; angle: number; lastTwist: number; delta: number; limits: number[] } | null = null;
+  hingeDrag: { quaternion: THREE.Quaternion; angle: number; lastTwist: number; delta: number; limits: number[]; key: string; component: 'x' | 'y' | 'z' } | null = null;
 
   constructor(public host: HTMLDivElement, private callbacks: Callbacks) {
     this.scene.background = new THREE.Color('#10171f');
@@ -103,8 +121,9 @@ export class RobotScene {
     this.gizmo.addEventListener('dragging-changed', event => {
       this.orbit.enabled = !event.value;
       if (event.value) {
-        const hinge = this.transformMode === 'rotate' && this.members.length === 1 ? this.state?.hinges?.[this.selected] : undefined;
-        this.hingeDrag = hinge ? { quaternion: this.pivot.quaternion.clone(), angle: hinge.angle, lastTwist: 0, delta: 0, limits: hinge.limits } : null;
+        const ring = jointForRing(this.selected, this.gizmo.axis);
+        const hinge = this.transformMode === 'rotate' && this.members.length === 1 && ring ? this.state?.hinges?.[ring.key] : undefined;
+        this.hingeDrag = hinge && ring ? { quaternion: this.pivot.quaternion.clone(), angle: hinge.angle, lastTwist: 0, delta: 0, limits: hinge.limits, ...ring } : null;
         this.callbacks.begin();
       } else {
         this.hingeDrag = null;
@@ -116,13 +135,10 @@ export class RobotScene {
       this.dirty = true;
       if (this.gizmo.dragging && this.editable) {
         if (this.hingeDrag) {
-          const drag = this.hingeDrag;
-          const relative = drag.quaternion.clone().invert().multiply(this.pivot.quaternion);
-          const twist = 2 * Math.atan2(relative.z, relative.w);
-          drag.delta += Math.atan2(Math.sin(twist - drag.lastTwist), Math.cos(twist - drag.lastTwist));
-          drag.lastTwist = twist;
-          this.callbacks.jointAngle(this.selected, THREE.MathUtils.clamp(drag.angle + drag.delta, drag.limits[0], drag.limits[1]));
-        } else if (this.transformMode === 'rotate') this.callbacks.rotate(this.selected, this.pivot.quaternion.toArray());
+          this.applyHingeDrag();
+        } else if (this.transformMode === 'rotate') {
+          if (!ANKLE_HANDLES.includes(this.selected)) this.callbacks.rotate(this.selected, this.pivot.quaternion.toArray());
+        }
         else this.callbacks.move(this.selected, this.pivot.position.toArray());
       }
     });
@@ -167,6 +183,16 @@ export class RobotScene {
       this.scene.add(gltf.scene);
       if (this.state) this.update(this.state);
     }, undefined, () => callbacks.error('G1 모델을 불러오지 못했습니다. 서버 연결을 확인하세요.'));
+  }
+
+  applyHingeDrag() {
+    const drag = this.hingeDrag;
+    if (!drag) return;
+    const relative = drag.quaternion.clone().invert().multiply(this.pivot.quaternion);
+    const twist = 2 * Math.atan2(relative[drag.component], relative.w);
+    drag.delta += Math.atan2(Math.sin(twist - drag.lastTwist), Math.cos(twist - drag.lastTwist));
+    drag.lastTwist = twist;
+    this.callbacks.jointAngle(drag.key, THREE.MathUtils.clamp(drag.angle + drag.delta, drag.limits[0], drag.limits[1]));
   }
 
   private pick(event: PointerEvent) {
@@ -239,7 +265,7 @@ export class RobotScene {
     this.members = members;
     this.pins = pins;
     Object.entries(this.markers).forEach(([k, mesh]) => {
-      mesh.visible = this.markerVisible && (isJointHandle(k) === (this.handleLayer === 'joints') && !isHipAxis(k) || members.includes(k));
+      mesh.visible = this.markerVisible && (isJointHandle(k) === (this.handleLayer === 'joints') && !isCombinedAxis(k) || members.includes(k));
       const mat = mesh.material as THREE.MeshBasicMaterial;
       mat.color.set(members.includes(k) ? '#80f2c7' : pins.includes(k) ? '#f1bc65' : '#56bdec');
       mat.opacity = members.includes(k) ? .64 : .28;
@@ -247,12 +273,14 @@ export class RobotScene {
       this.labels[k]?.classList.toggle('pinned', pins.includes(k));
     });
     const hinge = this.transformMode === 'rotate' && members.length === 1 ? this.state?.hinges?.[key] : undefined;
-    this.gizmo.setSpace(hinge ? 'local' : this.space);
+    const ankle = this.transformMode === 'rotate' && members.length === 1 && ANKLE_HANDLES.includes(key);
+    this.gizmo.setSpace(hinge || ankle ? 'local' : this.space);
     this.gizmo.showX = this.gizmo.showY = !hinge;
-    this.gizmo.showZ = true;
+    this.gizmo.showZ = !ankle;
     if (this.state && !this.gizmo.dragging) {
       this.pivot.position.copy(hinge ? new THREE.Vector3().fromArray(hinge.position) : this.center());
-      if (hinge) this.pivot.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3().fromArray(hinge.axis_world).normalize());
+      if (ankle) this.pivot.quaternion.copy(ankleFrame(this.state, key));
+      else if (hinge) this.pivot.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3().fromArray(hinge.axis_world).normalize());
       else this.pivot.quaternion.fromArray(this.state.handles[key].quaternion);
     }
     const blocked = this.transformMode === 'rotate'
