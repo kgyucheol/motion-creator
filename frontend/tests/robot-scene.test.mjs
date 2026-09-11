@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
-import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees } from '../lib/pose-transforms.ts';
+import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
+import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 
 function fixture() {
   const viewer = Object.create(RobotScene.prototype);
@@ -182,4 +183,146 @@ test('ankle rings follow real axes and send only the corresponding motor angle',
     viewer.applyHingeDrag();
     assert.equal(calls[2][1], joint.limits[1]);
   }
+});
+
+test('anatomical tree covers all 29 motors exactly once and includes hands and support points', () => {
+  const leaves = BODY_GROUPS.flatMap(nodeMembers);
+  assert.equal(leaves.length, new Set(leaves).size);
+  const motorNames = [...Object.values(COMBINED_JOINTS).flat(), 'left_knee_joint', 'right_knee_joint',
+    ...['left', 'right'].flatMap(side => ['shoulder_pitch', 'shoulder_roll', 'shoulder_yaw', 'elbow', 'wrist_roll', 'wrist_pitch', 'wrist_yaw'].map(part => `${side}_${part}_joint`))];
+  assert.deepEqual(leaves.filter(key => key.endsWith('_joint')).sort(), motorNames.sort());
+  assert.deepEqual(leaves.filter(key => !key.endsWith('_joint')).sort(), ['pelvis','left_hand','right_hand','left_foot','right_foot'].sort());
+  const nodes = allNodes();
+  const hands = nodes.find(node => node.id === 'hands');
+  const left = nodes.find(node => node.id === 'left_hands');
+  assert.equal(nodeMembers(hands).length, 8);
+  assert.deepEqual(nodeMembers(left), ['left_wrist_roll_joint','left_wrist_pitch_joint','left_wrist_yaw_joint','left_hand']);
+});
+
+test('group selection, single-child replacement, partial state and Shift toggle', () => {
+  const hands = allNodes().find(node => node.id === 'hands');
+  const group = nodeMembers(hands);
+  let selected = selectMembers(['pelvis'], group, false);
+  assert.deepEqual(selected, group);
+  assert.equal(selectionState(hands, selected).all, true);
+  selected = selectMembers(selected, ['left_wrist_pitch_joint'], false);
+  assert.deepEqual(selected, ['left_wrist_pitch_joint']);
+  assert.deepEqual(selectionState(hands, selected), { count: 1, total: 8, all: false, partial: true });
+  selected = selectMembers(selected, ['pelvis'], true);
+  selected = selectMembers(selected, group, true);
+  assert.equal(new Set(selected).size, 9);
+  selected = selectMembers(selected, group, true);
+  assert.deepEqual(selected, ['pelvis']);
+});
+
+test('full groups preserve integrated controls while an individual child keeps its own axis', () => {
+  const nodes = allNodes();
+  const hands = nodeMembers(nodes.find(node => node.id === 'hands'));
+  assert.deepEqual(controlSelection(hands), ['left_hand', 'right_hand']);
+  assert.equal(controlKey(hands, 'left_wrist_pitch_joint'), 'left_hand');
+  const hips = nodeMembers(nodes.find(node => node.id === 'left_hips'));
+  assert.deepEqual(controlSelection(hips), ['left_hip']);
+  assert.deepEqual(controlSelection(['left_hip_roll_joint']), ['left_hip_roll_joint']);
+  const foot = nodeMembers(nodes.find(node => node.id === 'left_feet'));
+  assert.deepEqual(controlSelection(foot), ['left_ankle']);
+  assert.equal(jointForRing(controlKey(foot, foot[0]), 'Y').key, 'left_ankle_pitch_joint');
+  const legacy = expandVirtualControls(['waist','left_hip','left_hand']);
+  assert.equal(legacy.length, 7);
+  assert.deepEqual(controlSelection(legacy), ['waist','left_hip','left_hand']);
+});
+
+test('accordion visibility changes do not alter selection', () => {
+  const selected = ['left_wrist_pitch_joint'];
+  const closed = visibleTreeHandles([]);
+  const expanded = visibleTreeHandles(['hands', 'left_hands']);
+  assert.ok(closed.includes('left_hand'));
+  assert.equal(closed.includes('left_wrist_pitch_joint'), false);
+  assert.ok(expanded.includes('left_hand') && expanded.includes('left_wrist_pitch_joint'));
+  assert.deepEqual(selected, ['left_wrist_pitch_joint']);
+});
+
+test('selecting a hand group highlights every leaf and selecting a child restores a single-axis gizmo', () => {
+  const viewer = fixture();
+  const group = allNodes().find(node => node.id === 'left_hands');
+  const leaves = nodeMembers(group);
+  viewer.state.hinges = {};
+  viewer.markers = {}; viewer.labels = {};
+  leaves.forEach((key, i) => {
+    viewer.state.handles[key] = { position: [.2+i*.01, .2, .8], quaternion: [0, 0, 0, 1] };
+    viewer.markers[key] = new THREE.Mesh(new THREE.SphereGeometry(.02), new THREE.MeshBasicMaterial());
+    if (key.endsWith('_joint')) viewer.state.hinges[key] = { position: viewer.state.handles[key].position, axis_world: [1,0,0] };
+  });
+  viewer.pivot = new THREE.Object3D(); viewer.markerVisible = true; viewer.visibleHandles = ['left_hand'];
+  viewer.transformMode = 'rotate'; viewer.space = 'world';
+  viewer.gizmo.setSpace = () => {}; viewer.gizmo.attach = () => {}; viewer.gizmo.detach = () => {};
+  viewer.select(leaves[0], [], leaves);
+  assert.ok(viewer.gizmo.showX && viewer.gizmo.showY && viewer.gizmo.showZ);
+  assert.deepEqual(viewer.pivot.position.toArray(), viewer.state.handles.left_hand.position);
+  for (const key of leaves) {
+    assert.equal(viewer.markers[key].visible, true);
+    assert.equal(viewer.markers[key].material.color.getHexString(), '80f2c7');
+  }
+  viewer.select('left_wrist_pitch_joint', [], ['left_wrist_pitch_joint']);
+  assert.equal(viewer.gizmo.showX, false); assert.equal(viewer.gizmo.showY, false); assert.equal(viewer.gizmo.showZ, true);
+  assert.deepEqual(viewer.pivot.position.toArray(), viewer.state.handles.left_wrist_pitch_joint.position);
+  Object.values(viewer.markers).forEach(mesh => { mesh.geometry.dispose(); mesh.material.dispose(); });
+});
+
+test('mirror translation opens and closes pairs from either active side without changing forward/up displacement', () => {
+  const positions = { left_hand: [.2,.25,.8], right_hand: [.2,-.25,.8] };
+  assert.ok(canMirrorSelection(Object.keys(positions)));
+  for (const keys of [['left_hand'], ['left_hand','right_foot'], ['left_hand','right_hand','pelvis']]) assert.equal(canMirrorSelection(keys), false);
+  const open = translatedTargets(positions, [.1,.05,.03], { active: 'left_hand', rootQuaternion: [0,0,0,1] });
+  assert.ok(Math.abs(open.left_hand[1] - open.right_hand[1] - .6) < 1e-10);
+  for (const p of Object.values(open)) { assert.ok(Math.abs(p[0]-.3)<1e-10); assert.ok(Math.abs(p[2]-.83)<1e-10); }
+  const rightOpen = translatedTargets(positions, [0,-.05,0], { active: 'right_hand', rootQuaternion: [0,0,0,1] });
+  assert.ok(Math.abs(rightOpen.left_hand[1] - rightOpen.right_hand[1] - .6) < 1e-10);
+  const closed = translatedTargets(positions, [0,-.05,0], { active: 'left_hand', rootQuaternion: [0,0,0,1] });
+  assert.ok(Math.abs(closed.left_hand[1] - closed.right_hand[1] - .4) < 1e-10);
+  const normal = translatedTargets(positions, [0,.05,0]);
+  assert.ok(Math.abs(normal.left_hand[1] - normal.right_hand[1] - .5) < 1e-10);
+  assert.deepEqual(positions.left_hand, [.2,.25,.8]);
+});
+
+test('mirror follows the robot sagittal plane when the robot is turned', () => {
+  const root = quaternionFromDegrees([0,0,90]);
+  const positions = { left_hand: [-.25,.2,.8], right_hand: [.25,.2,.8] };
+  const result = translatedTargets(positions, [-.05,.1,0], { active: 'left_hand', rootQuaternion: root });
+  assert.ok(Math.abs(result.left_hand[0]+.3) < 1e-10);
+  assert.ok(Math.abs(result.right_hand[0]-.3) < 1e-10);
+  assert.ok(Math.abs(result.left_hand[1]-.3) < 1e-10);
+  assert.ok(Math.abs(result.right_hand[1]-.3) < 1e-10);
+});
+
+test('Ctrl+Z invokes pose history while text input, dragging and task mode retain their behavior', () => {
+  const viewer = fixture();
+  const calls = [];
+  viewer.callbacks = { history: redo => calls.push(redo) };
+  let prevented = 0;
+  const event = { code:'KeyZ', ctrlKey:true, metaKey:false, altKey:false, shiftKey:false, target:null,
+    preventDefault() { prevented++; } };
+  viewer.handleKeyDown(event);
+  viewer.handleKeyDown({ ...event, shiftKey:true });
+  assert.deepEqual(calls, [false,true]);
+  assert.equal(prevented, 2);
+  viewer.handleKeyDown({ ...event, target:{ closest: () => ({}) } });
+  viewer.gizmo.dragging = true; viewer.handleKeyDown(event); viewer.gizmo.dragging = false;
+  viewer.keyboardEnabled = false; viewer.handleKeyDown(event); viewer.keyboardEnabled = true;
+  viewer.editable = false; viewer.handleKeyDown(event);
+  assert.deepEqual(calls, [false,true]);
+  assert.equal(prevented, 2);
+});
+
+test('mirror gizmo anchors at the active member while F still frames both sides', () => {
+  const viewer = fixture();
+  for (const h of Object.values(viewer.state.handles)) h.quaternion = [0,0,0,1];
+  viewer.markers = {}; viewer.labels = {}; viewer.pivot = new THREE.Object3D();
+  viewer.markerVisible = true; viewer.transformMode = 'translate'; viewer.mirrorTranslation = true;
+  viewer.gizmo.setSpace = () => {}; viewer.gizmo.attach = () => {}; viewer.gizmo.detach = () => {};
+  viewer.select('right_hand', [], ['left_hand','right_hand']);
+  assert.deepEqual(viewer.pivot.position.toArray(), [.3,-.2,.8]);
+  viewer.focusSelection();
+  assert.deepEqual(viewer.orbit.target.toArray(), [.3,0,.8]);
+  viewer.setMirrorTranslation(false);
+  assert.deepEqual(viewer.pivot.position.toArray(), [.3,0,.8]);
 });

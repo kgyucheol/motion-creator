@@ -1,9 +1,11 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import TaskWorkbench from './task-workbench';
+import BodyControls from './body-controls';
+import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, Box, ChevronLeft, ChevronRight, Trash2, Download, Check, AlertCircle } from 'lucide-react';
-import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, jointControls, type PoseState, type TransformMode } from '../lib/robot-scene';
-import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation } from '../lib/pose-transforms';
+import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
+import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
 
 type Keyframe = { name: string; duration: number; qpos: number[]; pins: string[] };
 type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; box?: { position: number[]; size: number[]; visible: boolean } };
@@ -11,11 +13,10 @@ type Preview = { time: number[]; states: PoseState[]; max_pin_error_mm: number }
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
 const feet = ['left_foot', 'right_foot'];
-const order = ['pelvis', 'left_hand', 'right_hand', 'left_foot', 'right_foot', 'left_knee', 'right_knee', 'left_elbow', 'right_elbow', 'left_shoulder', 'right_shoulder'];
-const jointSection = (key: string) => key.startsWith('waist') ? '허리 · 3축' : `${key.startsWith('left_') ? '왼쪽' : '오른쪽'} ${/hip|knee|ankle/.test(key) ? '다리 · 6축' : '팔 · 7축'}`;
 const copy = <T,>(value: T): T => structuredClone(value);
 function selectionCenter(pose: PoseState, members: string[]) {
-  return [0, 1, 2].map(i => members.reduce((sum, key) => sum + pose.handles[key].position[i], 0) / members.length);
+  const controls = controlSelection(members);
+  return [0, 1, 2].map(i => controls.reduce((sum, key) => sum + pose.handles[key].position[i], 0) / controls.length);
 }
 async function api<T>(path: string, body?: unknown, method = body === undefined ? 'GET' : 'POST'): Promise<T> {
   const response = await fetch(`/api/${path}`, { method, ...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }) });
@@ -35,13 +36,20 @@ export default function Editor() {
   const [project, setProject] = useState<Project | null>(null);
   const [selected, setSelected] = useState('pelvis');
   const [members, setMembers] = useState<string[]>(['pelvis']);
-  const [handleLayer, setHandleLayer] = useState<'body' | 'joints'>('joints');
+  const [expanded, setExpanded] = useState<string[]>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('g1-body-tree-expanded') ?? 'null');
+      if (Array.isArray(saved)) return saved.filter(id => allNodes().some(node => node.id === id));
+    } catch { /* Use initial accordion state when storage is unavailable. */ }
+    return ['shoulders', 'elbows', 'hands', 'waist_group', 'legs', 'feet'];
+  });
   const [groups, setGroups] = useState<GroupPreset[]>([]);
   const [groupName, setGroupName] = useState('');
   const [groupId, setGroupId] = useState('');
   const [pins, setPins] = useState<string[]>(feet);
   const [mode, setMode] = useState('elastic');
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
+  const [mirror, setMirror] = useState(false);
   const [space, setSpace] = useState<'world' | 'local'>('world');
   const [rotation, setRotation] = useState([0, 0, 0]);
   const [jointDraft, setJointDraft] = useState<number[]>([]);
@@ -67,8 +75,8 @@ export default function Editor() {
   const [savedChoice, setSavedChoice] = useState('');
   const [historyCount, setHistoryCount] = useState(0);
   const [futureCount, setFutureCount] = useState(0);
-  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, busy, playing, solving, box });
-  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, busy, playing, solving, box };
+  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, box });
+  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, box };
   const history = useRef<{ qpos: number[]; pins: string[] }[]>([]);
   const future = useRef<{ qpos: number[]; pins: string[] }[]>([]);
   const anchor = useRef<number[]>([]);
@@ -76,11 +84,18 @@ export default function Editor() {
   const anchorCenter = useRef<number[]>([0, 0, 0]);
   const anchorOrientations = useRef<Record<string, number[]>>({});
   const anchorQuaternion = useRef([0, 0, 0, 1]);
+  const anchorMirror = useRef<{ active: string; rootQuaternion: number[] } | undefined>(undefined);
   const pending = useRef<{ kind: TransformMode | 'joint'; key: string; target: number[]; joints?: Record<string, number> } | null>(null);
   const inFlight = useRef(false);
   const dragActive = useRef(false);
   const alive = useRef(true);
-  const actions = useRef({ select: (_key: string, _additive: boolean, _hover: boolean) => {}, begin: () => {}, move: (_key: string, _target: number[]) => {}, rotate: (_key: string, _quaternion: number[]) => {}, jointAngle: (_key: string, _angle: number) => {}, transformMode: (_mode: TransformMode) => {}, end: () => {} });
+  const actions = useRef({ select: (_key: string, _additive: boolean, _hover: boolean) => {}, begin: () => {}, move: (_key: string, _target: number[]) => {}, rotate: (_key: string, _quaternion: number[]) => {}, jointAngle: (_key: string, _angle: number) => {}, transformMode: (_mode: TransformMode) => {}, history: (_redo: boolean) => {}, end: () => {} });
+
+  function selectionPosition(pose: PoseState, items: string[], active: string) {
+    const c = current.current;
+    return c.mirror && c.transformMode === 'translate' && canMirrorSelection(controlSelection(items))
+      ? [...pose.handles[controlKey(items, active)].position] : selectionCenter(pose, items);
+  }
 
   function applyState(next: PoseState) {
     current.current.state = next;
@@ -88,8 +103,8 @@ export default function Editor() {
     scene.current?.update(next);
     setJointDraft(next.qpos.slice(7).map(v => v * 180 / Math.PI));
     if (!dragActive.current) {
-      setTarget(selectionCenter(next, current.current.members));
-      setRotation(eulerDegrees(next.handles[current.current.selected].quaternion));
+      setTarget(selectionPosition(next, current.current.members, current.current.selected));
+      setRotation(eulerDegrees(next.handles[controlKey(current.current.members, current.current.selected)].quaternion));
     }
   }
   function checkpoint() {
@@ -107,36 +122,50 @@ export default function Editor() {
     finally { setBusy(false); current.current.busy = false; }
   }
   function applySelection(next: string[], active: string, hover = false) {
-    if (!hover) setHandleLayer(isJointHandle(active) ? 'joints' : 'body');
+    next = expandVirtualControls(next);
+    if (!next.includes(active)) active = expandVirtualControls([active])[0];
     current.current.selected = active;
     current.current.members = next;
     setSelected(active); setMembers(next); setInfo(null);
     if (scene.current && !hover) scene.current.selectionLocked = true;
     const previousMode = current.current.transformMode;
-    const nextMode = next.length === 1 && isJointHandle(active) && !hover ? 'rotate' : previousMode === 'rotate' && !canRotateSelection(next) ? 'translate' : previousMode;
+    const controls = controlSelection(next);
+    const nextMode = controls.length === 1 && isJointHandle(controls[0]) && !hover ? 'rotate' : previousMode === 'rotate' && !canRotateSelection(controls) ? 'translate' : previousMode;
     current.current.transformMode = nextMode; setTransformMode(nextMode);
     scene.current?.select(active, current.current.pins, next);
     scene.current?.setTransformMode(nextMode, space);
     const pose = current.current.state;
     if (pose) {
-      setTarget(selectionCenter(pose, next));
-      setRotation(eulerDegrees(pose.handles[active].quaternion));
+      setTarget(selectionPosition(pose, next, active));
+      setRotation(eulerDegrees(pose.handles[controlKey(next, active)].quaternion));
     }
   }
   function select(key: string, additive = false, hover = false) {
+    selectBatch([key], additive, hover);
+  }
+  function selectBatch(incoming: string[], additive = false, hover = false) {
     if (current.current.busy || current.current.playing || inFlight.current || dragActive.current) return;
-    let next = [key];
-    if (additive) next = current.current.members.includes(key) ? current.current.members.filter(k => k !== key) : [...current.current.members, key];
+    const next = selectMembers(current.current.members, incoming, additive);
     if (!next.length) return;
-    applySelection(next, next.includes(key) ? key : next[next.length - 1], hover);
+    applySelection(next, next.includes(incoming[0]) ? incoming[0] : next[next.length - 1], hover);
+  }
+  function toggleExpanded(id: string) {
+    setExpanded(previous => {
+      const next = previous.includes(id) ? previous.filter(key => key !== id) : [...previous, id];
+      try { localStorage.setItem('g1-body-tree-expanded', JSON.stringify(next)); } catch { /* Expansion still works without storage. */ }
+      return next;
+    });
   }
   function begin() {
     if (!current.current.state) return;
     checkpoint(); anchor.current = [...current.current.state.qpos];
-    anchorPositions.current = Object.fromEntries(current.current.members.map(k => [k, [...current.current.state!.handles[k].position]]));
-    anchorCenter.current = selectionCenter(current.current.state, current.current.members);
-    anchorOrientations.current = Object.fromEntries(current.current.members.map(k => [k, [...current.current.state!.handles[k].quaternion]]));
-    anchorQuaternion.current = [...current.current.state.handles[current.current.selected].quaternion];
+    const controls = controlSelection(current.current.members);
+    anchorPositions.current = Object.fromEntries(controls.map(k => [k, [...current.current.state!.handles[k].position]]));
+    anchorCenter.current = selectionPosition(current.current.state, current.current.members, current.current.selected);
+    anchorMirror.current = current.current.mirror && current.current.transformMode === 'translate' && canMirrorSelection(controls)
+      ? { active: controlKey(current.current.members, current.current.selected), rootQuaternion: [...current.current.state.handles.pelvis.quaternion] } : undefined;
+    anchorOrientations.current = Object.fromEntries(controls.map(k => [k, [...current.current.state!.handles[k].quaternion]]));
+    anchorQuaternion.current = [...current.current.state.handles[controlKey(current.current.members, current.current.selected)].quaternion];
     dragActive.current = true;
     invalidate(); setError('');
   }
@@ -152,7 +181,7 @@ export default function Editor() {
         else if (next.kind === 'joint') goals = { joints: next.joints };
         else {
           const delta = next.target.map((value, i) => value - anchorCenter.current[i]);
-          goals = { targets: Object.fromEntries(Object.entries(anchorPositions.current).map(([key, position]) => [key, position.map((value, i) => value + delta[i])])) };
+          goals = { targets: translatedTargets(anchorPositions.current, delta, anchorMirror.current) };
         }
         const result = await api<{ state: PoseState; solver: SolveInfo }>('solve-group', {
           qpos: c.state!.qpos, anchor: anchor.current, ...goals,
@@ -189,7 +218,7 @@ export default function Editor() {
   function changeTransformMode(next: TransformMode) {
     const c = current.current;
     if (!c.state || c.busy || c.playing || inFlight.current || dragActive.current) return;
-    if (next === 'rotate' && !canRotateSelection(c.members)) {
+    if (next === 'rotate' && !canRotateSelection(controlSelection(c.members))) {
       setMessage('관절축 회전은 한 관절씩 선택하세요. 여러 관절을 함께 선택한 경우 W로 IK 이동할 수 있습니다.');
       return;
     }
@@ -197,7 +226,11 @@ export default function Editor() {
     setTransformMode(next);
     scene.current?.setTransformMode(next, space);
   }
-  actions.current = { select, begin, move, rotate, jointAngle, transformMode: changeTransformMode, end: () => {
+  actions.current = { select: (key, additive, hover) => {
+    const group = groupForControl(key);
+    if (group && (!expanded.includes(group.id) || !nodeMembers(group).includes(key))) selectBatch(nodeMembers(group), additive, hover);
+    else select(key, additive, hover);
+  }, begin, move, rotate, jointAngle, transformMode: changeTransformMode, history: changeHistory, end: () => {
     dragActive.current = false;
     if (current.current.state) applyState(current.current.state);
   } };
@@ -211,6 +244,7 @@ export default function Editor() {
         move: (key, value) => actions.current.move(key, value), rotate: (key, value) => actions.current.rotate(key, value), end: () => actions.current.end(), error: setError,
         transformMode: mode => actions.current.transformMode(mode),
         jointAngle: (key, angle) => actions.current.jointAngle(key, angle),
+        history: redo => actions.current.history(redo),
       });
       scene.current = viewer;
     } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
@@ -243,11 +277,12 @@ export default function Editor() {
   useEffect(() => {
     scene.current?.setTransformMode(transformMode, space);
     const pose = current.current.state;
-    if (pose) setTarget(selectionCenter(pose, members));
-  }, [transformMode, space]);
+    if (pose) setTarget(selectionPosition(pose, members, selected));
+  }, [transformMode, space, mirror]);
   useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !taskOpen); scene.current.keyboardEnabled = !taskOpen; } }, [busy, playing, taskOpen]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
-  useEffect(() => { scene.current?.setHandleLayer(handleLayer); }, [handleLayer]);
+  useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
+  useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
   useEffect(() => { scene.current?.setBox(box.position, box.size, box.visible); }, [box]);
   useEffect(() => {
     if (!project || !state || playing) return;
@@ -303,13 +338,16 @@ export default function Editor() {
     await run(async () => { checkpoint(); applyState(await api<PoseState>('pose', { qpos: f.qpos })); setPins(f.pins); setFrameIndex(index); setPoseDirty(false); setInfo(null); });
   }
   function changeHistory(redo: boolean) {
+    if (current.current.busy || current.current.playing || inFlight.current || dragActive.current) return;
     void run(async () => {
       const from = redo ? future.current : history.current;
       const to = redo ? history.current : future.current;
-      const value = from.pop();
-      if (!value || !state) return;
-      to.push({ qpos: state.qpos, pins });
-      applyState(await api<PoseState>('pose', { qpos: value.qpos })); setPins(value.pins);
+      const value = from[from.length - 1];
+      if (!value || !current.current.state) return;
+      const restored = await api<PoseState>('pose', { qpos: value.qpos });
+      from.pop();
+      to.push({ qpos: [...current.current.state.qpos], pins: [...current.current.pins] });
+      applyState(restored); setPins(value.pins); setInfo(null);
       setHistoryCount(history.current.length); setFutureCount(future.current.length); setPoseDirty(true); invalidate();
     });
   }
@@ -324,7 +362,7 @@ export default function Editor() {
   function nudgeRotation(axis: number, amount: number) {
     if (!state || busy || solving || rotationBlocked) return;
     begin(); dragActive.current = false;
-    rotate(selected, incrementRotation(state.handles[selected].quaternion, axis, amount, space));
+    rotate(selected, incrementRotation(state.handles[controlKey(members, selected)].quaternion, axis, amount, space));
   }
   function applyJointDraft() {
     if (!state || !project || busy || solving) return;
@@ -355,16 +393,21 @@ export default function Editor() {
   }
   const disabled = !state || busy || solving || playing;
   const selectionPinned = members.some(k => pins.includes(k));
-  const rotationAllowed = canRotateSelection(members);
-  const rotationBlocked = !rotationAllowed || members.some(k => pins.includes(k) && (members.length > 1 || feet.includes(k)));
-  const hinge = members.length === 1 ? state?.hinges?.[selected] : undefined;
-  const ankle = members.length === 1 && ANKLE_HANDLES.includes(selected);
-  const partJoints = members.length === 1 ? COMBINED_JOINTS[selected] : undefined;
+  const controls = controlSelection(members);
+  const mirrorAvailable = canMirrorSelection(controls);
+  const mirrorActive = mirror && mirrorAvailable && transformMode === 'translate';
+  const activeControl = controlKey(members, selected);
+  const rotationAllowed = canRotateSelection(controls);
+  const rotationBlocked = !rotationAllowed || controls.some(k => pins.includes(k) && (controls.length > 1 || feet.includes(k)));
+  const hinge = controls.length === 1 ? state?.hinges?.[activeControl] : undefined;
+  const ankle = controls.length === 1 && ANKLE_HANDLES.includes(activeControl);
+  const selectedJoints = members.filter(key => key.endsWith('_joint'));
+  const partJoints = selectedJoints.length > 1 ? selectedJoints : controls.length === 1 ? COMBINED_JOINTS[activeControl] : undefined;
   const hingeIndex = hinge ? project?.joint_names.indexOf(hinge.joint_name) ?? -1 : -1;
   const jointDirty = !!state && jointDraft.some((v, i) => Math.abs(v - state.qpos[7+i]*180/Math.PI) > .001);
   const activeFrame = project?.keyframes[frameIndex];
   const duration = project?.keyframes.slice(1).reduce((sum, f) => sum + f.duration, 0) ?? 0;
-  const visibleOrder = handleLayer === 'joints' ? jointControls(project?.joint_names ?? []) : order;
+  const selectedGroup = allNodes().find(node => node.children && nodeMembers(node).length === members.length && nodeMembers(node).every(key => members.includes(key)));
 
   return <div className="editor">
     {taskOpen && state && <TaskWorkbench initialQ={state.qpos} onClose={() => { setTaskOpen(false); scene.current?.setEditable(true); }}/>}
@@ -375,18 +418,11 @@ export default function Editor() {
       <input ref={file} type="file" accept=".json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void run(async () => { await loadProject(JSON.parse(await f.text())); setMessage('프로젝트를 불러왔습니다.'); }); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">
-      <div className="panel-heading"><span>BODY CONTROLS</span><small>{handleLayer === 'joints' ? '29자유도 · 21지점' : '11개 부위'}</small></div>
-      <div className="segmented"><button className={handleLayer === 'body' ? 'chosen' : ''} disabled={disabled} onClick={() => setHandleLayer('body')}>주요 부위 11</button><button className={handleLayer === 'joints' ? 'chosen' : ''} disabled={disabled} onClick={() => setHandleLayer('joints')}>전체 관절 29</button></div>
-      <p className="hint">클릭으로 선택 · Shift+클릭으로 추가/해제 · W 이동 · E 회전 · F 선택 보기</p>
-      {handleLayer === 'joints' && <p className="hint">고관절·허리는 3축, 발목은 2축을 부위별로 묶었습니다. 관절 선택 후 회전 링을 드래그하세요. 겹친 관절은 Alt+클릭으로 전환할 수 있습니다.</p>}
-      <div className="body-list">{visibleOrder.map((key, i) => <div key={key}>
-        {handleLayer === 'joints' && (i === 0 || jointSection(key) !== jointSection(visibleOrder[i-1])) && <div className="joint-section">{jointSection(key)}</div>}
-        <div className={`body-row ${members.includes(key) ? 'active' : ''}`}>
-        <button className="body-select" title={key} disabled={disabled} aria-pressed={members.includes(key)} onClick={e => select(key, e.shiftKey)}><span className={`part-dot ${pins.includes(key) ? 'locked' : ''}`}/>{state?.handles[key].label ?? key}{isJointHandle(key) && <small className="joint-list-angle">{COMBINED_JOINTS[key] ? `${COMBINED_JOINTS[key].length}축` : `${((state?.hinges[key]?.angle ?? 0)*180/Math.PI).toFixed(1)}°`}</small>}</button>
-        <button className={`pin-button ${pins.includes(key) ? 'is-pinned' : ''}`} disabled={disabled} onClick={() => togglePin(key)} aria-label={`${state?.handles[key].label ?? key} ${pins.includes(key) ? '고정 해제' : '고정'}`} title="공간상 위치 고정"><LockKeyhole size={14}/></button>
-      </div></div>)}</div>
+      <div className="panel-heading"><span>BODY GROUPS</span><small>29자유도</small></div>
+      <p className="hint">그룹 이름: 전체 선택 · 화살표: 펼치기/접기 · 하위 관절: 하나만 선택 · Shift: 추가/해제</p>
+      <BodyControls pose={state} selected={members} pins={pins} expanded={expanded} disabled={disabled} onExpand={toggleExpanded} onSelect={selectBatch} onPin={togglePin}/>
       <div className="section-divider"/>
-      <div className="panel-heading"><span>SELECTION GROUPS</span><small>{members.length}개 선택</small></div>
+      <div className="panel-heading"><span>사용자 지정 프리셋</span><small>{members.length}개 선택</small></div>
       <select className="group-control" aria-label="그룹 프리셋 선택" value={groupId} disabled={disabled} onChange={e => {
         const id = e.target.value; setGroupId(id);
         const group = groups.find(g => g.id === id);
@@ -406,7 +442,7 @@ export default function Editor() {
         await api<null>(`groups/${encodeURIComponent(groupId)}`, undefined, 'DELETE');
         setGroups(await api<GroupPreset[]>('groups')); setGroupId(''); setGroupName(''); setMessage('그룹 프리셋을 삭제했습니다.');
       })}><Trash2 size={13}/>삭제</button></div>
-      <p className="hint">선택 부위의 중심에서 함께 이동합니다. 고정된 부위가 포함되면 먼저 해제하세요.</p>
+      <p className="hint">일반 이동은 함께 옮기고, 좌우 미러 이동은 짝을 벌리거나 모읍니다. 고정된 부위가 포함되면 먼저 해제하세요.</p>
       <div className="section-divider"/>
       <div className="panel-heading"><span>IK BEHAVIOR</span></div>
       <div className="segmented"><button disabled={disabled} className={mode === 'elastic' ? 'chosen' : ''} onClick={() => setMode('elastic')}>유연하게 따라오기</button><button disabled={disabled} className={mode === 'free' ? 'chosen' : ''} onClick={() => setMode('free')}>고정 부위만 유지</button></div>
@@ -421,7 +457,7 @@ export default function Editor() {
     <main className="viewport">
       <div ref={host} className="canvas-host"/>
       <div className="viewport-top"><div className="view-title"><span className="status-dot"/>POSE WORKSPACE<span>m · rad · Z-up</span></div><div className="view-buttons">{(['perspective', 'front', 'side'] as const).map((v, i) => <button key={v} onClick={() => scene.current?.setView(v)}>{['자유', '정면', '측면'][i]}</button>)}</div></div>
-      <div className="viewport-tools"><button title="자세 실행 취소" disabled={disabled || !historyCount} onClick={() => changeHistory(false)}><Undo2 size={17}/></button><button title="자세 다시 실행" disabled={disabled || !futureCount} onClick={() => changeHistory(true)}><Redo2 size={17}/></button><span/><button className={showHandles ? 'chosen' : ''} title="조작 표시 켜기/끄기" onClick={() => setShowHandles(!showHandles)}><MousePointer2 size={17}/></button></div>
+      <div className="viewport-tools"><button title="자세 실행 취소 (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled={disabled || !historyCount} onClick={() => changeHistory(false)}><Undo2 size={17}/></button><button title="자세 다시 실행 (Ctrl+Shift+Z)" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled={disabled || !futureCount} onClick={() => changeHistory(true)}><Redo2 size={17}/></button><span/><button className={showHandles ? 'chosen' : ''} title="조작 표시 켜기/끄기" onClick={() => setShowHandles(!showHandles)}><MousePointer2 size={17}/></button></div>
       <div className="scene-legend"><span><i className="cyan"/>이동 가능</span><span><i className="amber"/>고정</span><span><i className="mint"/>선택</span></div>
       <div className="viewport-bottom"><span>드래그: 회전 · 휠: 확대 · 우클릭: 이동 · W/E: 이동/회전 · F: 선택 보기</span><span className="axes"><b>X</b> 전방 <b>Y</b> 왼쪽 <b>Z</b> 위</span></div>
       {busy && <div className="busy-overlay"><span className="spinner"/>모션을 계산하고 있습니다…</div>}
@@ -430,7 +466,9 @@ export default function Editor() {
       <div className="panel-heading"><span>TRANSFORM</span><small>{transformMode === 'rotate' && (hinge || ankle) ? '관절축' : space.toUpperCase()}</small></div>
       <div className="segmented transform-modes"><button className={transformMode === 'translate' ? 'chosen' : ''} disabled={disabled} onClick={() => changeTransformMode('translate')} aria-keyshortcuts="W" title="이동 모드 (W)">이동 W</button><button className={transformMode === 'rotate' ? 'chosen' : ''} disabled={disabled || !rotationAllowed} onClick={() => changeTransformMode('rotate')} aria-keyshortcuts="E" title="회전 모드 (E)">회전 E</button></div>
       <div className="segmented"><button className={space === 'world' ? 'chosen' : ''} disabled={disabled || transformMode === 'rotate' && (!!hinge || ankle)} onClick={() => setSpace('world')} title="장면에 고정된 XYZ 축으로 드래그">월드 축</button><button className={space === 'local' ? 'chosen' : ''} disabled={disabled || transformMode === 'rotate' && (!!hinge || ankle)} onClick={() => setSpace('local')} title="선택 부위의 방향을 따라가는 XYZ 축으로 드래그">로컬 축</button></div>
-      <h2>{members.length > 1 ? `${members.length}개 부위` : state?.handles[selected].label ?? '골반'} <span>{selectionPinned ? '고정 포함' : '이동 가능'}</span></h2>
+      <div className="segmented"><button className={!mirror ? 'chosen' : ''} disabled={disabled} onClick={() => setMirror(false)}>일반 이동</button><button className={mirror ? 'chosen' : ''} disabled={disabled} aria-pressed={mirror} onClick={() => setMirror(true)}>좌우 미러 이동</button></div>
+      {mirror && <p className="hint">{mirrorActive ? `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 이쪽을 바깥/안쪽으로 드래그하면 반대쪽도 대칭 이동합니다. 골반의 좌우 평면을 기준으로 합니다.` : !mirrorAvailable ? '좌우 짝을 모두 선택하면 미러 이동이 활성화됩니다.' : 'W 이동 모드에서 미러 이동을 사용할 수 있습니다.'}</p>}
+      <h2>{selectedGroup?.label ?? (members.length > 1 ? `${members.length}개 부위` : state?.handles[selected].label ?? '골반')} <span>{selectionPinned ? '고정 포함' : '이동 가능'}</span></h2>
       <p className="hint">{members.map(k => state?.handles[k].label ?? k).join(' · ')}</p>
       <button className="wide" disabled={!state} onClick={() => scene.current?.focusSelection()}>선택 부위 보기 <kbd>F</kbd></button>
       {partJoints && <div className="part-angle-editor">
@@ -439,7 +477,7 @@ export default function Editor() {
           const index = project?.joint_names.indexOf(name) ?? -1;
           const joint = state?.hinges[name];
           if (!joint || index < 0) return null;
-          return <label className="part-angle-row" key={name}><span>{name.split('_').slice(-2, -1)[0]}</span>
+          return <label className="part-angle-row" key={name}><span title={name}>{state?.handles[name]?.label ?? name}</span>
             <input aria-label={`${name} 부위 각도`} type="number" step=".1" min={joint.limits[0]*180/Math.PI} max={joint.limits[1]*180/Math.PI} value={Number((jointDraft[index] ?? joint.angle*180/Math.PI).toFixed(2))} disabled={disabled} onChange={e => changeJoint(index, +e.target.value)}/>
             <small>{(joint.limits[0]*180/Math.PI).toFixed(0)} ~ {(joint.limits[1]*180/Math.PI).toFixed(0)}°</small>
           </label>;
@@ -456,17 +494,17 @@ export default function Editor() {
         <div className="group-actions"><button disabled={disabled} onClick={() => applyHingeAngle(hinge.angle-Math.PI/180)}>−1°</button><button disabled={disabled} onClick={() => applyHingeAngle(hinge.angle+Math.PI/180)}>+1°</button></div>
         <p className="hint">링 하나로 실제 관절축의 각도를 조정합니다. 월드/로컬 선택과 관계없이 관절축을 사용하며, 손·발 등 고정 조건을 함께 유지합니다. 슬라이더·숫자 입력 후에는 관절각 적용을 누르세요.</p>
       </> : transformMode === 'rotate' ? <>
-        {(HIP_HANDLES.includes(selected) || selected === 'waist') && <p className="hint">롤 관절 위치의 세 회전 링으로 {selected === 'waist' ? '상체' : '다리'} 방향을 조정합니다. IK가 yaw·pitch·roll을 함께 계산합니다. 아래 방향 값은 월드 Euler 각도이며 위 실제 관절각과 구분됩니다.</p>}
+        {(HIP_HANDLES.includes(activeControl) || activeControl === 'waist') && <p className="hint">롤 관절 위치의 세 회전 링으로 {activeControl === 'waist' ? '상체' : '다리'} 방향을 조정합니다. IK가 yaw·pitch·roll을 함께 계산합니다. 아래 방향 값은 월드 Euler 각도이며 위 실제 관절각과 구분됩니다.</p>}
         <label className="inspector-label">기준 부위 방향 · 월드 XYZ <small>°</small></label>
         <div className="xyz">{rotation.map((v, i) => <label key={i}><span className={`axis-${i}`}>{'XYZ'[i]}</span><input aria-label={`목표 ${'XYZ'[i]} 회전각`} type="number" step="1" value={Number(v.toFixed(2))} disabled={disabled || rotationBlocked} onChange={e => setRotation(t => t.map((n, j) => i === j ? +e.target.value : n))}/></label>)}</div>
         <button className="wide" disabled={disabled || rotationBlocked} onClick={() => numericRotate(rotation)}>회전 적용</button>
         <div className="nudge"><span>1° 회전</span>{['X', 'Y', 'Z'].map((a, i) => <div key={a}><button aria-label={`${a} 마이너스 1도`} disabled={disabled || rotationBlocked} onClick={() => nudgeRotation(i, -1)}>−</button><span>{a}</span><button aria-label={`${a} 플러스 1도`} disabled={disabled || rotationBlocked} onClick={() => nudgeRotation(i, 1)}>+</button></div>)}</div>
         <p className="hint">회전 링을 드래그하세요. 1° 버튼은 선택한 축 좌표계를 사용합니다. 숫자 입력은 월드 XYZ 순서의 Euler 각도입니다. {rotationBlocked ? '회전할 발 또는 그룹에 포함된 부위의 고정을 해제하세요.' : '단일 손·골반은 위치를 고정한 채 회전할 수 있습니다.'}</p>
       </> : <>
-        <label className="inspector-label">{members.length > 1 ? '그룹 중심 목표 위치' : '목표 위치'} · 월드 XYZ <small>m</small></label>
+        <label className="inspector-label">{mirrorActive ? '미러 기준 부위 목표 위치' : members.length > 1 ? '그룹 중심 목표 위치' : '목표 위치'} · 월드 XYZ <small>m</small></label>
         <div className="xyz">{target.map((v, i) => <label key={i}><span className={`axis-${i}`}>{'XYZ'[i]}</span><input aria-label={`목표 ${'XYZ'[i]} 위치`} type="number" step="0.01" value={Number(v.toFixed(4))} disabled={disabled || selectionPinned} onChange={e => setTarget(t => t.map((n, j) => i === j ? +e.target.value : n))}/></label>)}</div>
         <button className="wide" disabled={disabled || selectionPinned} onClick={() => numericMove(target)}>목표 위치 적용</button>
-        <div className="nudge"><span>1cm · 월드</span>{['X', 'Y', 'Z'].map((a, i) => <div key={a}><button aria-label={`${a} 마이너스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionCenter(state!, members).map((n, j) => i === j ? n - .01 : n))}>−</button><span>{a}</span><button aria-label={`${a} 플러스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionCenter(state!, members).map((n, j) => i === j ? n + .01 : n))}>+</button></div>)}</div>
+        <div className="nudge"><span>1cm · 월드</span>{['X', 'Y', 'Z'].map((a, i) => <div key={a}><button aria-label={`${a} 마이너스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionPosition(state!, members, selected).map((n, j) => i === j ? n - .01 : n))}>−</button><span>{a}</span><button aria-label={`${a} 플러스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionPosition(state!, members, selected).map((n, j) => i === j ? n + .01 : n))}>+</button></div>)}</div>
         <p className="hint">고정된 부위를 이동하려면 자물쇠를 해제하세요. {isJointHandle(selected) && 'W는 관절 중심의 위치를 IK로 이동합니다. 해당 관절 자체의 회전각을 바꾸려면 E를 누르세요.'}</p>
       </>}
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>

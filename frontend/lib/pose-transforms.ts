@@ -1,5 +1,18 @@
 import { Quaternion, Vector3, Euler, MathUtils } from 'three';
 
+export const counterpart = (key: string) => key.startsWith('left_') ? 'right_' + key.slice(5) : key.startsWith('right_') ? 'left_' + key.slice(6) : null;
+export function canMirrorSelection(keys: string[]) {
+  return keys.length >= 2 && keys.every(key => { const other = counterpart(key); return other !== null && keys.includes(other); });
+}
+export function translatedTargets(positions: Record<string, number[]>, delta: number[], mirror?: { active: string; rootQuaternion: number[] }) {
+  const offset = new Vector3().fromArray(delta);
+  const normal = mirror ? new Vector3(0, 1, 0).applyQuaternion(new Quaternion().fromArray(mirror.rootQuaternion)).normalize() : null;
+  const reflected = normal ? offset.clone().addScaledVector(normal, -2*offset.dot(normal)) : offset;
+  const side = mirror?.active.startsWith('left_') ? 'left_' : 'right_';
+  return Object.fromEntries(Object.entries(positions).map(([key, position]) => [key,
+    new Vector3().fromArray(position).add(mirror && !key.startsWith(side) ? reflected : offset).toArray()]));
+}
+
 export function eulerDegrees(quaternion: number[]) {
   const e = new Euler().setFromQuaternion(new Quaternion().fromArray(quaternion), 'XYZ');
   return [e.x, e.y, e.z].map(MathUtils.radToDeg);

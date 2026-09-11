@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { controlKey, controlSelection } from './body-groups.ts';
+import { canMirrorSelection } from './pose-transforms.ts';
 
 export type PoseState = {
   qpos: number[];
@@ -46,6 +48,7 @@ type Callbacks = {
   transformMode: (mode: TransformMode) => void;
   end: () => void;
   error: (message: string) => void;
+  history?: (redo: boolean) => void;
 };
 
 export class RobotScene {
@@ -75,6 +78,8 @@ export class RobotScene {
   com: THREE.Mesh;
   markerVisible = true;
   handleLayer: 'body' | 'joints' = 'body';
+  visibleHandles: string[] | null = null;
+  mirrorTranslation = false;
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
   hingeDrag: { quaternion: THREE.Quaternion; angle: number; lastTwist: number; delta: number; limits: number[]; key: string; component: 'x' | 'y' | 'z' } | null = null;
@@ -121,8 +126,8 @@ export class RobotScene {
     this.gizmo.addEventListener('dragging-changed', event => {
       this.orbit.enabled = !event.value;
       if (event.value) {
-        const ring = jointForRing(this.selected, this.gizmo.axis);
-        const hinge = this.transformMode === 'rotate' && this.members.length === 1 && ring ? this.state?.hinges?.[ring.key] : undefined;
+        const ring = jointForRing(controlKey(this.members, this.selected), this.gizmo.axis);
+        const hinge = this.transformMode === 'rotate' && controlSelection(this.members).length === 1 && ring ? this.state?.hinges?.[ring.key] : undefined;
         this.hingeDrag = hinge && ring ? { quaternion: this.pivot.quaternion.clone(), angle: hinge.angle, lastTwist: 0, delta: 0, limits: hinge.limits, ...ring } : null;
         this.callbacks.begin();
       } else {
@@ -137,7 +142,7 @@ export class RobotScene {
         if (this.hingeDrag) {
           this.applyHingeDrag();
         } else if (this.transformMode === 'rotate') {
-          if (!ANKLE_HANDLES.includes(this.selected)) this.callbacks.rotate(this.selected, this.pivot.quaternion.toArray());
+          if (!ANKLE_HANDLES.includes(controlKey(this.members, this.selected))) this.callbacks.rotate(this.selected, this.pivot.quaternion.toArray());
         }
         else this.callbacks.move(this.selected, this.pivot.position.toArray());
       }
@@ -227,11 +232,20 @@ export class RobotScene {
     else if (!event.shiftKey) this.selectionLocked = false;
   };
 
-  keydown = (event: KeyboardEvent) => {
+  keydown = (event: KeyboardEvent) => this.handleKeyDown(event);
+
+  handleKeyDown(event: KeyboardEvent) {
     const target = event.target as HTMLElement | null;
-    if (this.keyboardEnabled === false || event.repeat || event.isComposing || event.ctrlKey || event.altKey || event.metaKey || this.gizmo.dragging
+    if (this.keyboardEnabled === false || event.repeat || event.isComposing || event.altKey || this.gizmo.dragging
         || target?.isContentEditable || target?.closest('input, textarea, select')) return;
     const key = event.code || event.key.toLowerCase();
+    if (event.ctrlKey || event.metaKey) {
+      if ((key === 'KeyZ' || key === 'z') && this.editable && this.state && this.callbacks.history) {
+        event.preventDefault();
+        this.callbacks.history(event.shiftKey);
+      }
+      return;
+    }
     if (key === 'KeyF' || key === 'f') {
       event.preventDefault();
       this.focusSelection();
@@ -239,12 +253,13 @@ export class RobotScene {
       event.preventDefault();
       this.callbacks.transformMode(key === 'KeyW' || key === 'w' ? 'translate' : 'rotate');
     }
-  };
+  }
 
   center() {
     const center = new THREE.Vector3();
-    if (this.state) this.members.forEach(k => center.add(new THREE.Vector3().fromArray(this.state!.handles[k].position)));
-    return center.divideScalar(this.members.length);
+    const controls = controlSelection(this.members);
+    if (this.state) controls.forEach(k => center.add(new THREE.Vector3().fromArray(this.state!.handles[k].position)));
+    return center.divideScalar(controls.length);
   }
 
   focusSelection() {
@@ -264,27 +279,30 @@ export class RobotScene {
     this.selected = key;
     this.members = members;
     this.pins = pins;
+    const controls = controlSelection(members);
+    const activeControl = controlKey(members, key);
     Object.entries(this.markers).forEach(([k, mesh]) => {
-      mesh.visible = this.markerVisible && (isJointHandle(k) === (this.handleLayer === 'joints') && !isCombinedAxis(k) || members.includes(k));
+      mesh.visible = this.markerVisible && ((this.visibleHandles ? this.visibleHandles.includes(k) : isJointHandle(k) === (this.handleLayer === 'joints') && !isCombinedAxis(k)) || members.includes(k) || controls.includes(k));
       const mat = mesh.material as THREE.MeshBasicMaterial;
-      mat.color.set(members.includes(k) ? '#80f2c7' : pins.includes(k) ? '#f1bc65' : '#56bdec');
-      mat.opacity = members.includes(k) ? .64 : .28;
+      mat.color.set(members.includes(k) || controls.includes(k) ? '#80f2c7' : pins.includes(k) ? '#f1bc65' : '#56bdec');
+      mat.opacity = members.includes(k) || controls.includes(k) ? .64 : .28;
       this.labels[k]?.classList.toggle('chosen', members.includes(k));
       this.labels[k]?.classList.toggle('pinned', pins.includes(k));
     });
-    const hinge = this.transformMode === 'rotate' && members.length === 1 ? this.state?.hinges?.[key] : undefined;
-    const ankle = this.transformMode === 'rotate' && members.length === 1 && ANKLE_HANDLES.includes(key);
+    const hinge = this.transformMode === 'rotate' && controls.length === 1 ? this.state?.hinges?.[activeControl] : undefined;
+    const ankle = this.transformMode === 'rotate' && controls.length === 1 && ANKLE_HANDLES.includes(activeControl);
     this.gizmo.setSpace(hinge || ankle ? 'local' : this.space);
     this.gizmo.showX = this.gizmo.showY = !hinge;
     this.gizmo.showZ = !ankle;
     if (this.state && !this.gizmo.dragging) {
-      this.pivot.position.copy(hinge ? new THREE.Vector3().fromArray(hinge.position) : this.center());
-      if (ankle) this.pivot.quaternion.copy(ankleFrame(this.state, key));
+      const mirror = this.mirrorTranslation && this.transformMode === 'translate' && canMirrorSelection(controls);
+      this.pivot.position.copy(hinge ? new THREE.Vector3().fromArray(hinge.position) : mirror ? new THREE.Vector3().fromArray(this.state.handles[activeControl].position) : this.center());
+      if (ankle) this.pivot.quaternion.copy(ankleFrame(this.state, activeControl));
       else if (hinge) this.pivot.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3().fromArray(hinge.axis_world).normalize());
-      else this.pivot.quaternion.fromArray(this.state.handles[key].quaternion);
+      else this.pivot.quaternion.fromArray(this.state.handles[activeControl].quaternion);
     }
     const blocked = this.transformMode === 'rotate'
-      ? !canRotateSelection(members) || members.some(k => pins.includes(k) && (members.length > 1 || k.endsWith('_foot')))
+      ? !canRotateSelection(controls) || controls.some(k => pins.includes(k) && (controls.length > 1 || k.endsWith('_foot')))
       : members.some(k => pins.includes(k));
     if (this.editable && !blocked && this.markerVisible) this.gizmo.attach(this.pivot); else this.gizmo.detach();
     this.dirty = true;
@@ -342,6 +360,14 @@ export class RobotScene {
   }
   setHandleLayer(layer: 'body' | 'joints') {
     this.handleLayer = layer;
+    this.select(this.selected, this.pins, this.members);
+  }
+  setVisibleHandles(handles: string[]) {
+    this.visibleHandles = handles;
+    this.select(this.selected, this.pins, this.members);
+  }
+  setMirrorTranslation(enabled: boolean) {
+    this.mirrorTranslation = enabled;
     this.select(this.selected, this.pins, this.members);
   }
   setEditable(editable: boolean) { this.editable = editable; this.select(this.selected, this.pins, this.members); }
