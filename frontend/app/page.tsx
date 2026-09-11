@@ -451,8 +451,14 @@ export default function Editor() {
       <div className="pin-summary"><LockKeyhole size={14}/><span>발: 위치 + 방향<br/>그 외: 위치 고정</span></div>
       <div className="section-divider"/>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); const init = await api<{state: PoseState}>('init'); applyState(init.state); setPins(feet); setPoseDirty(true); invalidate(); })}><RotateCcw size={15}/> 기본 서기 자세</button>
-      <button className="wide demo-button" disabled={disabled} onClick={() => void run(async () => { await loadProject(await api<Project>('demo')); setMessage('서기 → 웅크리기 → 서기 예제를 불러왔습니다. 재생하거나 부위를 편집하세요.'); })}>웅크리기 예제 불러오기 <ChevronRight size={15}/></button>
-      <p className="hint">예제 불러오기는 현재 타임라인을 교체합니다. 필요한 작업은 먼저 저장하세요.</p>
+      <button className="wide" disabled={disabled} onClick={() => void run(async () => {
+        const init = await api<{ project: Project }>('init');
+        await loadProject(init.project);
+        applySelection(['pelvis'], 'pelvis');
+        setFiles([]); setSavedChoice('');
+        setMessage('새 모션을 만들었습니다. 기본 서기 자세의 키프레임 하나로 시작합니다.');
+      })}><Plus size={15}/> 새로운 모션 만들기</button>
+      <p className="hint">새 모션은 현재 타임라인을 기본 서기 자세 하나로 초기화합니다. 필요한 작업은 먼저 저장하세요.</p>
     </aside>
     <main className="viewport">
       <div ref={host} className="canvas-host"/>
