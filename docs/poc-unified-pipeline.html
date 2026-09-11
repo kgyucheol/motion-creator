@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="SLAM, 6D Pose, FSM, Kimodo·ARDY 모션 생성, GEAR-SONIC WBC를 연결한 휴머노이드 조작 PoC 통합 파이프라인 계획">
+  <title>휴머노이드 조작 PoC · 통합 파이프라인 계획</title>
+  <style>
+    :root {
+      --ink: #122030;
+      --muted: #5c6978;
+      --line: #d8e1e8;
+      --paper: #ffffff;
+      --canvas: #eaf0f4;
+      --navy: #102f4b;
+      --blue: #1f6f9f;
+      --cyan: #28a7b7;
+      --mint: #20a37a;
+      --mint-soft: #e4f5ef;
+      --blue-soft: #e8f2f8;
+      --amber: #c77a20;
+      --amber-soft: #fff2df;
+      --red: #bd4f4b;
+      --red-soft: #fbeceb;
+      --violet: #6f5aa8;
+      --violet-soft: #f0ecf8;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--canvas);
+      color: var(--ink);
+      font-family: "Pretendard", "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+      line-height: 1.45;
+      letter-spacing: -0.015em;
+    }
+    button, a { font: inherit; }
+    a { color: inherit; }
+
+    .toolbar {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      color: #dceaf2;
+      background: rgba(10, 28, 43, .94);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 3px 14px rgba(10, 28, 43, .18);
+    }
+    .toolbar a, .toolbar button {
+      border: 1px solid rgba(255,255,255,.22);
+      border-radius: 999px;
+      padding: 7px 12px;
+      color: inherit;
+      background: transparent;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .toolbar a:hover, .toolbar button:hover { background: rgba(255,255,255,.1); }
+    .toolbar .print { margin-left: 12px; border-color: #62d1b1; color: #9af0d5; }
+
+    main { padding: 22px 0 44px; }
+    .sheet {
+      position: relative;
+      width: min(1180px, calc(100vw - 32px));
+      min-height: min(794px, calc((100vw - 32px) * .707));
+      margin: 0 auto 24px;
+      padding: 34px 42px 32px;
+      overflow: hidden;
+      background: var(--paper);
+      box-shadow: 0 15px 38px rgba(24, 45, 61, .12);
+    }
+    .sheet::before {
+      content: "";
+      position: absolute;
+      inset: 0 0 auto;
+      height: 5px;
+      background: linear-gradient(90deg, var(--navy) 0 36%, var(--cyan) 36% 68%, var(--mint) 68%);
+    }
+    .page-no {
+      position: absolute;
+      right: 34px;
+      bottom: 19px;
+      color: #82909d;
+      font-size: 11px;
+      letter-spacing: .1em;
+    }
+    .eyebrow {
+      margin: 0 0 5px;
+      color: var(--blue);
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, p { margin-top: 0; }
+    h1 {
+      margin-bottom: 8px;
+      color: var(--navy);
+      font-size: clamp(27px, 3.1vw, 42px);
+      line-height: 1.14;
+      letter-spacing: -.045em;
+    }
+    h2 {
+      margin-bottom: 7px;
+      color: var(--navy);
+      font-size: 25px;
+      line-height: 1.2;
+      letter-spacing: -.035em;
+    }
+    h3 {
+      margin-bottom: 7px;
+      color: var(--navy);
+      font-size: 15px;
+      line-height: 1.25;
+    }
+    .subtitle {
+      max-width: 910px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .meta {
+      position: absolute;
+      right: 42px;
+      top: 39px;
+      color: #74818e;
+      font-size: 11px;
+      text-align: right;
+    }
+    .decision {
+      display: grid;
+      grid-template-columns: 8px 1fr auto;
+      align-items: center;
+      gap: 15px;
+      margin: 15px 0 20px;
+      padding: 13px 15px 13px 0;
+      border: 1px solid #c9e4db;
+      background: linear-gradient(90deg, #f2fbf7, #f8fcfb);
+    }
+    .decision::before { content: ""; align-self: stretch; background: var(--mint); }
+    .decision strong { color: #12684f; font-size: 16px; }
+    .decision span { color: var(--muted); font-size: 12px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      color: #315163;
+      background: #e9f0f4;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    .chip.now { color: #0f6b50; background: var(--mint-soft); }
+    .chip.next { color: #8a5718; background: var(--amber-soft); }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 13px;
+      margin: 12px 0 13px;
+    }
+    .stage {
+      position: relative;
+      min-height: 119px;
+      padding: 13px 11px 10px;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--stage-color, var(--blue));
+      background: #fbfdfe;
+    }
+    .stage:not(:last-child)::after {
+      content: "";
+      position: absolute;
+      z-index: 2;
+      top: 52px;
+      right: -14px;
+      width: 14px;
+      height: 2px;
+      background: #8aa1af;
+    }
+    .stage:not(:last-child)::before {
+      content: "";
+      position: absolute;
+      z-index: 3;
+      top: 48px;
+      right: -15px;
+      border: 5px solid transparent;
+      border-left-color: #8aa1af;
+    }
+    .stage .n {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--stage-color, var(--blue));
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .12em;
+    }
+    .stage strong { display: block; min-height: 38px; color: var(--navy); font-size: 14px; line-height: 1.25; }
+    .stage p { margin: 6px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
+    .stage.sensor { --stage-color: var(--blue); }
+    .stage.plan { --stage-color: var(--violet); }
+    .stage.motion { --stage-color: var(--amber); }
+    .stage.control { --stage-color: var(--mint); }
+
+    .feedback {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      align-items: center;
+      gap: 12px;
+      margin: 0 0 18px;
+      color: #426276;
+      font-size: 11px;
+    }
+    .feedback .line { height: 1px; background: repeating-linear-gradient(90deg, #85a0af 0 7px, transparent 7px 12px); }
+
+    .two-col { display: grid; grid-template-columns: 1.12fr .88fr; gap: 17px; }
+    .panel {
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+    .panel.soft { background: #f8fafb; }
+    .contracts {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 7px;
+      margin-top: 10px;
+    }
+    .contract {
+      min-height: 66px;
+      padding: 9px;
+      border-left: 3px solid var(--cyan);
+      background: var(--blue-soft);
+    }
+    .contract b { display: block; color: #185a7f; font-size: 11px; }
+    .contract span { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+    .authority {
+      display: grid;
+      grid-template-columns: 1fr 34px 1fr;
+      align-items: center;
+      gap: 8px;
+      margin-top: 9px;
+    }
+    .authority .owner { padding: 10px; background: var(--blue-soft); text-align: center; }
+    .authority .owner:last-child { background: var(--mint-soft); }
+    .authority b { display: block; font-size: 12px; }
+    .authority small { color: var(--muted); font-size: 10px; }
+    .authority .handoff { color: var(--amber); font-size: 18px; text-align: center; }
+    .warning {
+      margin-top: 9px;
+      padding: 8px 10px;
+      color: #8a4f13;
+      background: var(--amber-soft);
+      font-size: 10px;
+      line-height: 1.45;
+    }
+
+    .state-strip {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 13px;
+      margin: 17px 0 9px;
+    }
+    .state {
+      position: relative;
+      padding: 9px 7px;
+      color: #15465f;
+      background: var(--blue-soft);
+      font-size: 10px;
+      font-weight: 750;
+      text-align: center;
+    }
+    .state:nth-child(n+4) { color: #136047; background: var(--mint-soft); }
+    .state:not(:last-child)::after {
+      content: "›";
+      position: absolute;
+      right: -11px;
+      top: 5px;
+      color: #8096a5;
+      font-size: 20px;
+      font-weight: 400;
+    }
+    .state span { display: block; margin-top: 2px; color: var(--muted); font-size: 9px; font-weight: 500; }
+    .loop-note { margin-bottom: 14px; color: var(--muted); font-size: 10px; text-align: right; }
+
+    .swimlane {
+      display: grid;
+      grid-template-columns: 142px repeat(5, minmax(0, 1fr));
+      border-top: 1px solid var(--line);
+      border-left: 1px solid var(--line);
+    }
+    .cell {
+      min-height: 67px;
+      padding: 10px;
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      font-size: 10px;
+      line-height: 1.4;
+    }
+    .cell.head { min-height: 35px; color: #fff; background: var(--navy); font-size: 10px; font-weight: 750; }
+    .cell.lane-title { background: #f2f5f7; }
+    .cell.lane-title b { display: block; color: var(--navy); font-size: 12px; }
+    .cell.lane-title span { color: var(--muted); }
+    .cell.shared { background: #f4fbf8; }
+    .cell strong { display: block; margin-bottom: 3px; color: var(--ink); font-size: 11px; }
+
+    .lower-grid { display: grid; grid-template-columns: 1.18fr .82fr; gap: 15px; margin-top: 15px; }
+    .comparison {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10px;
+    }
+    .comparison th, .comparison td { padding: 7px 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .comparison th { color: #4d5e6c; background: #f3f6f8; font-weight: 750; }
+    .comparison td:first-child { color: var(--navy); font-weight: 700; white-space: nowrap; }
+    .gates { display: grid; gap: 7px; }
+    .gate {
+      display: grid;
+      grid-template-columns: 62px 1fr;
+      gap: 9px;
+      align-items: start;
+      padding: 8px 9px;
+      border-left: 3px solid var(--mint);
+      background: #f5faf8;
+      font-size: 10px;
+    }
+    .gate b { color: #17654e; }
+    .gate span { color: var(--muted); }
+    .recovery {
+      margin-top: 9px;
+      padding: 8px 10px;
+      color: #8a3f3b;
+      background: var(--red-soft);
+      font-size: 10px;
+    }
+
+    .strategy-flow {
+      display: grid;
+      grid-template-columns: 1fr 28px 1fr 28px 1fr;
+      align-items: stretch;
+      margin: 16px 0;
+    }
+    .strategy-card { padding: 15px; border: 1px solid var(--line); background: #fff; }
+    .strategy-card.baseline { border-top: 5px solid var(--blue); }
+    .strategy-card.online { border-top: 5px solid var(--amber); }
+    .strategy-card.deploy { border-top: 5px solid var(--mint); }
+    .strategy-card .step { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .12em; }
+    .strategy-card h3 { margin-top: 5px; font-size: 17px; }
+    .strategy-card p { margin-bottom: 8px; color: var(--muted); font-size: 10px; }
+    .strategy-card ul { margin: 0; padding-left: 16px; font-size: 10px; }
+    .strategy-card li { margin: 3px 0; }
+    .strategy-flow .arrow { align-self: center; color: #7f94a2; font-size: 24px; text-align: center; }
+
+    .decision-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10px;
+    }
+    .decision-table th, .decision-table td { padding: 8px 9px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .decision-table th { color: #4e5f6d; background: #f3f6f8; }
+    .decision-table td:first-child { color: var(--navy); font-weight: 750; white-space: nowrap; }
+    .decision-table .recommended { background: #f3faf7; }
+
+    .roadmap {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 8px;
+      margin-top: 14px;
+    }
+    .milestone { position: relative; min-height: 94px; padding: 10px 10px 9px; background: #f6f8fa; }
+    .milestone::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 3px; background: var(--blue); }
+    .milestone:nth-child(n+3)::before { background: var(--amber); }
+    .milestone:nth-child(n+5)::before { background: var(--mint); }
+    .milestone b { display: block; color: var(--navy); font-size: 11px; }
+    .milestone span { display: block; margin: 4px 0; color: var(--muted); font-size: 9px; line-height: 1.35; }
+    .milestone em { color: #236a57; font-size: 9px; font-style: normal; font-weight: 700; }
+    .footnotes {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 12px;
+      color: #6e7b87;
+      font-size: 9px;
+      line-height: 1.45;
+    }
+    .footnotes p { margin: 0; }
+    .footnotes a { color: #376a88; text-decoration-thickness: 1px; }
+
+    @media (max-width: 820px) {
+      .sheet { width: calc(100vw - 20px); padding: 27px 22px 38px; overflow: visible; }
+      .meta { position: static; margin: -2px 0 12px; text-align: left; }
+      .decision { grid-template-columns: 7px 1fr; }
+      .decision .chip { display: none; }
+      .pipeline { grid-template-columns: 1fr 1fr; }
+      .stage:not(:last-child)::after, .stage:not(:last-child)::before { display: none; }
+      .two-col, .lower-grid { grid-template-columns: 1fr; }
+      .contracts { grid-template-columns: 1fr 1fr; }
+      .state-strip { grid-template-columns: 1fr 1fr 1fr; }
+      .swimlane { grid-template-columns: 118px repeat(5, 165px); overflow-x: auto; }
+      .strategy-flow { grid-template-columns: 1fr; gap: 8px; }
+      .strategy-flow .arrow { transform: rotate(90deg); }
+      .roadmap { grid-template-columns: 1fr 1fr; }
+      .toolbar { justify-content: flex-start; overflow-x: auto; }
+    }
+
+    @page { size: A4 landscape; margin: 0; }
+    @media print {
+      html, body { background: #fff; }
+      .toolbar { display: none; }
+      main { padding: 0; }
+      .sheet {
+        width: 297mm;
+        height: 210mm;
+        min-height: 210mm;
+        margin: 0;
+        padding: 9mm 11mm 8mm;
+        box-shadow: none;
+        break-after: page;
+        page-break-after: always;
+      }
+      .sheet:last-child { break-after: auto; page-break-after: auto; }
+      .meta { top: 10mm; right: 11mm; }
+      .page-no { right: 10mm; bottom: 5mm; }
+      h1 { font-size: 31px; }
+      h2 { font-size: 22px; }
+      .subtitle { margin-bottom: 12px; }
+      .pipeline { margin-top: 9px; }
+      .pipeline { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+      .stage { min-height: 102px; }
+      .stage:not(:last-child)::after, .stage:not(:last-child)::before { display: block; }
+      .two-col { grid-template-columns: 1.12fr .88fr; }
+      .contracts { grid-template-columns: repeat(5, 1fr); }
+      .state-strip { grid-template-columns: repeat(6, 1fr); }
+      .swimlane { grid-template-columns: 142px repeat(5, minmax(0, 1fr)); overflow: visible; }
+      .lower-grid { grid-template-columns: 1.18fr .82fr; }
+      .decision { margin: 10px 0 14px; padding-top: 9px; padding-bottom: 9px; }
+      .strategy-flow { margin: 11px 0; }
+      .strategy-flow { grid-template-columns: 1fr 28px 1fr 28px 1fr; gap: 0; }
+      .strategy-flow .arrow { transform: none; }
+      .strategy-card { padding: 11px; }
+      .roadmap { margin-top: 10px; }
+      .roadmap { grid-template-columns: repeat(5, 1fr); }
+      .milestone { min-height: 78px; padding-top: 8px; }
+      .footnotes { grid-template-columns: 1fr 1fr; }
+      a { text-decoration: none; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="toolbar" aria-label="보고서 페이지 이동">
+    <a href="#architecture">1 · 통합 구조</a>
+    <a href="#workflows">2 · PoC 워크플로우</a>
+    <a href="#roadmap">3 · 모션 전략·로드맵</a>
+    <button class="print" type="button" onclick="window.print()">인쇄 / PDF 저장</button>
+  </nav>
+
+  <main>
+    <section class="sheet" id="architecture" aria-labelledby="architecture-title">
+      <p class="eyebrow">Humanoid Manipulation PoC · Pipeline Plan</p>
+      <h1 id="architecture-title">하나의 파이프라인, 두 개의 PoC</h1>
+      <p class="subtitle">상자 팔레타이징과 라면용기 이송을 <strong>공통 인지–계획–모션–제어 계층</strong>으로 구현하고, 물체·파지·배치 파라미터만 시나리오별로 교체한다.</p>
+      <div class="meta">팀 공유안 · v0.1<br>2026.09.11</div>
+
+      <div class="decision">
+        <div>
+          <strong>권고안 · 공통 TaskSpec + 공통 FSM + 교체 가능한 Motion Provider</strong><br>
+          <span>Kimodo를 오프라인 기준선으로 먼저 검증하고, ARDY는 동일 인터페이스의 실시간 생성 후보로 평가</span>
+        </div>
+        <span class="chip now">제안 아키텍처</span>
+      </div>
+
+      <h3>End-to-end 폐루프 파이프라인</h3>
+      <div class="pipeline" role="img" aria-label="미션 입력에서 SLAM, 6D 물체 인지, 월드 상태, FSM, 모션 생성, GEAR-SONIC, 로봇 실행으로 이어지고 피드백되는 파이프라인">
+        <div class="stage plan"><span class="n">01 · MISSION</span><strong>Task Manager</strong><p>대상·목적지·반복 횟수<br>실패 복구 정책</p></div>
+        <div class="stage sensor"><span class="n">02 · LOCALIZE</span><strong>SLAM &amp;<br>Navigation</strong><p>map→base pose<br>경로·도착 상태</p></div>
+        <div class="stage sensor"><span class="n">03 · PERCEIVE</span><strong>6D Pose<br>Estimation</strong><p>물체 pose·크기<br>신뢰도·타임스탬프</p></div>
+        <div class="stage plan"><span class="n">04 · DECIDE</span><strong>World State<br>+ FSM</strong><p>조건·전이·재시도<br>Skill 조합</p></div>
+        <div class="stage motion"><span class="n">05 · GENERATE</span><strong>Motion<br>Provider</strong><p>Kimodo baseline<br>ARDY candidate</p></div>
+        <div class="stage control"><span class="n">06 · TRACK</span><strong>GEAR-SONIC<br>WBC</strong><p>G1 전신 참조 추적<br>50 Hz controller</p></div>
+        <div class="stage control"><span class="n">07 · EXECUTE</span><strong>Sim → Real<br>Robot</strong><p>접촉·토크·오차<br>성공/실패 보고</p></div>
+      </div>
+      <div class="feedback" aria-label="센서와 제어 결과가 월드 상태와 FSM으로 되먹임됨">
+        <span class="line"></span><span>센서·접촉·추적 오차를 World State로 피드백 → 재관측 / 재계획 / 안전 정지</span><span class="line"></span>
+      </div>
+
+      <div class="two-col">
+        <div class="panel soft">
+          <h3>계층 사이의 최소 데이터 계약</h3>
+          <div class="contracts">
+            <div class="contract"><b>RobotState</b><span>base pose, joint state, control owner</span></div>
+            <div class="contract"><b>ObjectHypothesis</b><span>6D pose, size, class, confidence</span></div>
+            <div class="contract"><b>TaskSpec</b><span>object, grasp, goal, tolerances</span></div>
+            <div class="contract"><b>MotionRef</b><span>time, root, 29-DoF, contacts</span></div>
+            <div class="contract"><b>ExecutionReport</b><span>stage, tracking, force, failure reason</span></div>
+          </div>
+        </div>
+        <div class="panel">
+          <h3>제어 명령권 전환은 하나의 이벤트로 관리</h3>
+          <div class="authority">
+            <div class="owner"><b>NAVI 소유</b><small>목표 앞 staging pose까지 이동</small></div>
+            <div class="handoff">→</div>
+            <div class="owner"><b>WBC 소유</b><small>정렬·파지·운반·배치</small></div>
+          </div>
+          <div class="warning"><strong>금지:</strong> NAVI와 WBC가 동시에 전신 모터 명령을 출력하지 않는다. 인수 조건은 정지·자세·위치 허용오차로 명시한다.</div>
+        </div>
+      </div>
+      <span class="page-no">01 / 03</span>
+    </section>
+
+    <section class="sheet" id="workflows" aria-labelledby="workflows-title">
+      <p class="eyebrow">Shared Task Model</p>
+      <h2 id="workflows-title">공통 FSM으로 PoC 차이를 흡수한다</h2>
+      <p class="subtitle">실행 순서는 공유하고, 물체 모델·파지 전략·이동 거리·배치 허용오차를 TaskSpec으로 주입한다. 각 상태는 완료 조건을 만족해야만 다음 상태로 넘어간다.</p>
+
+      <div class="state-strip" role="img" aria-label="관측, 접근, 파지 준비, 파지 및 들어올리기, 운반, 배치 및 검증의 공통 상태 머신">
+        <div class="state">PERCEIVE<span>재관측·대상 선택</span></div>
+        <div class="state">NAVIGATE<span>staging pose 도착</span></div>
+        <div class="state">ALIGN · PREGRASP<span>전신 정렬·웅크리기</span></div>
+        <div class="state">GRASP · LIFT<span>접촉 확인·들기</span></div>
+        <div class="state">CARRY / SHIFT<span>운반·짧은 횡이동</span></div>
+        <div class="state">PLACE · VERIFY<span>놓기·손 떼기·검증</span></div>
+      </div>
+      <div class="loop-note">성공 → 다음 대상 반복 · 불확실/실패 → 재관측 → 재계획 → 제한 횟수 초과 시 안전 정지</div>
+
+      <div class="swimlane" aria-label="두 PoC의 공통 단계별 차이">
+        <div class="cell head">시나리오</div><div class="cell head">인지·선정</div><div class="cell head">접근·정렬</div><div class="cell head">파지·들기</div><div class="cell head">이동</div><div class="cell head">배치·검증</div>
+        <div class="cell lane-title"><b>① 수동 팔레타이징</b><span>상자 / 컨베이어 → 팔레트</span></div>
+        <div class="cell shared"><strong>상자 pose·크기</strong>컨베이어 ROI에서 대상 선택, 속도 0 또는 동기화 확인</div>
+        <div class="cell"><strong>staging pose</strong>양손 측면 파지를 위한 거리·heading 정렬</div>
+        <div class="cell"><strong>양손 압착</strong>pregrasp → 접촉 → 정상력·미끄럼 확인 → lift</div>
+        <div class="cell"><strong>장거리 carry</strong>상자를 든 자세로 팔레트 앞까지 이동</div>
+        <div class="cell"><strong>팔레트 슬롯</strong>목표 중심 선정 → lower → release → 안착 확인</div>
+        <div class="cell lane-title"><b>② 라면용기</b><span>원통형 묶음 / 박스 → 좌·우</span></div>
+        <div class="cell shared"><strong>묶음 pose·외형</strong>큰 상자 내부 후보 분리, 축 방향·가로 폭 추정</div>
+        <div class="cell"><strong>짧은 접근</strong>박스 림·주변 용기 충돌을 피하며 손 pose 정렬</div>
+        <div class="cell"><strong>정밀 파지</strong>낮은 압착력부터 폐루프 상승, 변형·미끄럼 감시</div>
+        <div class="cell"><strong>짧은 shift</strong>좌/우 배치점으로 최소 이동, 자세 변화 최소화</div>
+        <div class="cell"><strong>지정 영역</strong>지지 확인 → 서서히 release → 잔류 변형 확인</div>
+      </div>
+
+      <div class="lower-grid">
+        <div class="panel">
+          <h3>TaskSpec으로 바뀌는 것</h3>
+          <table class="comparison">
+            <thead><tr><th>항목</th><th>상자 PoC</th><th>라면용기 PoC</th><th>공통 구현</th></tr></thead>
+            <tbody>
+              <tr><td>물체 모델</td><td>직육면체·질량 큼</td><td>원통형 묶음·변형 가능</td><td>pose + geometry + uncertainty</td></tr>
+              <tr><td>파지</td><td>양측면 대칭 압착</td><td>접근 방향·힘 정밀 제어</td><td>pregrasp / contact / lift skill</td></tr>
+              <tr><td>이동</td><td>NAVI 연계 장거리</td><td>좌·우 단거리</td><td>goal pose와 tolerance만 교체</td></tr>
+              <tr><td>주요 위험</td><td>하중·균형·낙하</td><td>충돌·변형·미끄럼</td><td>FSM guard와 recovery 공통화</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="panel soft">
+          <h3>상태 전이의 측정 게이트</h3>
+          <div class="gates">
+            <div class="gate"><b>인지</b><span>pose age·confidence·공분산이 허용 범위 내</span></div>
+            <div class="gate"><b>도착</b><span>root XY·heading·속도가 연속 시간 동안 안정</span></div>
+            <div class="gate"><b>파지</b><span>접촉력·방향·미끄럼 속도가 기준 충족</span></div>
+            <div class="gate"><b>운반</b><span>양손 접촉 유지 + 추적 오차·토크 제한 내</span></div>
+            <div class="gate"><b>배치</b><span>목표 pose·지지력·물체 속도 안정 후 release</span></div>
+          </div>
+          <div class="recovery"><strong>실패 코드는 데이터다:</strong> no_target / nav_timeout / ik_infeasible / grasp_slip / tracking_fail / unstable_place를 공통 로그로 남긴다.</div>
+        </div>
+      </div>
+      <span class="page-no">02 / 03</span>
+    </section>
+
+    <section class="sheet" id="roadmap" aria-labelledby="roadmap-title">
+      <p class="eyebrow">Motion Strategy &amp; Delivery Plan</p>
+      <h2 id="roadmap-title">Kimodo로 기준선을 만들고, ARDY는 같은 시험으로 승격한다</h2>
+      <p class="subtitle">모션 생성 성공과 물리 실행 성공을 분리한다. 후보 모션은 관절·접촉·충돌 검사를 거쳐야 하며, 최종 판단은 GEAR-SONIC 추적 시뮬레이션의 측정값으로 한다.</p>
+
+      <div class="strategy-flow">
+        <div class="strategy-card baseline">
+          <span class="step">STEP A · OFFLINE BASELINE</span>
+          <h3>Kimodo 후보 라이브러리</h3>
+          <p>텍스트 + root/end-effector/keyframe 제약으로 G1 모션을 여러 개 생성한다.</p>
+          <ul><li>웅크리기·pregrasp·lift·stand·place 기본 동작</li><li>제약 오차·발 미끄럼·관절 범위로 1차 선별</li><li>좋은 후보와 seed를 재현 가능한 asset으로 저장</li></ul>
+        </div>
+        <div class="arrow" aria-hidden="true">→</div>
+        <div class="strategy-card online">
+          <span class="step">STEP B · ONLINE CANDIDATE</span>
+          <h3>ARDY Shadow / A·B Test</h3>
+          <p>동일한 TaskSpec을 ARDY 조건으로 변환해 온라인 재계획 가능성을 비교한다.</p>
+          <ul><li>G1 25 FPS, waypoint·full-body·손/발 제약</li><li>GPU/TensorRT에서 generation time &lt; buffer 검증</li><li>정밀 파지·중간 피드백 대응 품질 비교</li></ul>
+        </div>
+        <div class="arrow" aria-hidden="true">→</div>
+        <div class="strategy-card deploy">
+          <span class="step">STEP C · PHYSICAL GATE</span>
+          <h3>GEAR-SONIC → Sim2Real</h3>
+          <p>공통 MotionRef 어댑터를 통과한 후보만 WBC로 추적하고 단계별 성공을 판정한다.</p>
+          <ul><li>MuJoCo 빠른 회귀 → Isaac 기반 상세 검증</li><li>접촉·낙하·토크·추적 오차를 자동 기록</li><li>속도·힘 제한을 둔 실기 1회 → 반복 데모</li></ul>
+        </div>
+      </div>
+
+      <table class="decision-table" aria-label="모션 생성 도구 선택 기준">
+        <thead><tr><th>도구</th><th>이번 PoC에서의 역할</th><th>강점</th><th>확인할 리스크 / 승격 조건</th><th>판정</th></tr></thead>
+        <tbody>
+          <tr class="recommended"><td>Kimodo</td><td>오프라인 모션 후보 생성·기준 라이브러리</td><td>G1 모델, 텍스트+다양한 기구학 제약, 다중 샘플, MuJoCo/ProtoMotions 연결</td><td>생성 시간과 물리 실행 가능성은 별도. 핵심 동작별 sim 성공 후보 확보</td><td><span class="chip now">먼저 적용</span></td></tr>
+          <tr><td>ARDY</td><td>온라인 보정·재계획 후보</td><td>Kimodo 계열 제어성을 지향하며 autoregressive 생성, streaming prompt·waypoint 지원</td><td>실시간성은 GPU/TRT 조건에서 측정. Task 제약 정밀도와 WBC 추적 성공률이 Kimodo 기준선 이상</td><td><span class="chip next">병행 평가</span></td></tr>
+          <tr><td>GEAR-SONIC</td><td>모션 생성기가 아닌 전신 추적 제어기</td><td>Unitree G1 reference tracking, 50 Hz, sim/real 배포 경로</td><td>joint/좌표계/시간축 adapter, 제어권 handoff, 접촉 하중 하의 안정성</td><td><span class="chip">고정 계층</span></td></tr>
+        </tbody>
+      </table>
+
+      <div class="roadmap" aria-label="PoC 구현 마일스톤">
+        <div class="milestone"><b>M0 · 계약 고정</b><span>TaskSpec · MotionRef · ExecutionReport · 좌표계</span><em>Gate: replay 재현</em></div>
+        <div class="milestone"><b>M1 · 상자 1 cycle</b><span>도착 자세부터 Kimodo → SONIC sim</span><em>Gate: pick–place 성공</em></div>
+        <div class="milestone"><b>M2 · NAVI 통합</b><span>staging pose·명령권 handoff·반복</span><em>Gate: 5회 연속</em></div>
+        <div class="milestone"><b>M3 · 라면 variant</b><span>원통 묶음 인지·저힘 파지·짧은 shift</span><em>Gate: 손상 없이 반복</em></div>
+        <div class="milestone"><b>M4 · ARDY 승격</b><span>동일 suite A/B·온라인 재계획·실기 제한시험</span><em>Gate: latency+성공률</em></div>
+      </div>
+
+      <div class="footnotes">
+        <p><strong>현재 확인:</strong> 로컬 ARDY→SONIC CPU 파이프라인은 실행되지만 기본 상자 후보는 접근 timeout/웅크리기 전도 이력이 있어 아직 팔레타이징 성공으로 볼 수 없다. SLAM/NAVI는 별도 진행 중.</p>
+        <p><strong>근거:</strong> <a href="box-task-cpu.md">현재 CPU 태스크 검증 기록</a> · <a href="https://github.com/nv-tlabs/kimodo">Kimodo</a> · <a href="https://github.com/nv-tlabs/ardy">ARDY</a> · <a href="https://github.com/NVlabs/GR00T-WholeBodyControl">GEAR-SONIC</a></p>
+      </div>
+      <span class="page-no">03 / 03</span>
+    </section>
+  </main>
+</body>
+</html>
