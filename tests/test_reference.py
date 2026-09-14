@@ -64,5 +64,5 @@ def test_native_failure_preserves_original_files(tmp_path, monkeypatch):
     def fail(path): raise ValueError('test unavailable environment')
     monkeypatch.setattr(protomotions_bridge, 'export_isolated', fail)
     r = Robot(); result = save_bundle(r, new_project(r), directory=tmp_path, protomotions=True)
-    assert len(result['files']) == 2 and result['warnings']
+    assert len(result['files']) == 4 and result['warnings']
     assert all((tmp_path/name).is_file() for name in result['files'])

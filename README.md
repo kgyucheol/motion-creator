@@ -58,9 +58,9 @@ CPU용 모델과 `.conda-policy` 환경은 설치되어 있습니다. 새 환경
 5. 자세가 만들어지면 **자세 추가**로 새 키프레임을 만들거나 **선택 프레임에 반영**으로 기존 프레임을 수정합니다. 드래그한 자세는 자동으로 기존 키프레임을 덮어쓰지 않습니다.
 6. 프레임을 선택해 이름, 이동 시간, 순서 등을 편집합니다. 이동 시간은 **이전 프레임에서 선택한 프레임에 도달하는 시간**입니다. 첫 프레임에는 이동 시간이 적용되지 않습니다. 멈춰 있는 구간은 같은 자세를 복제하고 시간을 지정합니다.
 7. 재생 버튼으로 모션을 계산·재생하고 하단 슬라이더로 시간을 탐색합니다. 프리뷰는 최대 30fps이며 출력은 15–120fps 중 선택할 수 있습니다.
-8. 출력 형식에서 Kimodo 호환 **NPZ**, **CSV** 또는 둘 다를 고른 뒤 **모션 저장**을 누릅니다. 선택한 모션 파일만 다운로드 목록에 표시됩니다. 편집 재개와 FPS 복원에 필요한 프로젝트·메타데이터 JSON은 내부 파일로 저장되며 다운로드 결과에는 포함되지 않습니다. 같은 이름도 타임스탬프와 식별자로 구분합니다.
+8. **모션 저장**을 누르면 실행별 전용 폴더를 만들고 Kimodo 호환 `motion.npz`, 36열 `motion.csv`, 의미론적 키프레임과 클립을 보존하는 `project.json`, `metadata.json`을 함께 저장합니다. 같은 프로젝트 이름도 타임스탬프와 식별자로 폴더를 구분합니다.
 
-상단 **열기**는 편집 프로젝트 JSON과 Kimodo G1 NPZ, 36열 G1 CSV를 지원합니다. NPZ/CSV에는 FPS가 포함되지 않으므로 현재 **출력 FPS** 선택값을 프레임 간격으로 사용하며, 각 모션 프레임을 타임라인 키프레임으로 불러옵니다.
+상단 **열기**는 편집 프로젝트 JSON과 Kimodo G1 NPZ, 36열 G1 CSV를 지원합니다. NPZ/CSV에는 FPS가 포함되지 않으므로 현재 **출력 FPS** 선택값을 원본 프레임 간격으로 사용합니다. 원본 자세 샘플은 하나의 **모션 클립** 키프레임 안에 모두 보존되며, 클립 이동 시간을 바꿔 전체 재생 속도를 조절할 수 있습니다.
 
 브라우저에는 편집 초안이 자동 저장됩니다. 파일 저장은 별도로 눌러야 합니다. 현재 편집 자세는 프로젝트의 `current_qpos`에 보존되지만 **NPZ는 타임라인에 등록한 키프레임만으로 생성**합니다. 자세 변경 후 반드시 키프레임에 반영하세요. **새로운 모션 만들기**는 기본 서기 자세의 키프레임 하나로 타임라인을 초기화하고 양발을 고정합니다. 프로젝트 이름과 자세 실행 취소 기록도 초기화하며, 디스크에 저장된 모션과 사용자 프리셋은 유지합니다. 필요한 작업은 먼저 저장하세요. **기본 서기 자세**는 타임라인을 유지한 채 현재 편집 자세만 되돌리는 버튼입니다.
 
@@ -98,7 +98,7 @@ CPU용 모델과 `.conda-policy` 환경은 설치되어 있습니다. 새 환경
 ```bash
 cd /home/kim/motioncreator
 PYTHONPATH="$PWD" OPENBLAS_NUM_THREADS=1 .conda/bin/python -m motioncreator.cli demo --depth 0.16 --fps 30
-PYTHONPATH="$PWD" OPENBLAS_NUM_THREADS=1 .conda/bin/python -m motioncreator.cli export motions/프로젝트.json --fps 50
+PYTHONPATH="$PWD" OPENBLAS_NUM_THREADS=1 .conda/bin/python -m motioncreator.cli export motions/프로젝트_시각/project.json --fps 50
 ```
 
 자동 생성기에서도 `Robot.solve()`로 목표 위치를 지정하고, 키프레임을 모아 `save_bundle()`을 호출할 수 있습니다. 모델이 허용하지 않는 웅크리기 깊이는 목표 오차로 반환됩니다. 이 예제는 양발 접촉을 유지하는 웅크리기 예제이며 박스 파지나 운반 로코모션까지 자동으로 생성하지는 않습니다.
@@ -117,7 +117,7 @@ PYTHONPATH="$PWD" OPENBLAS_NUM_THREADS=1 .conda/bin/python -m motioncreator.cli 
 | `root_positions` | N × 3 | 실제 pelvis 월드 궤적 |
 | `foot_contacts` | N × 4 | 왼 뒤꿈치·왼 발끝·오른 뒤꿈치·오른 발끝 접촉 플래그 |
 
-배열은 Kimodo와 같이 위치·회전은 `float32`, 접촉은 `bool`입니다. FPS, 원본 모델 해시, 편집 좌표계와 검증 정보는 같은 이름의 `.metadata.json`에 저장됩니다. 프로젝트 내부 로더는 Kimodo 배열을 MuJoCo `qpos`로 되돌려 기존 시뮬레이션 및 ProtoMotions 변환에 사용하며, 이전 Motion Creator NPZ도 계속 읽습니다.
+배열은 Kimodo와 같이 위치·회전은 `float32`, 접촉은 `bool`입니다. FPS, 원본 모델 해시, 편집 좌표계와 검증 정보는 같은 저장 폴더의 `metadata.json`에 저장됩니다. 프로젝트 내부 로더는 Kimodo 배열을 MuJoCo `qpos`로 되돌려 기존 시뮬레이션 및 ProtoMotions 변환에 사용하며, 이전 Motion Creator NPZ도 계속 읽습니다.
 
 같이 저장되는 CSV도 Kimodo G1과 동일한 MuJoCo 형식입니다. 각 행은 한 프레임이며 **루트 위치 xyz 3개 + 루트 quaternion wxyz 4개 + G1 관절각 29개**, 총 36열입니다. 좌표계는 **+X 전방, +Z 위**, 각도 단위는 rad입니다.
 

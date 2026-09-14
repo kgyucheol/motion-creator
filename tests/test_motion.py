@@ -4,11 +4,13 @@ from pathlib import Path
 import httpx
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from motioncreator.robot import Robot, FEET
 from motioncreator.demo import crouch_demo
 from motioncreator.motion import compile_motion, project_from_motion_bytes, save_bundle, validate_project
 from motioncreator.reference import load_reference
+from motioncreator import server
 from motioncreator.server import app
 
 
@@ -78,8 +80,8 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
     project['name'] = '../../outside/한글 모션'
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
     for filename in bundle['files']:
-        assert (tmp_path / filename).parent == tmp_path
-    assert [Path(name).suffix for name in bundle['files']] == ['.npz', '.csv']
+        assert (tmp_path / filename).parent.parent == tmp_path
+    assert [Path(name).name for name in bundle['files']] == ['motion.npz', 'motion.csv', 'project.json', 'metadata.json']
     editable = json.loads((tmp_path / bundle['project_file']).read_text())
     validate_project(robot, editable)
     with np.load(tmp_path / bundle['npz_file'], allow_pickle=False) as data:
@@ -102,15 +104,6 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
     assert data['root_quat_wxyz'].shape == (61, 4)
     assert np.allclose(np.linalg.norm(data['root_quat_wxyz'], axis=1), 1)
 
-    csv_only = save_bundle(robot, project, fps=15, directory=tmp_path, output_formats=['csv'])
-    assert len(csv_only['files']) == 1 and csv_only['csv_file'].endswith('.csv')
-    assert csv_only['npz_file'] is None
-    with pytest.raises(ValueError, match='Output format'):
-        save_bundle(robot, project, fps=15, directory=tmp_path, output_formats=[])
-    with pytest.raises(ValueError, match='requires NPZ'):
-        save_bundle(robot, project, fps=15, directory=tmp_path, output_formats=['csv'], protomotions=True)
-
-
 def test_import_kimodo_npz_and_g1_csv_as_editable_keyframes(robot, tmp_path):
     source = crouch_demo(robot)
     bundle = save_bundle(robot, source, fps=15, directory=tmp_path)
@@ -118,13 +111,27 @@ def test_import_kimodo_npz_and_g1_csv_as_editable_keyframes(robot, tmp_path):
 
     for key, filename in (('npz_file', 'kimodo_walk.npz'), ('csv_file', 'kimodo_walk.csv')):
         imported = project_from_motion_bytes(robot, (tmp_path / bundle[key]).read_bytes(), filename, fps=15)
-        actual = np.asarray([frame['qpos'] for frame in imported['keyframes']])
+        clip = imported['keyframes'][0]
+        actual = np.asarray(clip['samples'])
         assert imported['name'] == 'kimodo_walk'
-        assert len(imported['keyframes']) == len(expected)
-        assert all(frame['pins'] == [] and frame['duration'] == pytest.approx(1 / 15)
-                   for frame in imported['keyframes'])
+        assert len(imported['keyframes']) == 1
+        assert clip['pins'] == []
+        assert clip['duration'] == pytest.approx((len(expected) - 1) / 15)
         assert np.allclose(actual, expected, atol=2e-6)
         assert imported['current_qpos'] == imported['keyframes'][0]['qpos']
+        recompiled = compile_motion(robot, imported, fps=15)
+        assert np.allclose(recompiled['qpos'], expected, atol=2e-6)
+        assert np.allclose(np.diff(recompiled['time']), 1 / 15)
+
+    resampled = compile_motion(robot, imported, fps=30)
+    assert resampled['qpos'].shape == (121, 36)
+    assert np.allclose(resampled['qpos'][[0, -1]], expected[[0, -1]], atol=2e-6)
+
+    saved = save_bundle(robot, imported, fps=15, directory=tmp_path)
+    reopened = json.loads((tmp_path / saved['project_file']).read_text())
+    validate_project(robot, reopened)
+    assert len(reopened['keyframes']) == 1
+    assert len(reopened['keyframes'][0]['samples']) == len(expected)
 
     with pytest.raises(ValueError, match='36 qpos'):
         project_from_motion_bytes(robot, b'1,2,3\n', 'invalid.csv', fps=30)
@@ -144,6 +151,21 @@ def test_import_motion_api_accepts_csv(robot):
     assert imported['name'] == 'single'
     assert len(imported['keyframes']) == 1
     assert imported['keyframes'][0]['duration'] == pytest.approx(1 / 30)
+    assert len(imported['keyframes'][0]['samples']) == 1
+
+
+def test_saved_projects_support_bundle_folders(tmp_path, monkeypatch):
+    bundle = tmp_path / 'motions' / 'walk_001'
+    bundle.mkdir(parents=True)
+    project = bundle / 'project.json'
+    project.write_text('{}')
+    monkeypatch.setattr(server, 'ROOT', tmp_path)
+
+    assert server.saved() == ['walk_001/project.json']
+    response = server.download('walk_001/project.json')
+    assert Path(response.path) == project
+    with pytest.raises(HTTPException):
+        server.download('../project.json')
 
 
 def test_invalid_projects_and_pin_conflicts(robot):

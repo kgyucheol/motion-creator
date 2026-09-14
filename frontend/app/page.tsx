@@ -7,7 +7,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
 
-type Keyframe = { name: string; duration: number; qpos: number[]; pins: string[] };
+type Keyframe = { name: string; duration: number; qpos: number[]; pins: string[]; samples?: number[][] };
 type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type Preview = { time: number[]; states: PoseState[]; max_pin_error_mm: number };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
@@ -26,6 +26,7 @@ async function api<T>(path: string, body?: unknown, method = body === undefined 
   }
   return response.json();
 }
+const fileApiPath = (name: string) => name.split('/').map(encodeURIComponent).join('/');
 
 export default function Editor() {
   const [taskOpen, setTaskOpen] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('task'));
@@ -67,8 +68,6 @@ export default function Editor() {
   const [sample, setSample] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [fps, setFps] = useState(30);
-  const [exportNpz, setExportNpz] = useState(true);
-  const [exportCsv, setExportCsv] = useState(true);
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
   const [box, setBox] = useState({ position: [.4, 0, .30], size: [.3, .32, .24], visible: true });
@@ -399,7 +398,6 @@ export default function Editor() {
     void run(async () => {
       const result = await api<{ files: string[]; directory: string; warnings?: string[]; metadata: { samples: number; validation: { max_pin_error_mm: number } } }>('save', {
         project: { ...project, current_qpos: state.qpos, pins, box }, fps, protomotions: exportProto,
-        output_formats: [...(exportNpz ? ['npz'] : []), ...(exportCsv ? ['csv'] : [])],
       });
       setFiles(result.files); setSaved(await api<string[]>('saved'));
       setMessage(`${result.metadata.samples}프레임 저장 완료 · ${result.directory} · 고정 오차 최대 ${result.metadata.validation.max_pin_error_mm.toFixed(2)} mm`);
@@ -426,7 +424,8 @@ export default function Editor() {
   const hingeIndex = hinge ? project?.joint_names.indexOf(hinge.joint_name) ?? -1 : -1;
   const jointDirty = !!state && jointDraft.some((v, i) => Math.abs(v - state.qpos[7+i]*180/Math.PI) > .001);
   const activeFrame = project?.keyframes[frameIndex];
-  const duration = project?.keyframes.slice(1).reduce((sum, f) => sum + f.duration, 0) ?? 0;
+  const motionClip = project?.keyframes.length === 1 ? project.keyframes[0].samples : undefined;
+  const duration = motionClip ? project!.keyframes[0].duration : project?.keyframes.slice(1).reduce((sum, f) => sum + f.duration, 0) ?? 0;
   const selectedGroup = allNodes().find(node => node.children && nodeMembers(node).length === members.length && nodeMembers(node).every(key => members.includes(key)));
 
   return <div className="editor">
@@ -434,7 +433,7 @@ export default function Editor() {
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><b>G1 / 29 DOF</b></div>
       <div className="project-title"><span className="status-dot"/>{project ? <input aria-label="프로젝트 이름" value={project.name} onChange={e => setProject({ ...project, name: e.target.value })}/> : '연결 중'}</div>
-      <div className="top-actions"><button disabled={disabled} onClick={() => { setPlaying(false); scene.current?.setEditable(false); setTaskOpen(true); }}><Box size={16}/>상자 태스크</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled || (!exportNpz && !exportCsv)} onClick={exportProject}><Save size={16}/> 모션 저장</button></div>
+      <div className="top-actions"><button disabled={disabled} onClick={() => { setPlaying(false); scene.current?.setEditable(false); setTaskOpen(true); }}><Box size={16}/>상자 태스크</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled} onClick={exportProject}><Save size={16}/> 모션 저장</button></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">
@@ -545,17 +544,18 @@ export default function Editor() {
       <div className="section-divider"/>
       <div className="panel-heading"><span>OUTPUT FORMAT</span><small>Kimodo G1</small></div>
       <div className="segmented">
-        <button type="button" aria-pressed={exportNpz} className={exportNpz ? 'chosen' : ''} disabled={disabled} onClick={() => { setExportNpz(value => { if (value) setExportProto(false); return !value; }); }}>NPZ</button>
-        <button type="button" aria-pressed={exportCsv} className={exportCsv ? 'chosen' : ''} disabled={disabled} onClick={() => setExportCsv(value => !value)}>CSV</button>
+        <button type="button" aria-pressed="true" className="chosen" disabled>NPZ</button>
+        <button type="button" aria-pressed="true" className="chosen" disabled>CSV</button>
+        <button type="button" aria-pressed="true" className="chosen" disabled>JSON</button>
       </div>
-      <p className="hint">하나 또는 둘 다 선택하세요. JSON은 다운로드 파일에 포함하지 않습니다.</p>
+      <p className="hint">저장할 때마다 전용 폴더에 NPZ, CSV, 편집용 JSON을 함께 저장합니다.</p>
       <div className="section-divider"/>
       <div className="panel-heading"><span>LOCAL FILES</span></div>
       <select aria-label="저장된 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">저장된 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>
-      <button className="wide" disabled={disabled || !savedChoice} onClick={() => void run(async () => loadProject(await api<Project>(`files/${encodeURIComponent(savedChoice)}`)))}>선택한 프로젝트 열기</button>
-      <label className="hint"><input type="checkbox" checked={exportProto} disabled={disabled || !exportNpz} onChange={e => setExportProto(e.target.checked)}/> 저장 시 ProtoMotions .motion / .pt 추가</label>
-      <p className="hint">NPZ를 선택했을 때만 추가 변환할 수 있습니다. 유지 자세는 같은 키프레임을 복제해 시간을 지정하세요.</p>
-      {files.map(name => <a className="download" key={name} href={`/api/files/${encodeURIComponent(name)}`} download><Download size={13}/>{name}</a>)}
+      <button className="wide" disabled={disabled || !savedChoice} onClick={() => void run(async () => loadProject(await api<Project>(`files/${fileApiPath(savedChoice)}`)))}>선택한 프로젝트 열기</button>
+      <label className="hint"><input type="checkbox" checked={exportProto} disabled={disabled} onChange={e => setExportProto(e.target.checked)}/> 저장 시 ProtoMotions .motion / .pt 추가</label>
+      <p className="hint">유지 자세는 같은 키프레임을 복제해 시간을 지정하세요.</p>
+      {files.map(name => <a className="download" key={name} href={`/api/files/${fileApiPath(name)}`} download><Download size={13}/>{name}</a>)}
       <details className="joint-editor"><summary>29개 관절각 정밀 조정 {jointDirty ? '· 변경 대기' : ''}</summary>
         <p className="hint">슬라이더나 숫자를 수정한 뒤 적용하세요. 발 등 고정 조건을 유지하며 IK를 풉니다. 달성하지 못한 각도는 오차로 표시합니다.</p>
         <button className="wide primary" disabled={disabled || !jointDirty} onClick={applyJointDraft}>변경 각도 적용</button>
@@ -564,10 +564,10 @@ export default function Editor() {
       </details>
     </aside>
     <section className="timeline">
-      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{project?.keyframes.length ?? 0} poses · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<button disabled={disabled || !activeFrame} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세를 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
+      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{motionClip ? `1 clip · ${motionClip.length} frames` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<button disabled={disabled || !activeFrame || !!motionClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세를 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || !!motionClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
       <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {duration.toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label></div>
-        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{i === 0 ? '시작 자세' : `${f.duration < .1 ? f.duration.toFixed(3) : f.duration.toFixed(1)}s 이동`} · {f.pins.length} 고정</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
-        <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>이동 시간 <input aria-label="키프레임 이동 시간" type="number" min={1/120} max="60" step=".001" disabled={disabled || frameIndex === 0} value={activeFrame.duration} onChange={e => editFrame(frameIndex, { duration: Math.max(1/120, Math.min(60, +e.target.value || 1/120)) })}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
+        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · {f.pins.length} 고정</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
+        <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>{motionClip ? '클립 재생 시간' : '이동 시간'} <input aria-label="키프레임 이동 시간" type="number" min={motionClip ? 1/120 : .1} max={motionClip ? 600 : 60} step=".01" disabled={disabled || (!motionClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = motionClip ? 1/120 : .1; const maximum = motionClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
       </div>
       <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) applyState(preview.states[i]); }}/>
     </section>

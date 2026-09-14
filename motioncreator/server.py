@@ -34,7 +34,6 @@ class ProjectInput(BaseModel):
     project: dict
     fps: int = Field(30, ge=1, le=120)
     protomotions: bool = False
-    output_formats: list[Literal['npz', 'csv']] = Field(default_factory=lambda: ['npz', 'csv'], min_length=1, max_length=2)
 
 
 class GroupSolveInput(PoseInput):
@@ -147,24 +146,27 @@ def preview(payload: ProjectInput):
 
 @app.post('/api/save')
 def save(payload: ProjectInput):
-    return checked(lambda: save_bundle(robot, payload.project, payload.fps, protomotions=payload.protomotions,
-                                       output_formats=payload.output_formats))
+    return checked(lambda: save_bundle(robot, payload.project, payload.fps, protomotions=payload.protomotions))
 
 
-@app.get('/api/files/{name}')
+@app.get('/api/files/{name:path}')
 def download(name: str):
-    if Path(name).name != name or Path(name).suffix not in ('.json', '.npz', '.csv', '.motion', '.pt'):
+    relative = Path(name)
+    if (relative.is_absolute() or '..' in relative.parts
+            or relative.suffix not in ('.json', '.npz', '.csv', '.motion', '.pt')):
         raise HTTPException(404)
-    path = ROOT / 'motions' / name
+    path = ROOT / 'motions' / relative
     if not path.is_file():
         raise HTTPException(404)
-    return FileResponse(path, filename=name)
+    return FileResponse(path, filename=path.name)
 
 
 @app.get('/api/saved')
 def saved():
-    return [p.name for p in sorted((ROOT / 'motions').glob('*.json'), reverse=True)
-            if not p.name.endswith(('.metadata.json', '.protomotions.json'))]
+    folder = ROOT / 'motions'
+    projects = [*folder.glob('*/project.json'),
+                *(path for path in folder.glob('*.json') if not path.name.endswith(('.metadata.json', '.protomotions.json')))]
+    return [str(path.relative_to(folder)) for path in sorted(projects, key=lambda path: path.stat().st_mtime, reverse=True)]
 
 
 @app.get('/api/demo')

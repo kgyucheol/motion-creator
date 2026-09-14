@@ -10,6 +10,8 @@ def _load_kimodo_reference(path, data):
     robot = Robot()
     qpos = kimodo_g1_to_qpos(robot, data)
     metadata_path = path.with_suffix('.metadata.json')
+    if not metadata_path.is_file() and path.name == 'motion.npz':
+        metadata_path = path.parent / 'metadata.json'
     if metadata_path.is_file():
         meta = json.loads(metadata_path.read_text(encoding='utf-8'))
     else:

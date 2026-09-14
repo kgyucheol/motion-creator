@@ -8,13 +8,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
 import mujoco
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 from .robot import Robot, ROOT, FEET, HANDLES, BASIC_ROTATABLE as ROTATABLE, quat_matrix, matrix_quat
 from .kimodo_format import KIMODO_KEYS, export_kimodo_g1, kimodo_g1_to_qpos
 
 FORMAT = 'motioncreator.g1.v1'
-MAX_KEYFRAMES = 3000
-MIN_DURATION = 1 / 120
+MAX_KEYFRAMES = 100
+MAX_MOTION_SAMPLES = 3000
 
 
 def validate_project(robot: Robot, project):
@@ -27,14 +27,29 @@ def validate_project(robot: Robot, project):
     frames = project.get('keyframes', [])
     if not 1 <= len(frames) <= MAX_KEYFRAMES:
         raise ValueError(f'A project needs 1–{MAX_KEYFRAMES} keyframes')
+    if any(frame.get('samples') is not None for frame in frames) and not (len(frames) == 1 and frames[0].get('samples') is not None):
+        raise ValueError('An imported motion clip must be the project\'s only keyframe')
     total = 0.
     for frame in frames:
         if not isinstance(frame.get('name'), str):
             raise ValueError('Keyframe name must be text')
         robot.validate_q(frame['qpos'])
         duration = float(frame.get('duration', 2.))
-        if not np.isfinite(duration) or not MIN_DURATION <= duration <= 60:
-            raise ValueError('Keyframe durations must be 1/120–60 seconds')
+        minimum_duration = 1 / 120 if frame.get('samples') is not None else .1
+        maximum_duration = 600 if frame.get('samples') is not None else 60
+        if not np.isfinite(duration) or not minimum_duration <= duration <= maximum_duration:
+            raise ValueError(f'Keyframe durations must be {minimum_duration:g}–{maximum_duration} seconds')
+        if frame.get('samples') is not None:
+            samples = np.asarray(frame['samples'], dtype=float)
+            if samples.ndim != 2 or samples.shape[1] != robot.model.nq:
+                raise ValueError(f'Motion clip samples must have shape [T, {robot.model.nq}]')
+            if not 1 <= len(samples) <= MAX_MOTION_SAMPLES:
+                raise ValueError(f'Motion clip must contain 1–{MAX_MOTION_SAMPLES} samples')
+            validated_samples = np.stack([robot.validate_q(sample) for sample in samples])
+            if not np.allclose(validated_samples[0], frame['qpos'], atol=1e-9, rtol=0):
+                raise ValueError('Motion clip qpos must match its first sample')
+            if frame.get('pins'):
+                raise ValueError('Motion clips cannot use pins until they are split into keyframes')
         total += duration
         if any(k not in HANDLES for k in frame.get('pins', [])):
             raise ValueError('Unknown pinned handle')
@@ -91,22 +106,54 @@ def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: 
     qpos = np.asarray(qpos, dtype=float)
     if qpos.ndim != 2 or qpos.shape[1] != robot.model.nq:
         raise ValueError(f'Motion must contain one or more rows of {robot.model.nq} qpos values')
-    if not 1 <= len(qpos) <= MAX_KEYFRAMES:
-        raise ValueError(f'Motion must contain 1–{MAX_KEYFRAMES} frames')
+    if not 1 <= len(qpos) <= MAX_MOTION_SAMPLES:
+        raise ValueError(f'Motion must contain 1–{MAX_MOTION_SAMPLES} frames')
     validated = np.stack([robot.validate_q(frame) for frame in qpos])
     for index in range(1, len(validated)):
         if np.dot(validated[index - 1, 3:7], validated[index, 3:7]) < 0:
             validated[index, 3:7] *= -1
 
     project = new_project(robot, Path(filename).stem or 'Imported motion')
-    duration = 1 / fps
-    project['keyframes'] = [
-        {'name': f'Frame {index + 1}', 'duration': duration, 'qpos': frame.tolist(), 'pins': []}
-        for index, frame in enumerate(validated)
-    ]
+    duration = max(1 / fps, (len(validated) - 1) / fps)
+    project['keyframes'] = [{'name': 'Imported motion clip', 'duration': duration,
+                             'qpos': validated[0].tolist(), 'pins': [], 'samples': validated.tolist()}]
     project['current_qpos'] = validated[0].tolist()
     project['pins'] = []
     return validate_project(robot, project)
+
+
+def motion_result(robot: Robot, qpos, times, contacts, fps, pin_errors=()):
+    qpos = np.asarray(qpos)
+    times = np.asarray(times)
+    qvel = np.zeros((len(qpos), robot.model.nv))
+    for index in range(len(qpos)):
+        lo, hi = max(0, index - 1), min(len(qpos) - 1, index + 1)
+        if hi > lo:
+            mujoco.mj_differentiatePos(robot.model, qvel[index], times[hi] - times[lo], qpos[lo], qpos[hi])
+    qacc = np.gradient(qvel, times, axis=0) if len(times) > 1 else np.zeros_like(qvel)
+    return {'time': times, 'qpos': qpos, 'qvel': qvel, 'qacc': qacc, 'contacts': np.asarray(contacts, dtype=bool),
+            'fps': fps, 'max_pin_error_mm': max(pin_errors, default=0.)}
+
+
+def compile_motion_clip(robot: Robot, frame, fps):
+    source = np.stack([robot.validate_q(sample) for sample in frame['samples']])
+    for index in range(1, len(source)):
+        if np.dot(source[index - 1, 3:7], source[index, 3:7]) < 0:
+            source[index, 3:7] *= -1
+    if len(source) == 1:
+        return motion_result(robot, source, [0.], np.zeros((1, len(FEET)), dtype=bool), fps)
+
+    count = max(1, round(float(frame['duration']) * fps))
+    times = np.arange(count + 1, dtype=float) / fps
+    source_progress = np.linspace(0., 1., len(source))
+    output_progress = np.arange(count + 1, dtype=float) / count
+    qpos = np.empty((count + 1, robot.model.nq))
+    for column in (*range(3), *range(7, robot.model.nq)):
+        qpos[:, column] = np.interp(output_progress, source_progress, source[:, column])
+    rotations = Rotation.from_quat(source[:, 3:7], scalar_first=True)
+    qpos[:, 3:7] = Slerp(source_progress, rotations)(output_progress).as_quat(scalar_first=True)
+    contacts = np.zeros((len(qpos), len(FEET)), dtype=bool)
+    return motion_result(robot, qpos, times, contacts, fps)
 
 
 def compile_motion(robot: Robot, project, fps=30):
@@ -114,6 +161,8 @@ def compile_motion(robot: Robot, project, fps=30):
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
     frames = project['keyframes']
+    if len(frames) == 1 and frames[0].get('samples') is not None:
+        return compile_motion_clip(robot, frames[0], fps)
     poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
     pin_errors = []
     elapsed = 0.
@@ -163,30 +212,19 @@ def compile_motion(robot: Robot, project, fps=30):
             times.append(elapsed + i / fps)
             contacts.append([k in pins for k in FEET])
         elapsed += duration
-    qpos = np.array(poses)
-    t = np.array(times)
-    qvel = np.zeros((len(qpos), robot.model.nv))
-    for i in range(len(qpos)):
-        lo, hi = max(0, i-1), min(len(qpos)-1, i+1)
-        if hi > lo:
-            mujoco.mj_differentiatePos(robot.model, qvel[i], t[hi]-t[lo], qpos[lo], qpos[hi])
-    qacc = np.gradient(qvel, t, axis=0) if len(t) > 1 else np.zeros_like(qvel)
-    return {'time': t, 'qpos': qpos, 'qvel': qvel, 'qacc': qacc, 'contacts': np.array(contacts, dtype=bool),
-            'fps': fps, 'max_pin_error_mm': max(pin_errors, default=0.)}
+    return motion_result(robot, poses, times, contacts, fps, pin_errors)
 
 
-def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=False, output_formats=None):
-    formats = tuple(dict.fromkeys(('npz', 'csv') if output_formats is None else output_formats))
-    if not formats or any(item not in ('npz', 'csv') for item in formats):
-        raise ValueError('Output format must include NPZ, CSV, or both')
-    if protomotions and 'npz' not in formats:
-        raise ValueError('ProtoMotions export requires NPZ output')
+def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=False):
+    """Save NPZ, CSV, editable project and metadata in one self-contained folder."""
     motion = compile_motion(robot, project, fps)
-    folder = Path(directory or ROOT / 'motions')
-    folder.mkdir(parents=True, exist_ok=True)
+    root_folder = Path(directory or ROOT / 'motions')
+    root_folder.mkdir(parents=True, exist_ok=True)
     name = re.sub(r'[^\w-]', '_', str(project.get('name', 'motion')), flags=re.UNICODE).strip('_')[:60] or 'motion'
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + '_' + uuid.uuid4().hex[:6]
     stem = f'{name}_{stamp}'
+    folder = root_folder / stem
+    folder.mkdir()
     floor = []
     for q in motion['qpos']:
         state = robot.state(q)
@@ -209,29 +247,28 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
                 'validation': {'kind': 'kinematic only', 'max_pin_error_mm': motion['max_pin_error_mm'],
                                'minimum_sole_height_mm': min(floor), 'max_joint_speed_rad_s': float(np.abs(motion['qvel'][:, 6:]).max()),
                                'self_collision_checked': False, 'dynamic_balance_checked': False},
-                'interpolation': 'quintic easing, shortest-path root SLERP, orientation-aware IK for shared pins; finite-difference velocities',
+                'interpolation': ('imported clip resampled with piecewise-linear position/joints and root SLERP'
+                                  if project['keyframes'][0].get('samples') is not None else
+                                  'quintic easing, shortest-path root SLERP, orientation-aware IK for shared pins; finite-difference velocities'),
                 'fps': fps, 'samples': len(motion['time'])}
-    npz_path = folder / (stem + '.npz')
-    csv_path = folder / (stem + '.csv')
-    json_path = folder / (stem + '.json')
-    metadata_path = folder / (stem + '.metadata.json')
-    exported = []
-    if 'npz' in formats:
-        np.savez_compressed(npz_path, **export_kimodo_g1(robot, motion['qpos'], fps))
-        exported.append(npz_path)
-    if 'csv' in formats:
-        np.savetxt(csv_path, motion['qpos'], delimiter=',')
-        exported.append(csv_path)
+    npz_path = folder / 'motion.npz'
+    csv_path = folder / 'motion.csv'
+    json_path = folder / 'project.json'
+    metadata_path = folder / 'metadata.json'
+    np.savez_compressed(npz_path, **export_kimodo_g1(robot, motion['qpos'], fps))
+    np.savetxt(csv_path, motion['qpos'], delimiter=',')
     json_path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding='utf-8')
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
-    result = {'files': [p.name for p in exported], 'directory': str(folder), 'metadata': metadata,
-              'project_file': json_path.name, 'metadata_file': metadata_path.name,
-              'npz_file': npz_path.name if 'npz' in formats else None,
-              'csv_file': csv_path.name if 'csv' in formats else None}
+    def relative(path):
+        return str(path.relative_to(root_folder))
+    exported = [npz_path, csv_path, json_path, metadata_path]
+    result = {'files': [relative(path) for path in exported], 'directory': str(folder), 'folder': stem,
+              'metadata': metadata, 'project_file': relative(json_path), 'metadata_file': relative(metadata_path),
+              'npz_file': relative(npz_path), 'csv_file': relative(csv_path)}
     if protomotions:
         from .protomotions_bridge import export_isolated
         try:
-            result['files'].extend(export_isolated(npz_path))
+            result['files'].extend(str(Path(stem) / name) for name in export_isolated(npz_path))
         except (ValueError, OSError) as exc:
             # Native export failure must not hide the successfully saved editable reference.
             result['warnings'] = [f'선택한 모션 형식 저장 완료. ProtoMotions 변환 실패: {exc}']
