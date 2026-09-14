@@ -158,17 +158,19 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
                 'interpolation': 'quintic easing, shortest-path root SLERP, orientation-aware IK for shared pins; finite-difference velocities',
                 'fps': fps, 'samples': len(motion['time'])}
     npz_path = folder / (stem + '.npz')
+    csv_path = folder / (stem + '.csv')
     json_path = folder / (stem + '.json')
     metadata_path = folder / (stem + '.metadata.json')
     np.savez_compressed(npz_path, **export_kimodo_g1(robot, motion['qpos'], fps))
+    np.savetxt(csv_path, motion['qpos'], delimiter=',')
     json_path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding='utf-8')
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
-    result = {'files': [p.name for p in (json_path, npz_path, metadata_path)], 'directory': str(folder), 'metadata': metadata}
+    result = {'files': [p.name for p in (json_path, npz_path, csv_path, metadata_path)], 'directory': str(folder), 'metadata': metadata}
     if protomotions:
         from .protomotions_bridge import export_isolated
         try:
             result['files'].extend(export_isolated(npz_path))
         except (ValueError, OSError) as exc:
             # Native export failure must not hide the successfully saved editable reference.
-            result['warnings'] = [f'JSON/NPZ 저장 완료. ProtoMotions 변환 실패: {exc}']
+            result['warnings'] = [f'JSON/NPZ/CSV 저장 완료. ProtoMotions 변환 실패: {exc}']
     return result

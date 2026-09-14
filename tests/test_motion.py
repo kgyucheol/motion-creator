@@ -87,6 +87,9 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
         assert data['foot_contacts'].shape == (61, 4)
         assert data['posed_joints'].dtype == np.float32
         assert data['foot_contacts'].dtype == np.bool_
+    csv = np.loadtxt(tmp_path / bundle['files'][2], delimiter=',')
+    assert csv.shape == (61, 36)
+    assert np.array_equal(csv, compile_motion(robot, project, fps=15)['qpos'])
     data, meta = load_reference(tmp_path / bundle['files'][1])
     assert meta['npz_format'] == 'kimodo.g1.34'
     assert np.allclose(data['qpos'], compile_motion(robot, project, fps=15)['qpos'], atol=2e-6)

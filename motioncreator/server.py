@@ -139,7 +139,7 @@ def save(payload: ProjectInput):
 
 @app.get('/api/files/{name}')
 def download(name: str):
-    if Path(name).name != name or Path(name).suffix not in ('.json', '.npz', '.motion', '.pt'):
+    if Path(name).name != name or Path(name).suffix not in ('.json', '.npz', '.csv', '.motion', '.pt'):
         raise HTTPException(404)
     path = ROOT / 'motions' / name
     if not path.is_file():
