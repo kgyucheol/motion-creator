@@ -19,7 +19,7 @@ ProtoMotions의 [G1 CSV 안내](https://github.com/NVlabs/ProtoMotions/blob/607c
 
 ## 적용한 변경
 
-기존 JSON 프로젝트 버전과 NPZ의 기존 필드를 유지합니다. 새 NPZ 메타데이터에 `reference_schema: motioncreator.reference.v2`를 기록하고 아래 필드를 추가했습니다.
+JSON 프로젝트 버전은 유지합니다. 편집기에서 새로 저장하는 NPZ는 Kimodo G1Skeleton34의 5개 배열(`posed_joints`, `global_rot_mats`, `local_rot_mats`, `root_positions`, `foot_contacts`)과 좌표계를 그대로 사용합니다. FPS, 모델 해시와 변환 정보는 같은 이름의 `.metadata.json`에 `reference_schema: motioncreator.reference.v2`로 기록합니다. 내부 로더는 이 배열을 아래 MuJoCo 참조 표현으로 복원하며, 이전 v1/v2 NPZ도 계속 읽습니다.
 
 | 필드 | 의미 |
 |---|---|
@@ -28,7 +28,7 @@ ProtoMotions의 [G1 CSV 안내](https://github.com/NVlabs/ProtoMotions/blob/607c
 | `body_lin_vel_world`, `body_ang_vel_world` | 각 링크 원점의 월드 기준 속도. 질량중심 속도가 아님 |
 | `body_parent_indices` | 저장된 `body_names` 순서 기준 부모 인덱스. 루트는 -1 |
 
-기존 `qvel[:, 3:6]`은 MuJoCo 자유 관절의 로컬 각속도라는 의미를 그대로 유지합니다. 링크 속도는 MuJoCo Jacobian과 일반화 속도로 계산합니다. 새 로더는 단위·축·quaternion·관절 이름·시간 간격·중복 필드 일치 여부를 검사하며, 기존 v1 NPZ도 읽습니다. `control_binding`은 아직 연결한 제어기가 없으므로 null입니다.
+복원된 `qvel[:, 3:6]`은 MuJoCo 자유 관절의 로컬 각속도입니다. 링크 속도는 MuJoCo Jacobian과 일반화 속도로 다시 계산합니다. 로더는 Kimodo 배열의 형상, 유한값, 회전 직교성, 로컬/전역 회전 일치 여부를 검사합니다. `control_binding`은 아직 연결한 제어기가 없으므로 null입니다.
 
 ProtoMotions 출력에는 다음 절차를 적용합니다.
 

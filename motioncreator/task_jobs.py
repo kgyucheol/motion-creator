@@ -91,6 +91,11 @@ def start_run(tid,kind,reference_run=None,reference_file=None,controller='sonic'
         if data['joint_names'].tolist()!=robot.names: raise ValueError('Reference joint order mismatch')
         import shutil
         shutil.copyfile(source,folder/'reference.npz')
+        source_metadata = source.with_suffix('.metadata.json')
+        if source_metadata.is_file():
+            shutil.copyfile(source_metadata, folder/'reference.metadata.json')
+        else:
+            atomic_json(folder/'reference.metadata.json', meta)
     request={'kind':kind,'plan':plan,'controller':controller}
     atomic_json(folder/'request.json',request)
     atomic_json(folder/'status.json',{'id':folder.name,'task_id':tid,'kind':kind,'status':'starting','progress':0.,'message':'CPU 작업 시작 중'})

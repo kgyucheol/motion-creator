@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from motioncreator.robot import Robot, FEET
 from motioncreator.motion import new_project, save_bundle
+from motioncreator.reference import load_reference
 from motioncreator.presets import GroupStore
 from motioncreator.server import app
 
@@ -68,7 +69,8 @@ def test_waist_ankle_groups_and_export(tmp_path):
     project['keyframes'].append({**project['keyframes'][0], 'duration': .2, 'name': 'Hold'})
     result = save_bundle(robot, project, fps=10, directory=tmp_path)
     with np.load(tmp_path/result['files'][1], allow_pickle=False) as data:
-        assert data['qpos'].shape == (3, 36)
-        assert len(data['joint_names']) == 29
-        assert set(keys) <= set(data['handle_names'])
-        assert data['handle_pos'].shape[1] == data['handle_quat_wxyz'].shape[1] == 45
+        assert data['posed_joints'].shape == (3, 34, 3)
+        assert data['foot_contacts'].shape == (3, 4)
+    reference, _ = load_reference(tmp_path/result['files'][1])
+    assert reference['qpos'].shape == (3, 36)
+    assert len(reference['joint_names']) == 29

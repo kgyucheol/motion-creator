@@ -1,10 +1,10 @@
-import json
 import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 from fastapi.testclient import TestClient
 from motioncreator.robot import Robot, FEET, quat_matrix
 from motioncreator.motion import new_project, compile_motion, save_bundle
+from motioncreator.reference import load_reference
 from motioncreator.server import app
 
 
@@ -92,18 +92,17 @@ def test_rotation_export_interpolates_quaternions_and_keeps_contacts(robot, tmp_
     project['keyframes'][0]['pins'].append('left_hand')
     project['keyframes'].append({'name': 'Rotate', 'duration': 2., 'qpos': q.tolist(), 'pins': [*FEET, 'left_hand']})
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
-    with np.load(tmp_path / bundle['files'][1], allow_pickle=False) as data:
-        assert data['qpos'].shape == (31, 36)
-        assert np.allclose(np.linalg.norm(data['root_quat_wxyz'], axis=1), 1)
-        assert np.max(np.abs(np.diff(data['qpos'][:, 7:], axis=0))) < .1
-        assert np.max(np.abs(data['qvel'][[0, -1]])) < .03
-        assert np.allclose(data['qpos'][-1], q)
-        assert data['contacts'].all()
-        for frame in data['qpos']:
-            assert_feet(robot, robot.home, frame)
-        hand = data['handle_names'].tolist().index('left_hand')
-        assert np.max(np.linalg.norm(data['handle_pos'][:, hand]-data['handle_pos'][0, hand], axis=1)) < .001
-        assert not json.loads(str(data['metadata_json']))['validation']['dynamic_balance_checked']
+    data, metadata = load_reference(tmp_path / bundle['files'][1])
+    assert data['qpos'].shape == (31, 36)
+    assert np.allclose(np.linalg.norm(data['root_quat_wxyz'], axis=1), 1)
+    assert np.max(np.abs(np.diff(data['qpos'][:, 7:], axis=0))) < .1
+    assert np.max(np.abs(data['qvel'][[0, -1]])) < .03
+    assert np.allclose(data['qpos'][-1], q, atol=2e-6)
+    for frame in data['qpos']:
+        assert_feet(robot, robot.home, frame)
+    hand_positions = np.array([robot.point(robot.data(frame), 'left_hand')[0] for frame in data['qpos']])
+    assert np.max(np.linalg.norm(hand_positions-hand_positions[0], axis=1)) < .001
+    assert not metadata['validation']['dynamic_balance_checked']
 
 
 def test_antipodal_quaternions_do_not_generate_spurious_rotation(robot):

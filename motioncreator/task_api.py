@@ -1,6 +1,5 @@
 from pathlib import Path
 import json
-import numpy as np
 from fastapi import APIRouter,HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel,ConfigDict
@@ -8,6 +7,7 @@ from typing import Literal
 from .tasks import TaskSpec,plan_task
 from . import task_jobs as jobs
 from .robot import Robot
+from .reference import load_reference
 
 router=APIRouter(prefix='/api/tasks')
 class SaveInput(BaseModel):
@@ -67,9 +67,9 @@ def replay(tid:str,rid:str):
         if (folder/'replay.json').exists():
             frames=json.loads((folder/'replay.json').read_text())
         else:
-            with np.load(folder/'reference.npz',allow_pickle=False) as data:
-                # 12.5 FPS preview keeps browser memory bounded; full-rate NPZ is retained.
-                frames=[{'time':float(t),'qpos':q.tolist()} for t,q in zip(data['time'][::2],data['qpos'][::2])]
+            data,_=load_reference(folder/'reference.npz')
+            # 12.5 FPS preview keeps browser memory bounded; full-rate NPZ is retained.
+            frames=[{'time':float(t),'qpos':q.tolist()} for t,q in zip(data['time'][::2],data['qpos'][::2])]
         for frame in frames: frame['state']=robot.state(frame.pop('qpos'))
         return {'frames':frames,'plan':request['plan'],'physics':(folder/'replay.json').exists()}
     return checked(work)

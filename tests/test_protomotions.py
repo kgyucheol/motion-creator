@@ -9,6 +9,7 @@ from scipy.spatial.transform import Rotation
 from motioncreator.protomotions_bridge import convert_reference, UPSTREAM
 from motioncreator.robot import Robot
 from motioncreator.motion import save_bundle, new_project
+from motioncreator.reference import load_reference
 
 torch = pytest.importorskip('torch', reason='Run scripts/test-protomotions.sh in the separate conversion environment')
 sys.path.insert(0, str(UPSTREAM))
@@ -31,7 +32,7 @@ def test_native_fk_motionlib_and_deployment_resampling(source):
     result = convert_reference(source)
     report = result['report']; path = source.with_suffix('.motion')
     state = torch.load(path, weights_only=False)
-    data = np.load(source, allow_pickle=False)
+    data, _ = load_reference(source)
     assert state['rigid_body_rot'].shape[2] == 4
     assert 'left_rubber_hand' in report['body_names'] and 'head' in report['body_names']
     assert np.allclose(state['rigid_body_pos'][:,0], data['root_pos'], atol=1e-6)
@@ -75,7 +76,7 @@ def test_native_fk_motionlib_and_deployment_resampling(source):
 
 
 def test_name_reordering_and_authored_contacts(source, tmp_path):
-    data=dict(np.load(source, allow_pickle=False)); reverse=np.arange(28,-1,-1)
+    data,_=load_reference(source); reverse=np.arange(28,-1,-1)
     data['joint_names']=data['joint_names'][reverse]
     data['dof_pos']=data['dof_pos'][:,reverse]
     data['qpos'][:,7:]=data['dof_pos']
@@ -92,7 +93,7 @@ def test_name_reordering_and_authored_contacts(source, tmp_path):
 def test_single_frame_and_wrong_model_are_rejected(source, tmp_path):
     r=Robot(); b=save_bundle(r,new_project(r),directory=tmp_path)
     with pytest.raises(ValueError, match='2프레임'): convert_reference(tmp_path/b['files'][1])
-    d=dict(np.load(source,allow_pickle=False)); meta=json.loads(str(d['metadata_json']))
+    d,_=load_reference(source); meta=json.loads(str(d['metadata_json']))
     meta['model_sha256']='unknown'; d['metadata_json']=np.array(json.dumps(meta))
     invalid=tmp_path/'invalid.npz'; np.savez(invalid,**d)
     with pytest.raises(ValueError, match='Source G1 model'): convert_reference(invalid)
@@ -101,7 +102,7 @@ def test_single_frame_and_wrong_model_are_rejected(source, tmp_path):
 def test_previous_known_model_fingerprint_still_loads(source,tmp_path):
     from motioncreator.protomotions_bridge import PROFILE_PATH
     profile=json.loads(PROFILE_PATH.read_text())
-    data=dict(np.load(source,allow_pickle=False)); meta=json.loads(str(data['metadata_json']))
+    data,_=load_reference(source); meta=json.loads(str(data['metadata_json']))
     meta['model_sha256']=profile['legacy_source_mjcf_sha256'][0]
     data['metadata_json']=np.array(json.dumps(meta)); legacy=tmp_path/'legacy.npz';np.savez(legacy,**data)
     converted=convert_reference(legacy)

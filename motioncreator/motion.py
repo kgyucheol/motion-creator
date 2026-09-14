@@ -8,6 +8,7 @@ import numpy as np
 import mujoco
 from scipy.spatial.transform import Rotation
 from .robot import Robot, ROOT, FEET, HANDLES, BASIC_ROTATABLE as ROTATABLE, quat_matrix, matrix_quat
+from .kimodo_format import export_kimodo_g1
 
 FORMAT = 'motioncreator.g1.v1'
 
@@ -132,28 +133,14 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     name = re.sub(r'[^\w-]', '_', str(project.get('name', 'motion')), flags=re.UNICODE).strip('_')[:60] or 'motion'
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + '_' + uuid.uuid4().hex[:6]
     stem = f'{name}_{stamp}'
-    handle_pos, handle_quat, body_pos, body_quat, com, floor = [], [], [], [], [], []
-    body_vel, body_ang_vel = [], []
-    jp, jr = np.zeros((3, robot.model.nv)), np.zeros((3, robot.model.nv))
-    for q, velocity in zip(motion['qpos'], motion['qvel']):
-        d = robot.data(q)
+    floor = []
+    for q in motion['qpos']:
         state = robot.state(q)
-        handle_pos.append([state['handles'][k]['position'] for k in HANDLES])
-        # Explicit wxyz conversion for all exported quaternions.
-        handle_quat.append([[h['quaternion'][3], *h['quaternion'][:3]] for h in state['handles'].values()])
-        body_pos.append(d.xpos[1:].copy())
-        body_quat.append(d.xquat[1:].copy())
-        linear, angular = [], []
-        for body in range(1, robot.model.nbody):
-            mujoco.mj_jacBody(robot.model, d, jp, jr, body)
-            linear.append(jp @ velocity)
-            angular.append(jr @ velocity)
-        body_vel.append(linear)
-        body_ang_vel.append(angular)
-        com.append(state['com'])
         floor.append(state['floor_min_mm'])
     metadata = {'format': FORMAT, 'model_sha256': robot.fingerprint, 'joint_names': robot.names,
                 'reference_schema': 'motioncreator.reference.v2',
+                'npz_format': 'kimodo.g1.34',
+                'npz_coordinate_system': 'right-handed, +Z forward, +Y up',
                 'body_pose_frame': 'world; body frame origins, not centers of mass',
                 'body_velocity_frame': 'world; body frame origins, not centers of mass',
                 'joint_position_semantics': 'absolute hinge angles in radians; not policy actions',
@@ -163,7 +150,8 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
                 'quaternion_order': 'wxyz', 'coordinate_system': project['coordinate_system'], 'units': project['units'],
                 'root_angular_velocity_frame': 'local body frame (MuJoCo free joint)',
                 'root_linear_velocity_frame': 'world', 'contact_order': list(FEET),
-                'contact_semantics': 'authored support flags, not measured contact forces',
+                'npz_foot_contact_order': ['left heel', 'left toe', 'right heel', 'right toe'],
+                'contact_semantics': 'Kimodo geometric heuristic: speed < 0.15 m/s and height < 0.10 m; not measured contact forces',
                 'validation': {'kind': 'kinematic only', 'max_pin_error_mm': motion['max_pin_error_mm'],
                                'minimum_sole_height_mm': min(floor), 'max_joint_speed_rad_s': float(np.abs(motion['qvel'][:, 6:]).max()),
                                'self_collision_checked': False, 'dynamic_balance_checked': False},
@@ -172,18 +160,7 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     npz_path = folder / (stem + '.npz')
     json_path = folder / (stem + '.json')
     metadata_path = folder / (stem + '.metadata.json')
-    np.savez_compressed(npz_path, time=motion['time'], qpos=motion['qpos'], qvel=motion['qvel'], qacc=motion['qacc'],
-                        fps=np.array(fps),
-                        root_pos=motion['qpos'][:, :3], root_quat_wxyz=motion['qpos'][:, 3:7],
-                        root_lin_vel_world=motion['qvel'][:, :3], root_ang_vel_world=np.array(body_ang_vel)[:, 0],
-                        dof_pos=motion['qpos'][:, 7:], dof_vel=motion['qvel'][:, 6:],
-                        joint_names=np.array(robot.names), contacts=motion['contacts'],
-                        handle_names=np.array(list(HANDLES)), handle_pos=np.array(handle_pos), handle_quat_wxyz=np.array(handle_quat),
-                        body_names=np.array([robot.model.body(i).name for i in range(1, robot.model.nbody)]),
-                        body_pos=np.array(body_pos), body_quat_wxyz=np.array(body_quat),
-                        body_lin_vel_world=np.array(body_vel), body_ang_vel_world=np.array(body_ang_vel),
-                        body_parent_indices=robot.model.body_parentid[1:]-1, com=np.array(com),
-                        metadata_json=np.array(json.dumps(metadata, ensure_ascii=False)))
+    np.savez_compressed(npz_path, **export_kimodo_g1(robot, motion['qpos'], fps))
     json_path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding='utf-8')
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
     result = {'files': [p.name for p in (json_path, npz_path, metadata_path)], 'directory': str(folder), 'metadata': metadata}

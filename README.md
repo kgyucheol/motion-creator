@@ -103,36 +103,21 @@ PYTHONPATH="$PWD" OPENBLAS_NUM_THREADS=1 .conda/bin/python -m motioncreator.cli 
 
 ## 출력 형식
 
-**ProtoMotions 연결:** 기본 JSON·NPZ는 유지합니다. 저장 영역에서 **저장 시 ProtoMotions .motion / .pt 추가**를 선택하면 공식 G1 모델로 변환한 파일과 변환 보고서를 함께 저장합니다. 변환용 독립 Miniconda 환경도 준비했습니다. [사용 방법과 sim2sim 규약](docs/protomotions-integration.md)을 참고하세요. BVH를 거치지 않고 29개 관절을 이름으로 대응하고 대상 모델의 FK를 다시 계산합니다.
+**ProtoMotions 연결:** 편집 JSON과 Kimodo 호환 NPZ를 유지합니다. 저장 영역에서 **저장 시 ProtoMotions .motion / .pt 추가**를 선택하면 공식 G1 모델로 변환한 파일과 변환 보고서를 함께 저장합니다. 변환용 독립 Miniconda 환경도 준비했습니다. [사용 방법과 sim2sim 규약](docs/protomotions-integration.md)을 참고하세요. BVH를 거치지 않고 29개 관절을 이름으로 대응하고 대상 모델의 FK를 다시 계산합니다.
 
-프로젝트 형식 식별자는 `motioncreator.g1.v1`입니다. 좌표계는 **오른손 좌표계, +X 전방, +Y 왼쪽, +Z 위**, 단위는 **m / rad / s**입니다. NPZ는 `numpy.load(path, allow_pickle=False)`로 읽을 수 있습니다.
+프로젝트 형식 식별자는 `motioncreator.g1.v1`입니다. 편집 좌표계는 **오른손 좌표계, +X 전방, +Y 왼쪽, +Z 위**, 단위는 **m / rad / s**입니다. NPZ는 Kimodo G1과 동일하게 `posed_joints`, `global_rot_mats`, `local_rot_mats`, `root_positions`, `foot_contacts`를 저장하며, Kimodo 좌표계인 **+Z 전방, +Y 위**를 사용합니다. `numpy.load(path, allow_pickle=False)`로 읽을 수 있습니다.
 
 | 필드 | 형상 | 의미 |
 |---|---|---|
-| `time` | N | 시작부터의 시간, 초 |
-| `qpos` | N × 36 | 루트 xyz, 루트 quaternion wxyz, 29개 관절각 |
-| `qvel` | N × 35 | MuJoCo 일반화 속도: 루트 선속도 3, 각속도 3, 관절속도 29 |
-| `qacc` | N × 35 | 샘플 속도의 유한차분 가속도 |
-| `root_pos` | N × 3 | 루트의 월드 위치 |
-| `root_quat_wxyz` | N × 4 | 루트의 월드 방향 |
-| `fps` | scalar | 참조 샘플링 주파수. 제어기 주기와 별개 |
-| `root_lin_vel_world`, `root_ang_vel_world` | N × 3 | 월드 기준 루트 선속도·각속도 |
-| `body_lin_vel_world`, `body_ang_vel_world` | N × B × 3 | 월드 기준 링크 원점의 선속도·각속도 |
-| `body_parent_indices` | B | 저장 링크 순서 기준 부모 인덱스, 루트 -1 |
-| `dof_pos`, `dof_vel` | N × 29 | 관절각과 관절속도 |
-| `joint_names` | 29 | 실제 열 순서. 컨트롤러 순서에 맞춰 이름으로 매핑 필요 |
-| `handle_pos` | N × H × 3 | 편집 부위·관절 중심의 월드 위치 |
-| `handle_quat_wxyz` | N × H × 4 | 해당 링크의 월드 방향 |
-| `handle_names` | H | 편집 핸들 순서. 기존 파일 H=11, 40 또는 42, 새 파일 H=45 (11부위 + 29관절 + 통합 고관절·허리·발목 5) |
-| `body_pos`, `body_quat_wxyz` | N × B × 3/4 | 월드 바디를 제외한 모델 링크 자세 |
-| `body_names` | B | 링크 순서 |
-| `contacts` | N × 2 | 왼발/오른발의 사용자가 지정한 지지 상태 |
-| `com` | N × 3 | 로봇 자체 무게중심의 월드 위치 |
-| `metadata_json` | 스칼라 문자열 | 모델 해시, 단위, 관절 순서, 검증 지표 |
+| `posed_joints` | N × 34 × 3 | Kimodo G1Skeleton34 순서의 월드 관절 위치 |
+| `global_rot_mats` | N × 34 × 3 × 3 | 관절의 월드 회전행렬 |
+| `local_rot_mats` | N × 34 × 3 × 3 | 부모 관절 기준 로컬 회전행렬 |
+| `root_positions` | N × 3 | 실제 pelvis 월드 궤적 |
+| `foot_contacts` | N × 4 | 왼 뒤꿈치·왼 발끝·오른 뒤꿈치·오른 발끝 접촉 플래그 |
 
-내보내는 모든 quaternion은 **wxyz**입니다. 브라우저 표시 API의 quaternion은 Three.js에 맞춘 **xyzw**이므로 두 형식을 구분하세요. `qvel`의 루트 선속도는 월드 좌표, 루트 각속도는 MuJoCo 자유 관절의 로컬 좌표입니다. 관절 속도는 보간된 실제 qpos를 `mj_differentiatePos`로 차분하여 계산합니다.
+배열은 Kimodo와 같이 위치·회전은 `float32`, 접촉은 `bool`입니다. FPS, 원본 모델 해시, 편집 좌표계와 검증 정보는 같은 이름의 `.metadata.json`에 저장됩니다. 프로젝트 내부 로더는 Kimodo 배열을 MuJoCo `qpos`로 되돌려 기존 시뮬레이션 및 ProtoMotions 변환에 사용하며, 이전 Motion Creator NPZ도 계속 읽습니다.
 
-`contacts`는 접촉력 센서나 물리 시뮬레이션 결과가 아닙니다. 구간 양끝에서 공통으로 고정된 발을 지지 상태로 기록합니다. 양끝에서 고정된 부위의 위치가 바뀌면 내보내기를 거부합니다. 발을 옮기는 구간은 끝점 중 하나에서 그 발의 고정을 해제하고 중간 자세를 추가하세요.
+`foot_contacts`는 Kimodo와 같은 위치·속도 휴리스틱(속도 0.15 m/s 미만, 높이 0.10 m 미만)이며 접촉력 센서나 물리 시뮬레이션 결과가 아닙니다. 발을 옮기는 구간은 끝점 중 하나에서 해당 발 고정을 해제하고 중간 자세를 추가하세요.
 
 ## 계산 방식과 범위
 

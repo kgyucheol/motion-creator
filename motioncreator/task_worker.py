@@ -14,9 +14,9 @@ def main(folder):
             progress(.01,'CPU 작업 준비')
             if cancelled(): raise InterruptedError('cancelled')
             if request['kind']=='simulate':
-                import numpy as np
+                from .reference import load_reference
                 from .task_physics import simulate
-                with np.load(folder/'reference.npz',allow_pickle=False) as data: t=data['time']; q=data['qpos']
+                data,_=load_reference(folder/'reference.npz'); t=data['time']; q=data['qpos']
                 result=simulate(request['plan'],t,q,folder,request['controller'],progress,cancelled)
             else:
                 from .task_generation import generate_ardy,ik_preview

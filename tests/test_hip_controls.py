@@ -4,6 +4,7 @@ from scipy.spatial.transform import Rotation
 
 from motioncreator.robot import Robot, FEET
 from motioncreator.motion import new_project, save_bundle
+from motioncreator.reference import load_reference
 from motioncreator.presets import GroupStore
 
 
@@ -62,6 +63,6 @@ def test_combined_hip_groups_and_motion_export(tmp_path):
     project['keyframes'].append({**project['keyframes'][0], 'duration': .2, 'name': 'Hold'})
     bundle = save_bundle(robot, project, fps=10, directory=tmp_path)
     with np.load(tmp_path / bundle['files'][1], allow_pickle=False) as data:
-        assert data['qpos'].shape == (3, 36)
-        assert set(hips) <= set(data['handle_names'])
-        assert data['handle_pos'].shape[1] == data['handle_quat_wxyz'].shape[1] == 45
+        assert data['posed_joints'].shape == (3, 34, 3)
+    reference, _ = load_reference(tmp_path / bundle['files'][1])
+    assert reference['qpos'].shape == (3, 36)
