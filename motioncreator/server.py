@@ -1,12 +1,12 @@
 from pathlib import Path
 from typing import Literal
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE
-from .motion import new_project, validate_project, compile_motion, save_bundle
+from .motion import new_project, validate_project, compile_motion, project_from_motion_bytes, save_bundle
 from .presets import GroupStore
 
 robot = Robot()
@@ -110,6 +110,18 @@ def solve(payload: SolveInput):
 @app.post('/api/validate')
 def validate(payload: ProjectInput):
     return checked(lambda: validate_project(robot, payload.project))
+
+
+@app.post('/api/import-motion')
+async def import_motion(request: Request, filename: str, fps: int = Query(30, ge=1, le=120)):
+    if Path(filename).name != filename or Path(filename).suffix.lower() not in ('.npz', '.csv'):
+        raise HTTPException(status_code=422, detail='Only .npz and .csv motion files are supported')
+    content = await request.body()
+    if not content:
+        raise HTTPException(status_code=422, detail='Motion file is empty')
+    if len(content) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail='Motion file must be 100 MB or smaller')
+    return checked(lambda: project_from_motion_bytes(robot, content, filename, fps))
 
 
 @app.post('/api/solve-group')

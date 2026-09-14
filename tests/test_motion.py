@@ -1,11 +1,13 @@
+import asyncio
 import json
 from pathlib import Path
+import httpx
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from motioncreator.robot import Robot, FEET
 from motioncreator.demo import crouch_demo
-from motioncreator.motion import compile_motion, save_bundle, validate_project
+from motioncreator.motion import compile_motion, project_from_motion_bytes, save_bundle, validate_project
 from motioncreator.reference import load_reference
 from motioncreator.server import app
 
@@ -107,6 +109,41 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
         save_bundle(robot, project, fps=15, directory=tmp_path, output_formats=[])
     with pytest.raises(ValueError, match='requires NPZ'):
         save_bundle(robot, project, fps=15, directory=tmp_path, output_formats=['csv'], protomotions=True)
+
+
+def test_import_kimodo_npz_and_g1_csv_as_editable_keyframes(robot, tmp_path):
+    source = crouch_demo(robot)
+    bundle = save_bundle(robot, source, fps=15, directory=tmp_path)
+    expected = compile_motion(robot, source, fps=15)['qpos']
+
+    for key, filename in (('npz_file', 'kimodo_walk.npz'), ('csv_file', 'kimodo_walk.csv')):
+        imported = project_from_motion_bytes(robot, (tmp_path / bundle[key]).read_bytes(), filename, fps=15)
+        actual = np.asarray([frame['qpos'] for frame in imported['keyframes']])
+        assert imported['name'] == 'kimodo_walk'
+        assert len(imported['keyframes']) == len(expected)
+        assert all(frame['pins'] == [] and frame['duration'] == pytest.approx(1 / 15)
+                   for frame in imported['keyframes'])
+        assert np.allclose(actual, expected, atol=2e-6)
+        assert imported['current_qpos'] == imported['keyframes'][0]['qpos']
+
+    with pytest.raises(ValueError, match='36 qpos'):
+        project_from_motion_bytes(robot, b'1,2,3\n', 'invalid.csv', fps=30)
+
+
+def test_import_motion_api_accepts_csv(robot):
+    async def request():
+        csv = (','.join(str(value) for value in robot.home) + '\n').encode()
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+            return await client.post('/api/import-motion', params={'filename': 'single.csv', 'fps': 30},
+                                     content=csv, headers={'Content-Type': 'application/octet-stream'})
+
+    response = asyncio.run(request())
+    assert response.status_code == 200, response.text
+    imported = response.json()
+    assert imported['name'] == 'single'
+    assert len(imported['keyframes']) == 1
+    assert imported['keyframes'][0]['duration'] == pytest.approx(1 / 30)
 
 
 def test_invalid_projects_and_pin_conflicts(robot):

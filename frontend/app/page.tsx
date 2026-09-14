@@ -324,6 +324,23 @@ export default function Editor() {
     applyState(pose); invalidate(); setPoseDirty(false); setInfo(null);
     history.current = []; future.current = []; setHistoryCount(0); setFutureCount(0);
   }
+  async function openFile(source: File) {
+    const extension = source.name.slice(source.name.lastIndexOf('.')).toLowerCase();
+    if (extension === '.json') {
+      await loadProject(JSON.parse(await source.text()));
+      setMessage(`${source.name} 프로젝트를 불러왔습니다.`);
+      return;
+    }
+    const response = await fetch(`/api/import-motion?filename=${encodeURIComponent(source.name)}&fps=${fps}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: source,
+    });
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({})) as { detail?: unknown };
+      throw new Error(typeof failure.detail === 'string' ? failure.detail : `파일 불러오기 실패 (${response.status})`);
+    }
+    await loadProject(await response.json() as Project);
+    setMessage(`${source.name}의 모션 프레임을 ${fps} FPS 키프레임으로 불러왔습니다.`);
+  }
   function editFrame(index: number, patch: Partial<Keyframe>) {
     setProject(p => p ? { ...p, keyframes: p.keyframes.map((f, i) => i === index ? { ...f, ...patch } : f) } : p);
     invalidate();
@@ -418,7 +435,7 @@ export default function Editor() {
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><b>G1 / 29 DOF</b></div>
       <div className="project-title"><span className="status-dot"/>{project ? <input aria-label="프로젝트 이름" value={project.name} onChange={e => setProject({ ...project, name: e.target.value })}/> : '연결 중'}</div>
       <div className="top-actions"><button disabled={disabled} onClick={() => { setPlaying(false); scene.current?.setEditable(false); setTaskOpen(true); }}><Box size={16}/>상자 태스크</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled || (!exportNpz && !exportCsv)} onClick={exportProject}><Save size={16}/> 모션 저장</button></div>
-      <input ref={file} type="file" accept=".json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void run(async () => { await loadProject(JSON.parse(await f.text())); setMessage('프로젝트를 불러왔습니다.'); }); e.target.value = ''; }}/>
+      <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">
       <div className="panel-heading"><span>BODY GROUPS</span><small>29자유도</small></div>
@@ -549,8 +566,8 @@ export default function Editor() {
     <section className="timeline">
       <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{project?.keyframes.length ?? 0} poses · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<button disabled={disabled || !activeFrame} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세를 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
       <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {duration.toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label></div>
-        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · {f.pins.length} 고정</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
-        <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>이동 시간 <input aria-label="키프레임 이동 시간" type="number" min=".1" max="60" step=".1" disabled={disabled || frameIndex === 0} value={activeFrame.duration} onChange={e => editFrame(frameIndex, { duration: Math.max(.1, Math.min(60, +e.target.value || .1)) })}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
+        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{i === 0 ? '시작 자세' : `${f.duration < .1 ? f.duration.toFixed(3) : f.duration.toFixed(1)}s 이동`} · {f.pins.length} 고정</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
+        <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>이동 시간 <input aria-label="키프레임 이동 시간" type="number" min={1/120} max="60" step=".001" disabled={disabled || frameIndex === 0} value={activeFrame.duration} onChange={e => editFrame(frameIndex, { duration: Math.max(1/120, Math.min(60, +e.target.value || 1/120)) })}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
       </div>
       <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) applyState(preview.states[i]); }}/>
     </section>

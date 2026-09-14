@@ -1,16 +1,20 @@
 """Versioned project files and contact-aware kinematic reference exports."""
+import io
 import json
 import re
 import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
 import mujoco
 from scipy.spatial.transform import Rotation
 from .robot import Robot, ROOT, FEET, HANDLES, BASIC_ROTATABLE as ROTATABLE, quat_matrix, matrix_quat
-from .kimodo_format import export_kimodo_g1
+from .kimodo_format import KIMODO_KEYS, export_kimodo_g1, kimodo_g1_to_qpos
 
 FORMAT = 'motioncreator.g1.v1'
+MAX_KEYFRAMES = 3000
+MIN_DURATION = 1 / 120
 
 
 def validate_project(robot: Robot, project):
@@ -21,16 +25,16 @@ def validate_project(robot: Robot, project):
     if not isinstance(project.get('name'), str) or not isinstance(project.get('coordinate_system'), str) or not isinstance(project.get('units'), dict):
         raise ValueError('Project name, coordinate system and units are required')
     frames = project.get('keyframes', [])
-    if not 1 <= len(frames) <= 100:
-        raise ValueError('A project needs 1–100 keyframes')
+    if not 1 <= len(frames) <= MAX_KEYFRAMES:
+        raise ValueError(f'A project needs 1–{MAX_KEYFRAMES} keyframes')
     total = 0.
     for frame in frames:
         if not isinstance(frame.get('name'), str):
             raise ValueError('Keyframe name must be text')
         robot.validate_q(frame['qpos'])
         duration = float(frame.get('duration', 2.))
-        if not np.isfinite(duration) or not .1 <= duration <= 60:
-            raise ValueError('Keyframe durations must be 0.1–60 seconds')
+        if not np.isfinite(duration) or not MIN_DURATION <= duration <= 60:
+            raise ValueError('Keyframe durations must be 1/120–60 seconds')
         total += duration
         if any(k not in HANDLES for k in frame.get('pins', [])):
             raise ValueError('Unknown pinned handle')
@@ -58,6 +62,51 @@ def new_project(robot, name='G1 reference'):
             'joint_names': robot.names, 'coordinate_system': 'right-handed, +X forward, +Y left, +Z up',
             'units': {'position': 'm', 'angle': 'rad', 'time': 's'},
             'keyframes': [{'name': 'Stand', 'duration': 2., 'qpos': robot.home.tolist(), 'pins': list(FEET)}]}
+
+
+def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: int = 30):
+    """Create an editable project from a Kimodo NPZ or 36-column G1 CSV."""
+    if not 1 <= fps <= 120:
+        raise ValueError('FPS must be 1–120')
+    suffix = Path(filename).suffix.lower()
+    try:
+        if suffix == '.csv':
+            qpos = np.loadtxt(io.BytesIO(content), delimiter=',')
+            qpos = np.atleast_2d(qpos)
+        elif suffix == '.npz':
+            with np.load(io.BytesIO(content), allow_pickle=False) as archive:
+                keys = set(archive.files)
+                if keys == set(KIMODO_KEYS):
+                    arrays = {key: archive[key] for key in KIMODO_KEYS}
+                    qpos = kimodo_g1_to_qpos(robot, arrays)
+                elif 'qpos' in keys:
+                    qpos = np.asarray(archive['qpos'], dtype=float)
+                else:
+                    raise ValueError('NPZ must contain Kimodo G1 arrays or a qpos array')
+        else:
+            raise ValueError('Only .npz and .csv motion files are supported')
+    except (EOFError, OSError, TypeError, zipfile.BadZipFile) as exc:
+        raise ValueError(f'Could not read {suffix.upper()[1:]} motion file') from exc
+
+    qpos = np.asarray(qpos, dtype=float)
+    if qpos.ndim != 2 or qpos.shape[1] != robot.model.nq:
+        raise ValueError(f'Motion must contain one or more rows of {robot.model.nq} qpos values')
+    if not 1 <= len(qpos) <= MAX_KEYFRAMES:
+        raise ValueError(f'Motion must contain 1–{MAX_KEYFRAMES} frames')
+    validated = np.stack([robot.validate_q(frame) for frame in qpos])
+    for index in range(1, len(validated)):
+        if np.dot(validated[index - 1, 3:7], validated[index, 3:7]) < 0:
+            validated[index, 3:7] *= -1
+
+    project = new_project(robot, Path(filename).stem or 'Imported motion')
+    duration = 1 / fps
+    project['keyframes'] = [
+        {'name': f'Frame {index + 1}', 'duration': duration, 'qpos': frame.tolist(), 'pins': []}
+        for index, frame in enumerate(validated)
+    ]
+    project['current_qpos'] = validated[0].tolist()
+    project['pins'] = []
+    return validate_project(robot, project)
 
 
 def compile_motion(robot: Robot, project, fps=30):
