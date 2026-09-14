@@ -67,6 +67,8 @@ export default function Editor() {
   const [sample, setSample] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [fps, setFps] = useState(30);
+  const [exportNpz, setExportNpz] = useState(true);
+  const [exportCsv, setExportCsv] = useState(true);
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
   const [box, setBox] = useState({ position: [.4, 0, .30], size: [.3, .32, .24], visible: true });
@@ -380,6 +382,7 @@ export default function Editor() {
     void run(async () => {
       const result = await api<{ files: string[]; directory: string; warnings?: string[]; metadata: { samples: number; validation: { max_pin_error_mm: number } } }>('save', {
         project: { ...project, current_qpos: state.qpos, pins, box }, fps, protomotions: exportProto,
+        output_formats: [...(exportNpz ? ['npz'] : []), ...(exportCsv ? ['csv'] : [])],
       });
       setFiles(result.files); setSaved(await api<string[]>('saved'));
       setMessage(`${result.metadata.samples}프레임 저장 완료 · ${result.directory} · 고정 오차 최대 ${result.metadata.validation.max_pin_error_mm.toFixed(2)} mm`);
@@ -414,7 +417,7 @@ export default function Editor() {
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><b>G1 / 29 DOF</b></div>
       <div className="project-title"><span className="status-dot"/>{project ? <input aria-label="프로젝트 이름" value={project.name} onChange={e => setProject({ ...project, name: e.target.value })}/> : '연결 중'}</div>
-      <div className="top-actions"><button disabled={disabled} onClick={() => { setPlaying(false); scene.current?.setEditable(false); setTaskOpen(true); }}><Box size={16}/>상자 태스크</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled} onClick={exportProject}><Save size={16}/> 저장 / NPZ</button></div>
+      <div className="top-actions"><button disabled={disabled} onClick={() => { setPlaying(false); scene.current?.setEditable(false); setTaskOpen(true); }}><Box size={16}/>상자 태스크</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled || (!exportNpz && !exportCsv)} onClick={exportProject}><Save size={16}/> 모션 저장</button></div>
       <input ref={file} type="file" accept=".json" hidden onChange={e => { const f = e.target.files?.[0]; if (f) void run(async () => { await loadProject(JSON.parse(await f.text())); setMessage('프로젝트를 불러왔습니다.'); }); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">
@@ -523,11 +526,18 @@ export default function Editor() {
       <div className="xyz">{box.size.map((v, i) => <label key={i}><span>{'XYZ'[i]}</span><input aria-label={`박스 크기 ${'XYZ'[i]}`} type="number" min=".01" step=".01" value={v} onChange={e => setBox({ ...box, size: box.size.map((n, j) => i === j ? Math.max(.01, +e.target.value) : n) })}/></label>)}</div>
       <p className="hint">박스는 위치 가이드입니다. 파지·충돌·하중 계산은 포함하지 않습니다.</p>
       <div className="section-divider"/>
+      <div className="panel-heading"><span>OUTPUT FORMAT</span><small>Kimodo G1</small></div>
+      <div className="segmented">
+        <button type="button" aria-pressed={exportNpz} className={exportNpz ? 'chosen' : ''} disabled={disabled} onClick={() => { setExportNpz(value => { if (value) setExportProto(false); return !value; }); }}>NPZ</button>
+        <button type="button" aria-pressed={exportCsv} className={exportCsv ? 'chosen' : ''} disabled={disabled} onClick={() => setExportCsv(value => !value)}>CSV</button>
+      </div>
+      <p className="hint">하나 또는 둘 다 선택하세요. JSON은 다운로드 파일에 포함하지 않습니다.</p>
+      <div className="section-divider"/>
       <div className="panel-heading"><span>LOCAL FILES</span></div>
       <select aria-label="저장된 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">저장된 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>
       <button className="wide" disabled={disabled || !savedChoice} onClick={() => void run(async () => loadProject(await api<Project>(`files/${encodeURIComponent(savedChoice)}`)))}>선택한 프로젝트 열기</button>
-      <label className="hint"><input type="checkbox" checked={exportProto} disabled={disabled} onChange={e => setExportProto(e.target.checked)}/> 저장 시 ProtoMotions .motion / .pt 추가</label>
-      <p className="hint">원본 JSON·NPZ와 함께 G1용 파일을 변환합니다. 유지 자세는 같은 키프레임을 복제해 시간을 지정하세요.</p>
+      <label className="hint"><input type="checkbox" checked={exportProto} disabled={disabled || !exportNpz} onChange={e => setExportProto(e.target.checked)}/> 저장 시 ProtoMotions .motion / .pt 추가</label>
+      <p className="hint">NPZ를 선택했을 때만 추가 변환할 수 있습니다. 유지 자세는 같은 키프레임을 복제해 시간을 지정하세요.</p>
       {files.map(name => <a className="download" key={name} href={`/api/files/${encodeURIComponent(name)}`} download><Download size={13}/>{name}</a>)}
       <details className="joint-editor"><summary>29개 관절각 정밀 조정 {jointDirty ? '· 변경 대기' : ''}</summary>
         <p className="hint">슬라이더나 숫자를 수정한 뒤 적용하세요. 발 등 고정 조건을 유지하며 IK를 풉니다. 달성하지 못한 각도는 오차로 표시합니다.</p>

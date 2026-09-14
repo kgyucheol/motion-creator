@@ -34,6 +34,7 @@ class ProjectInput(BaseModel):
     project: dict
     fps: int = Field(30, ge=1, le=120)
     protomotions: bool = False
+    output_formats: list[Literal['npz', 'csv']] = Field(default_factory=lambda: ['npz', 'csv'], min_length=1, max_length=2)
 
 
 class GroupSolveInput(PoseInput):
@@ -134,7 +135,8 @@ def preview(payload: ProjectInput):
 
 @app.post('/api/save')
 def save(payload: ProjectInput):
-    return checked(lambda: save_bundle(robot, payload.project, payload.fps, protomotions=payload.protomotions))
+    return checked(lambda: save_bundle(robot, payload.project, payload.fps, protomotions=payload.protomotions,
+                                       output_formats=payload.output_formats))
 
 
 @app.get('/api/files/{name}')

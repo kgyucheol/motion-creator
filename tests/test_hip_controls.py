@@ -62,7 +62,7 @@ def test_combined_hip_groups_and_motion_export(tmp_path):
     project['keyframes'][0]['pins'] += hips
     project['keyframes'].append({**project['keyframes'][0], 'duration': .2, 'name': 'Hold'})
     bundle = save_bundle(robot, project, fps=10, directory=tmp_path)
-    with np.load(tmp_path / bundle['files'][1], allow_pickle=False) as data:
+    with np.load(tmp_path / bundle['npz_file'], allow_pickle=False) as data:
         assert data['posed_joints'].shape == (3, 34, 3)
-    reference, _ = load_reference(tmp_path / bundle['files'][1])
+    reference, _ = load_reference(tmp_path / bundle['npz_file'])
     assert reference['qpos'].shape == (3, 36)

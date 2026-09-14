@@ -15,7 +15,7 @@ def reference(tmp_path):
     q[3:7] = [.995004165278, 0, 0, .099833416647]
     p['keyframes'].append({'name': 'Move and rotate', 'duration': 1., 'qpos': q.tolist(), 'pins': []})
     result = save_bundle(r, p, fps=15, directory=tmp_path)
-    return tmp_path / result['files'][1]
+    return tmp_path / result['npz_file']
 
 
 def test_reference_world_velocities_and_metadata(reference):
@@ -64,5 +64,5 @@ def test_native_failure_preserves_original_files(tmp_path, monkeypatch):
     def fail(path): raise ValueError('test unavailable environment')
     monkeypatch.setattr(protomotions_bridge, 'export_isolated', fail)
     r = Robot(); result = save_bundle(r, new_project(r), directory=tmp_path, protomotions=True)
-    assert len(result['files']) == 4 and result['warnings']
+    assert len(result['files']) == 2 and result['warnings']
     assert all((tmp_path/name).is_file() for name in result['files'])

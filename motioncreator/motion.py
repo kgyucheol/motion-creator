@@ -126,7 +126,12 @@ def compile_motion(robot: Robot, project, fps=30):
             'fps': fps, 'max_pin_error_mm': max(pin_errors, default=0.)}
 
 
-def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=False):
+def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=False, output_formats=None):
+    formats = tuple(dict.fromkeys(('npz', 'csv') if output_formats is None else output_formats))
+    if not formats or any(item not in ('npz', 'csv') for item in formats):
+        raise ValueError('Output format must include NPZ, CSV, or both')
+    if protomotions and 'npz' not in formats:
+        raise ValueError('ProtoMotions export requires NPZ output')
     motion = compile_motion(robot, project, fps)
     folder = Path(directory or ROOT / 'motions')
     folder.mkdir(parents=True, exist_ok=True)
@@ -161,16 +166,24 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     csv_path = folder / (stem + '.csv')
     json_path = folder / (stem + '.json')
     metadata_path = folder / (stem + '.metadata.json')
-    np.savez_compressed(npz_path, **export_kimodo_g1(robot, motion['qpos'], fps))
-    np.savetxt(csv_path, motion['qpos'], delimiter=',')
+    exported = []
+    if 'npz' in formats:
+        np.savez_compressed(npz_path, **export_kimodo_g1(robot, motion['qpos'], fps))
+        exported.append(npz_path)
+    if 'csv' in formats:
+        np.savetxt(csv_path, motion['qpos'], delimiter=',')
+        exported.append(csv_path)
     json_path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding='utf-8')
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
-    result = {'files': [p.name for p in (json_path, npz_path, csv_path, metadata_path)], 'directory': str(folder), 'metadata': metadata}
+    result = {'files': [p.name for p in exported], 'directory': str(folder), 'metadata': metadata,
+              'project_file': json_path.name, 'metadata_file': metadata_path.name,
+              'npz_file': npz_path.name if 'npz' in formats else None,
+              'csv_file': csv_path.name if 'csv' in formats else None}
     if protomotions:
         from .protomotions_bridge import export_isolated
         try:
             result['files'].extend(export_isolated(npz_path))
         except (ValueError, OSError) as exc:
             # Native export failure must not hide the successfully saved editable reference.
-            result['warnings'] = [f'JSON/NPZ/CSV 저장 완료. ProtoMotions 변환 실패: {exc}']
+            result['warnings'] = [f'선택한 모션 형식 저장 완료. ProtoMotions 변환 실패: {exc}']
     return result

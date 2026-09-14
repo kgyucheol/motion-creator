@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
@@ -76,9 +77,10 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
     for filename in bundle['files']:
         assert (tmp_path / filename).parent == tmp_path
-    editable = json.loads((tmp_path / bundle['files'][0]).read_text())
+    assert [Path(name).suffix for name in bundle['files']] == ['.npz', '.csv']
+    editable = json.loads((tmp_path / bundle['project_file']).read_text())
     validate_project(robot, editable)
-    with np.load(tmp_path / bundle['files'][1], allow_pickle=False) as data:
+    with np.load(tmp_path / bundle['npz_file'], allow_pickle=False) as data:
         assert set(data.files) == {'posed_joints', 'global_rot_mats', 'local_rot_mats', 'root_positions', 'foot_contacts'}
         assert data['posed_joints'].shape == (61, 34, 3)
         assert data['global_rot_mats'].shape == (61, 34, 3, 3)
@@ -87,16 +89,24 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
         assert data['foot_contacts'].shape == (61, 4)
         assert data['posed_joints'].dtype == np.float32
         assert data['foot_contacts'].dtype == np.bool_
-    csv = np.loadtxt(tmp_path / bundle['files'][2], delimiter=',')
+    csv = np.loadtxt(tmp_path / bundle['csv_file'], delimiter=',')
     assert csv.shape == (61, 36)
     assert np.array_equal(csv, compile_motion(robot, project, fps=15)['qpos'])
-    data, meta = load_reference(tmp_path / bundle['files'][1])
+    data, meta = load_reference(tmp_path / bundle['npz_file'])
     assert meta['npz_format'] == 'kimodo.g1.34'
     assert np.allclose(data['qpos'], compile_motion(robot, project, fps=15)['qpos'], atol=2e-6)
     assert data['dof_pos'].shape == (61, 29)
     assert data['joint_names'].tolist() == robot.names
     assert data['root_quat_wxyz'].shape == (61, 4)
     assert np.allclose(np.linalg.norm(data['root_quat_wxyz'], axis=1), 1)
+
+    csv_only = save_bundle(robot, project, fps=15, directory=tmp_path, output_formats=['csv'])
+    assert len(csv_only['files']) == 1 and csv_only['csv_file'].endswith('.csv')
+    assert csv_only['npz_file'] is None
+    with pytest.raises(ValueError, match='Output format'):
+        save_bundle(robot, project, fps=15, directory=tmp_path, output_formats=[])
+    with pytest.raises(ValueError, match='requires NPZ'):
+        save_bundle(robot, project, fps=15, directory=tmp_path, output_formats=['csv'], protomotions=True)
 
 
 def test_invalid_projects_and_pin_conflicts(robot):

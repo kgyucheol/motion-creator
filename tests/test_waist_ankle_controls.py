@@ -68,9 +68,9 @@ def test_waist_ankle_groups_and_export(tmp_path):
     project['keyframes'][0]['pins'] += keys
     project['keyframes'].append({**project['keyframes'][0], 'duration': .2, 'name': 'Hold'})
     result = save_bundle(robot, project, fps=10, directory=tmp_path)
-    with np.load(tmp_path/result['files'][1], allow_pickle=False) as data:
+    with np.load(tmp_path/result['npz_file'], allow_pickle=False) as data:
         assert data['posed_joints'].shape == (3, 34, 3)
         assert data['foot_contacts'].shape == (3, 4)
-    reference, _ = load_reference(tmp_path/result['files'][1])
+    reference, _ = load_reference(tmp_path/result['npz_file'])
     assert reference['qpos'].shape == (3, 36)
     assert len(reference['joint_names']) == 29

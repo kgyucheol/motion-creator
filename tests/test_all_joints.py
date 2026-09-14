@@ -62,10 +62,10 @@ def test_new_joint_groups_translation_pins_and_export(robot, tmp_path):
     project['keyframes'].append({**project['keyframes'][0], 'name': 'Hold', 'duration': .2})
     validate_project(robot, project)
     bundle = save_bundle(robot, project, fps=10, directory=tmp_path)
-    with np.load(tmp_path / bundle['files'][1], allow_pickle=False) as data:
+    with np.load(tmp_path / bundle['npz_file'], allow_pickle=False) as data:
         assert data['posed_joints'].shape == (3, 34, 3)
         assert data['global_rot_mats'].shape == (3, 34, 3, 3)
         assert data['foot_contacts'].shape == (3, 4)
-    reference, _ = load_reference(tmp_path / bundle['files'][1])
+    reference, _ = load_reference(tmp_path / bundle['npz_file'])
     assert reference['qpos'].shape == (3, 36)
     assert reference['joint_names'].tolist() == robot.names

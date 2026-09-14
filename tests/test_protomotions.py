@@ -25,7 +25,7 @@ def source(tmp_path):
     q[3:7] = Rotation.from_euler('xyz', [.04, .06, .15]).as_quat()[[3,0,1,2]]
     p['keyframes'].append({'name':'Translate and rotate','duration':1.,'qpos':q.tolist(),'pins':[]})
     b = save_bundle(r, p, fps=30, directory=tmp_path)
-    return tmp_path/b['files'][1]
+    return tmp_path/b['npz_file']
 
 
 def test_native_fk_motionlib_and_deployment_resampling(source):
@@ -92,7 +92,7 @@ def test_name_reordering_and_authored_contacts(source, tmp_path):
 
 def test_single_frame_and_wrong_model_are_rejected(source, tmp_path):
     r=Robot(); b=save_bundle(r,new_project(r),directory=tmp_path)
-    with pytest.raises(ValueError, match='2프레임'): convert_reference(tmp_path/b['files'][1])
+    with pytest.raises(ValueError, match='2프레임'): convert_reference(tmp_path/b['npz_file'])
     d,_=load_reference(source); meta=json.loads(str(d['metadata_json']))
     meta['model_sha256']='unknown'; d['metadata_json']=np.array(json.dumps(meta))
     invalid=tmp_path/'invalid.npz'; np.savez(invalid,**d)

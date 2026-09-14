@@ -92,7 +92,7 @@ def test_rotation_export_interpolates_quaternions_and_keeps_contacts(robot, tmp_
     project['keyframes'][0]['pins'].append('left_hand')
     project['keyframes'].append({'name': 'Rotate', 'duration': 2., 'qpos': q.tolist(), 'pins': [*FEET, 'left_hand']})
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
-    data, metadata = load_reference(tmp_path / bundle['files'][1])
+    data, metadata = load_reference(tmp_path / bundle['npz_file'])
     assert data['qpos'].shape == (31, 36)
     assert np.allclose(np.linalg.norm(data['root_quat_wxyz'], axis=1), 1)
     assert np.max(np.abs(np.diff(data['qpos'][:, 7:], axis=0))) < .1
