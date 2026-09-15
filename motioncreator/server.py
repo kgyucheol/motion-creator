@@ -144,6 +144,36 @@ def preview(payload: ProjectInput):
     return checked(run)
 
 
+@app.get('/api/policy-preview/runtime')
+def policy_runtime():
+    from .policy_preview import runtime
+    return runtime()
+
+
+@app.post('/api/policy-preview')
+def policy_preview(payload: ProjectInput):
+    from .policy_preview import jobs
+    return checked(lambda: jobs.start(payload.project))
+
+
+@app.get('/api/policy-preview/{identifier}')
+def policy_status(identifier: str):
+    from .policy_preview import jobs
+    return checked(lambda: jobs.status(identifier))
+
+
+@app.get('/api/policy-preview/{identifier}/result')
+def policy_result(identifier: str):
+    from .policy_preview import jobs
+    return checked(lambda: jobs.result(identifier))
+
+
+@app.post('/api/policy-preview/{identifier}/cancel')
+def policy_cancel(identifier: str):
+    from .policy_preview import jobs
+    return checked(lambda: jobs.cancel(identifier))
+
+
 @app.post('/api/save')
 def save(payload: ProjectInput):
     return checked(lambda: save_bundle(robot, payload.project, payload.fps, protomotions=payload.protomotions))

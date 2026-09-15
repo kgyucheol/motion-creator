@@ -9,7 +9,8 @@ import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRota
 
 type Keyframe = { name: string; duration: number; qpos: number[]; pins: string[]; samples?: number[][] };
 type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; box?: { position: number[]; size: number[]; visible: boolean } };
-type Preview = { time: number[]; states: PoseState[]; max_pin_error_mm: number };
+type Preview = { time: number[]; states: PoseState[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number } };
+type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
 const feet = ['left_foot', 'right_foot'];
@@ -67,6 +68,11 @@ export default function Editor() {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [sample, setSample] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [policyEnabled, setPolicyEnabled] = useState(false);
+  const [policyAvailable, setPolicyAvailable] = useState(false);
+  const [policyJob, setPolicyJob] = useState<PolicyJob | null>(null);
+  const policyRequest = useRef<{ id?: string; cancelled: boolean } | null>(null);
+  const policySource = useRef<{ state: PoseState; pins: string[]; frameIndex: number; dirty: boolean } | null>(null);
   const [fps, setFps] = useState(30);
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
@@ -271,8 +277,16 @@ export default function Editor() {
       setMessage('부위에 마우스를 올리고 축을 드래그하세요. 양발은 고정되어 있습니다.');
     }).catch(e => setError(`계산 서버에 연결할 수 없습니다: ${e.message}`));
     api<string[]>('saved').then(setSaved).catch(() => {});
+    api<{ available: boolean }>('policy-preview/runtime').then(result => { if (alive.current) setPolicyAvailable(result.available); }).catch(() => {});
     api<GroupPreset[]>('groups').then(setGroups).catch(e => setError(`그룹 프리셋 불러오기 실패: ${e.message}`));
-    return () => { alive.current = false; viewer?.dispose(); scene.current = null; };
+    return () => {
+      alive.current = false; viewer?.dispose(); scene.current = null;
+      const request = policyRequest.current;
+      if (request) {
+        request.cancelled = true;
+        if (request.id) void api(`policy-preview/${request.id}/cancel`, {}).catch(() => {});
+      }
+    };
   }, []);
   useEffect(() => { scene.current?.select(selected, pins, members); }, [selected, pins, members]);
   useEffect(() => {
@@ -280,19 +294,19 @@ export default function Editor() {
     const pose = current.current.state;
     if (pose) setTarget(selectionPosition(pose, members, selected));
   }, [transformMode, space, mirror]);
-  useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !taskOpen); scene.current.keyboardEnabled = !taskOpen; } }, [busy, playing, taskOpen]);
+  useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !taskOpen && !preview?.physics); scene.current.keyboardEnabled = !taskOpen && !preview?.physics; } }, [busy, playing, taskOpen, preview]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
   useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
   useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
   useEffect(() => { scene.current?.setBox(box.position, box.size, box.visible); }, [box]);
   useEffect(() => {
-    if (!project || !state || playing) return;
+    if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
       try { localStorage.setItem('g1-motion-draft-v1', JSON.stringify({ ...project, current_qpos: state.qpos, pins, box })); }
       catch { setMessage('브라우저 자동 저장 공간이 부족합니다. 파일 저장을 사용하세요.'); }
     }, 500);
     return () => clearTimeout(timer);
-  }, [project, state, pins, box, playing]);
+  }, [project, state, pins, box, playing, preview]);
   useEffect(() => {
     if (!playing || !preview) return;
     const start = performance.now() - preview.time[sample] * 1000;
@@ -300,7 +314,9 @@ export default function Editor() {
     const tick = () => {
       const time = (performance.now() - start) / 1000;
       const end = preview.time.length - 1;
-      const index = Math.min(end, Math.floor(time / (preview.time[1] || 1)));
+      // Physics replays may end between display frames when a fall is detected.
+      let index = 0;
+      while (index < end && preview.time[index + 1] <= time) index++;
       applyState(preview.states[index]); setSample(index);
       if (index === end) { setPlaying(false); return; }
       id = requestAnimationFrame(tick);
@@ -407,9 +423,68 @@ export default function Editor() {
   async function play() {
     if (playing) { setPlaying(false); return; }
     if (preview) { if (sample >= preview.states.length - 1) setSample(0); setPlaying(true); return; }
-    await run(async () => { const result = await api<Preview>('preview', { project, fps: 30 }); setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false); });
+    await run(async () => {
+      if (!policyEnabled) {
+        const result = await api<Preview>('preview', { project, fps: 30 });
+        setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
+        setMessage('원본 모션 재생 · 물리 OFF');
+        return;
+      }
+      const request: { id?: string; cancelled: boolean } = { cancelled: false };
+      policySource.current = state ? { state, pins: [...pins], frameIndex, dirty: poseDirty } : null;
+      policyRequest.current = request;
+      try {
+        setMessage('GEAR-SONIC 모델 준비 및 물리 계산 중…');
+        let job = await api<PolicyJob>('policy-preview', { project });
+        request.id = job.id;
+        if (request.cancelled) {
+          await api(`policy-preview/${job.id}/cancel`, {});
+          return;
+        }
+        setPolicyJob(job);
+        while (job.status === 'running') {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          if (!alive.current || request.cancelled) return;
+          job = await api<PolicyJob>(`policy-preview/${job.id}`);
+          setPolicyJob(job);
+          setMessage(`GEAR-SONIC 물리 계산 ${Math.round(job.progress * 100)}% · CPU`);
+        }
+        if (job.status === 'cancelled') { setMessage('GEAR-SONIC 계산을 취소했습니다.'); return; }
+        if (job.status !== 'completed') throw new Error(job.message || 'GEAR-SONIC 계산에 실패했습니다.');
+        const result = await api<Preview>(`policy-preview/${job.id}/result`);
+        if (!alive.current || request.cancelled) return;
+        setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
+        const summary = result.summary!;
+        const outcome = summary.reason === 'fallen' ? '넘어짐으로 조기 종료' : summary.reason === 'completed' ? '계산 완료' : '수치 불안정으로 중단';
+        setMessage(`GEAR-SONIC ${outcome} · ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°`);
+      } catch (failure) {
+        if (request.id) await api(`policy-preview/${request.id}/cancel`, {}).catch(() => {});
+        throw failure;
+      } finally {
+        if (alive.current) setPolicyJob(null);
+        policyRequest.current = null;
+      }
+    });
   }
-  const disabled = !state || busy || solving || playing;
+  async function cancelPolicy() {
+    const request = policyRequest.current;
+    if (!request?.id) return;
+    try {
+      await api(`policy-preview/${request.id}/cancel`, {});
+      request.cancelled = true;
+      setMessage('GEAR-SONIC 계산을 취소했습니다.');
+    } catch (failure) { setError((failure as Error).message); }
+  }
+  function togglePolicy() {
+    const source = policySource.current;
+    if (preview?.physics && source) {
+      applyState(source.state); setFrameIndex(source.frameIndex); setPins(source.pins); setPoseDirty(source.dirty);
+    }
+    policySource.current = null;
+    invalidate(); setPolicyEnabled(value => !value);
+    setMessage(policyEnabled ? '원본 모션 재생 · 물리 OFF' : 'GEAR-SONIC + MuJoCo · 재생하면 CPU 계산 후 결과를 보여줍니다.');
+  }
+  const disabled = !state || busy || solving || playing || !!preview?.physics;
   const selectionPinned = members.some(k => pins.includes(k));
   const controls = controlSelection(members);
   const mirrorAvailable = canMirrorSelection(controls);
@@ -482,6 +557,16 @@ export default function Editor() {
     <main className="viewport">
       <div ref={host} className="canvas-host"/>
       <div className="viewport-top"><div className="view-title"><span className="status-dot"/>POSE WORKSPACE<span>m · rad · Z-up</span></div><div className="view-buttons">{(['perspective', 'front', 'side'] as const).map((v, i) => <button key={v} onClick={() => scene.current?.setView(v)}>{['자유', '정면', '측면'][i]}</button>)}</div></div>
+      <div className={`simulation-status ${policyEnabled ? 'enabled' : ''}`}>
+        <span>Physics <b>{preview?.physics ? 'ON' : policyEnabled ? '대기' : 'OFF'}</b></span>
+        <span>GEAR-SONIC <b>{policyEnabled ? 'ON' : 'OFF'}</b></span>
+        {preview?.summary && <small>{preview.summary.reason === 'completed' ? '추종 결과' : preview.summary.reason === 'fallen' ? '넘어짐 감지' : '계산 중단'} · 오차 {(preview.summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°</small>}
+      </div>
+      {policyJob && <div className="policy-progress">
+        <span>GEAR-SONIC 물리 계산 <b>{Math.round(policyJob.progress * 100)}%</b></span>
+        <progress aria-label="GEAR-SONIC 계산 진행률" max={1} value={policyJob.progress}/>
+        <button type="button" onClick={() => void cancelPolicy()}>계산 취소</button>
+      </div>}
       <div className="viewport-tools"><button title="자세 실행 취소 (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled={disabled || !historyCount} onClick={() => changeHistory(false)}><Undo2 size={17}/></button><button title="자세 다시 실행 (Ctrl+Shift+Z)" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled={disabled || !futureCount} onClick={() => changeHistory(true)}><Redo2 size={17}/></button><span/><button className={showHandles ? 'chosen' : ''} title="조작 표시 켜기/끄기" onClick={() => setShowHandles(!showHandles)}><MousePointer2 size={17}/></button></div>
       <div className="scene-legend"><span><i className="cyan"/>이동 가능</span><span><i className="amber"/>고정</span><span><i className="mint"/>선택</span></div>
       <div className="viewport-bottom"><span>드래그: 회전 · 휠: 확대 · 우클릭: 이동 · W/E: 이동/회전 · F: 선택 보기</span><span className="axes"><b>X</b> 전방 <b>Y</b> 왼쪽 <b>Z</b> 위</span></div>
@@ -558,12 +643,16 @@ export default function Editor() {
     </aside>
     <section className="timeline">
       <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{motionClip ? `1 clip · ${motionClip.length} frames` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<button disabled={disabled || !activeFrame || !!motionClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세를 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || !!motionClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
-      <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {duration.toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label></div>
+      <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : policyEnabled ? 'GEAR-SONIC 물리 재생' : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label>
+        <button className="policy-toggle" type="button" aria-pressed={policyEnabled} disabled={!state || busy || solving || playing || !policyAvailable} onClick={togglePolicy} title={!policyAvailable ? 'SONIC CPU 환경 또는 서버 업데이트를 확인하세요.' : 'ON: MuJoCo + GEAR-SONIC 계산 후 재생 · OFF: 원본 모션 편집으로 돌아가기'}>
+          <span className="policy-indicator"/>GEAR-SONIC <b>{policyEnabled ? 'ON' : 'OFF'}</b>
+        </button>
+      </div>
         <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · {f.pins.length} 고정</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
         <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>{motionClip ? '클립 재생 시간' : '이동 시간'} <input aria-label="키프레임 이동 시간" type="number" min={motionClip ? 1/120 : .1} max={motionClip ? 600 : 60} step=".01" disabled={disabled || (!motionClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = motionClip ? 1/120 : .1; const maximum = motionClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
       </div>
       <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) applyState(preview.states[i]); }}/>
     </section>
-    <footer className={`statusbar ${error ? 'error' : ''}`}><span>{error ? <AlertCircle size={13}/> : <span className="status-dot"/>}{error || message}</span><span>기구학 참조 모션 · 동역학 미검증</span></footer>
+    <footer className={`statusbar ${error ? 'error' : ''}`}><span>{error ? <AlertCircle size={13}/> : <span className="status-dot"/>}{error || message}</span><span>{preview?.physics ? 'MuJoCo + GEAR-SONIC · 시뮬레이션 결과' : policyEnabled ? 'GEAR-SONIC 준비 · CPU' : '원본 모션 · 물리 OFF'}</span></footer>
   </div>;
 }

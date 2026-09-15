@@ -1,0 +1,213 @@
+"""Isolated, cancellable SONIC playback of the editor timeline on a free G1."""
+import atexit
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import threading
+import uuid
+import xml.etree.ElementTree as ET
+
+import mujoco
+import numpy as np
+
+from .motion import compile_motion, validate_project
+from .robot import MODEL_PATH, ROOT, Robot
+from .sonic import KP, KD, Reference, SonicCPU
+from .task_jobs import atomic_json
+
+MAX_SECONDS = 60
+
+
+def runtime():
+    paths = [ROOT / '.conda-policy/bin/python', *[
+        ROOT / 'external/task-models/sonic' / name
+        for name in ('model_encoder.onnx', 'model_decoder.onnx', 'observation_config.yaml')]]
+    missing = [str(path.relative_to(ROOT)) for path in paths if not path.is_file()]
+    return {'available': not missing, 'missing': missing, 'device': 'cpu', 'max_seconds': MAX_SECONDS}
+
+
+def build_model(robot):
+    root = ET.parse(MODEL_PATH).getroot()
+    root.find('compiler').set('meshdir', str(ROOT / 'assets/g1/meshes'))
+    option = root.find('option')
+    if option is None:
+        option = ET.SubElement(root, 'option')
+    option.attrib.update(timestep='0.002', integrator='implicitfast', cone='elliptic',
+                         iterations='80', gravity='0 0 -9.81')
+    for index, name in enumerate(robot.names):
+        root.find(f".//joint[@name='{name}']").set('armature', str(float(KP[index] / (20 * np.pi) ** 2)))
+    model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding='unicode'))
+    if model.nq != 36 or model.nu != 29 or model.neq:
+        raise ValueError('Unexpected G1 physics model')
+    return model
+
+
+def simulate(project, progress=lambda value: None):
+    robot = Robot()
+    motion = compile_motion(robot, project, fps=50)
+    times, poses = motion['time'], motion['qpos']
+    # A single authored pose is a hold, so it can also be tested under gravity.
+    if len(times) == 1:
+        times = np.array([0., float(project['keyframes'][0]['duration'])])
+        poses = np.repeat(poses, 2, axis=0)
+    if times[-1] > MAX_SECONDS:
+        raise ValueError(f'GEAR-SONIC 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
+    model = build_model(robot)
+    data = mujoco.MjData(model)
+    ref = Reference(times, poses, robot.model)
+    policy = SonicCPU()
+    data.qpos[:] = poses[0]
+    # Preserve the reference start; do not silently shift/ground or teleport it.
+    mujoco.mj_forward(model, data)
+    joints = np.array([model.joint(name).id for name in robot.names])
+    qa, va = model.jnt_qposadr[joints], model.jnt_dofadr[joints]
+    motors = np.array([np.flatnonzero(model.actuator_trnid[:, 0] == joint)[0] for joint in joints])
+    limits = model.jnt_actfrcrange[joints]
+    replay_times, states = [0.], [robot.state(data.qpos.copy())]
+    errors, saturation = [], []
+    reason = 'completed'
+    count = max(1, round(float(times[-1]) / .02))
+    for step in range(count):
+        target = policy.action(data.qpos.copy(), data.qvel.copy(), ref, float(data.time), float(times[-1]))
+        for _ in range(10):
+            torque = KP * (target - data.qpos[qa]) - KD * data.qvel[va]
+            saturation.append(float(np.mean((torque < limits[:, 0]) | (torque > limits[:, 1]))))
+            data.ctrl[motors] = np.clip(torque, limits[:, 0], limits[:, 1])
+            mujoco.mj_step(model, data)
+        if (not np.isfinite(data.qpos).all() or not np.isfinite(data.qvel).all()
+                or any(data.warning[k].number for k in (mujoco.mjtWarning.mjWARN_BADQPOS,
+                    mujoco.mjtWarning.mjWARN_BADQVEL, mujoco.mjtWarning.mjWARN_BADQACC,
+                    mujoco.mjtWarning.mjWARN_BADCTRL))):
+            reason = 'numerical_instability'
+            break
+        mujoco.mj_forward(model, data)
+        expected, _ = ref.sample(data.time)
+        errors.append(float(np.mean((data.qpos[qa] - expected[0, 7:]) ** 2)))
+        if data.qpos[2] < .25 or data.xmat[model.body('pelvis').id].reshape(3, 3)[2, 2] < np.cos(np.pi / 4):
+            reason = 'fallen'
+        if step % 2 == 1 or step == count - 1 or reason != 'completed':
+            replay_times.append(float(data.time))
+            states.append(robot.state(data.qpos.copy()))
+        if step % 10 == 0:
+            progress((step + 1) / count)
+        if reason != 'completed':
+            break
+    return {'time': replay_times, 'states': states, 'max_pin_error_mm': 0.,
+            'physics': True, 'policy': 'gear-sonic', 'summary': {
+                'reason': reason, 'sim_seconds': float(replay_times[-1]),
+                'reference_seconds': float(times[-1]), 'joint_rmse_rad': float(np.sqrt(np.mean(errors))) if errors else 0.,
+                'max_torque_saturation': max(saturation, default=0.),
+                'device': 'cpu', 'physics_hz': 500, 'policy_hz': 50}}
+
+
+class PreviewJobs:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.jobs = {}
+
+    def start(self, project):
+        validate_project(Robot(), project)
+        frames = project['keyframes']
+        duration = frames[0]['duration'] if len(frames) == 1 else sum(f['duration'] for f in frames[1:])
+        if duration > MAX_SECONDS:
+            raise ValueError(f'GEAR-SONIC 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
+        if not runtime()['available']:
+            raise ValueError('SONIC CPU 실행 환경 또는 모델이 없습니다. scripts/setup-task-cpu.sh를 확인하세요.')
+        with self.lock:
+            if any(job['status'] == 'running' for job in self.jobs.values()):
+                raise ValueError('GEAR-SONIC 계산이 진행 중입니다. 완료하거나 취소한 뒤 다시 실행하세요.')
+            # Keep a few recent replays without accumulating temporary data indefinitely.
+            while len(self.jobs) >= 4:
+                old_id = next(iter(self.jobs))
+                self.jobs.pop(old_id)['temporary'].cleanup()
+            temporary = tempfile.TemporaryDirectory(prefix='motioncreator-sonic-')
+            folder = Path(temporary.name)
+            atomic_json(folder / 'project.json', project)
+            env = {**os.environ, 'PYTHONPATH': str(ROOT), 'PYTHONNOUSERSITE': '1',
+                   'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '2', 'CUDA_VISIBLE_DEVICES': ''}
+            try:
+                with (folder / 'worker.log').open('w') as log:
+                    process = subprocess.Popen([str(ROOT / '.conda-policy/bin/python'), '-m',
+                        'motioncreator.policy_preview', str(folder)], cwd=ROOT, env=env,
+                        stdout=log, stderr=subprocess.STDOUT)
+            except OSError as exc:
+                temporary.cleanup()
+                raise ValueError(f'SONIC CPU 작업을 시작할 수 없습니다: {exc}') from exc
+            identifier = uuid.uuid4().hex
+            job = {'status': 'running', 'process': process, 'folder': folder, 'temporary': temporary}
+            self.jobs[identifier] = job
+            threading.Thread(target=self._watch, args=(job,), daemon=True).start()
+        return {'id': identifier, 'status': 'running', 'progress': 0.}
+
+    def _watch(self, job):
+        try:
+            code = job['process'].wait(timeout=600)
+            message = ''
+        except subprocess.TimeoutExpired:
+            job['process'].kill()
+            job['process'].wait()
+            code, message = -1, 'CPU 계산이 10분을 초과했습니다. 짧은 모션으로 다시 실행하세요.'
+        with self.lock:
+            if job['status'] != 'running':
+                return
+            job['status'] = 'completed' if code == 0 and (job['folder'] / 'result.json').is_file() else 'failed'
+            if job['status'] == 'failed':
+                error_path = job['folder'] / 'error.json'
+                job['message'] = message or (json.loads(error_path.read_text())['message'] if error_path.is_file()
+                                            else 'SONIC CPU 작업이 종료되었습니다. 실행 환경을 확인하세요.')
+
+    def status(self, identifier):
+        with self.lock:
+            job = self.jobs.get(identifier)
+            if job is None:
+                raise KeyError('미리보기 작업을 찾을 수 없습니다. 다시 재생하세요.')
+            path = job['folder'] / 'progress.json'
+            progress = json.loads(path.read_text())['progress'] if path.is_file() else 0.
+            if job['status'] == 'completed':
+                progress = 1.
+            return {'id': identifier, 'status': job['status'], 'progress': progress, 'message': job.get('message', '')}
+
+    def result(self, identifier):
+        with self.lock:
+            job = self.jobs.get(identifier)
+            if job is None or job['status'] != 'completed':
+                raise ValueError('미리보기 결과가 준비되지 않았습니다.')
+            return json.loads((job['folder'] / 'result.json').read_text())
+
+    def cancel(self, identifier):
+        with self.lock:
+            job = self.jobs.get(identifier)
+            if job is None:
+                raise KeyError('미리보기 작업을 찾을 수 없습니다.')
+            if job['status'] == 'running':
+                job['status'] = 'cancelled'
+                job['process'].terminate()
+                try:
+                    job['process'].wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    job['process'].kill()
+                    job['process'].wait()
+        return self.status(identifier)
+
+    def close(self):
+        for identifier in list(self.jobs):
+            self.cancel(identifier)
+            self.jobs[identifier]['temporary'].cleanup()
+
+
+jobs = PreviewJobs()
+atexit.register(jobs.close)
+
+
+if __name__ == '__main__':
+    import sys
+    folder = Path(sys.argv[1])
+    try:
+        result = simulate(json.loads((folder / 'project.json').read_text()),
+                          lambda value: atomic_json(folder / 'progress.json', {'progress': value}))
+        atomic_json(folder / 'result.json', result)
+    except Exception as exc:
+        atomic_json(folder / 'error.json', {'message': str(exc)})
+        raise
