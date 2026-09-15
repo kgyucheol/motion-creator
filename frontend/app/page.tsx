@@ -542,17 +542,10 @@ export default function Editor() {
       <div className="xyz">{box.size.map((v, i) => <label key={i}><span>{'XYZ'[i]}</span><input aria-label={`박스 크기 ${'XYZ'[i]}`} type="number" min=".01" step=".01" value={v} onChange={e => setBox({ ...box, size: box.size.map((n, j) => i === j ? Math.max(.01, +e.target.value) : n) })}/></label>)}</div>
       <p className="hint">박스는 위치 가이드입니다. 파지·충돌·하중 계산은 포함하지 않습니다.</p>
       <div className="section-divider"/>
-      <div className="panel-heading"><span>OUTPUT FORMAT</span><small>Kimodo G1</small></div>
-      <div className="segmented">
-        <button type="button" aria-pressed="true" className="chosen" disabled>NPZ</button>
-        <button type="button" aria-pressed="true" className="chosen" disabled>CSV</button>
-        <button type="button" aria-pressed="true" className="chosen" disabled>JSON</button>
-      </div>
-      <p className="hint">저장할 때마다 전용 폴더에 NPZ, CSV, 편집용 JSON을 함께 저장합니다.</p>
-      <div className="section-divider"/>
-      <div className="panel-heading"><span>LOCAL FILES</span></div>
-      <select aria-label="저장된 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">저장된 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>
-      <button className="wide" disabled={disabled || !savedChoice} onClick={() => void run(async () => loadProject(await api<Project>(`files/${fileApiPath(savedChoice)}`)))}>선택한 프로젝트 열기</button>
+      <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>
+      <select aria-label="최근 저장한 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">최근 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>
+      <button className="wide" disabled={disabled || !savedChoice} onClick={() => void run(async () => loadProject(await api<Project>(`files/${fileApiPath(savedChoice)}`)))}>최근 프로젝트 열기</button>
+      <p className="hint"><code>motions/</code>에 저장한 편집 프로젝트를 빠르게 다시 엽니다. 상단 열기는 컴퓨터의 임의 파일을 선택합니다.</p>
       <label className="hint"><input type="checkbox" checked={exportProto} disabled={disabled} onChange={e => setExportProto(e.target.checked)}/> 저장 시 ProtoMotions .motion / .pt 추가</label>
       <p className="hint">유지 자세는 같은 키프레임을 복제해 시간을 지정하세요.</p>
       {files.map(name => <a className="download" key={name} href={`/api/files/${fileApiPath(name)}`} download><Download size={13}/>{name}</a>)}
