@@ -36,6 +36,11 @@ class ProjectInput(BaseModel):
     protomotions: bool = False
 
 
+class PhysicsPreviewInput(BaseModel):
+    project: dict
+    controller: Literal['pd', 'gear-sonic'] = 'gear-sonic'
+
+
 class GroupSolveInput(PoseInput):
     model_config = {'extra': 'forbid'}
     anchor: list[float]
@@ -151,9 +156,9 @@ def policy_runtime():
 
 
 @app.post('/api/policy-preview')
-def policy_preview(payload: ProjectInput):
+def policy_preview(payload: PhysicsPreviewInput):
     from .policy_preview import jobs
-    return checked(lambda: jobs.start(payload.project))
+    return checked(lambda: jobs.start(payload.project, payload.controller))
 
 
 @app.get('/api/policy-preview/{identifier}')

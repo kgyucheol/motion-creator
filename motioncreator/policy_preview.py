@@ -1,9 +1,10 @@
-"""Isolated, cancellable SONIC playback of the editor timeline on a free G1."""
+"""Isolated, cancellable PD or SONIC physics playback on a free G1."""
 import atexit
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import threading
 import uuid
@@ -25,7 +26,8 @@ def runtime():
         ROOT / 'external/task-models/sonic' / name
         for name in ('model_encoder.onnx', 'model_decoder.onnx', 'observation_config.yaml')]]
     missing = [str(path.relative_to(ROOT)) for path in paths if not path.is_file()]
-    return {'available': not missing, 'missing': missing, 'device': 'cpu', 'max_seconds': MAX_SECONDS}
+    return {'available': not missing, 'physics_available': True, 'missing': missing,
+            'device': 'cpu', 'max_seconds': MAX_SECONDS}
 
 
 def build_model(robot):
@@ -44,7 +46,9 @@ def build_model(robot):
     return model
 
 
-def simulate(project, progress=lambda value: None):
+def simulate(project, progress=lambda value: None, *, controller='gear-sonic'):
+    if controller not in ('pd', 'gear-sonic'):
+        raise ValueError('Unknown physics controller')
     robot = Robot()
     motion = compile_motion(robot, project, fps=50)
     times, poses = motion['time'], motion['qpos']
@@ -53,11 +57,11 @@ def simulate(project, progress=lambda value: None):
         times = np.array([0., float(project['keyframes'][0]['duration'])])
         poses = np.repeat(poses, 2, axis=0)
     if times[-1] > MAX_SECONDS:
-        raise ValueError(f'GEAR-SONIC 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
+        raise ValueError(f'물리 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
     model = build_model(robot)
     data = mujoco.MjData(model)
     ref = Reference(times, poses, robot.model)
-    policy = SonicCPU()
+    policy = SonicCPU() if controller == 'gear-sonic' else None
     data.qpos[:] = poses[0]
     # Preserve the reference start; do not silently shift/ground or teleport it.
     mujoco.mj_forward(model, data)
@@ -70,7 +74,10 @@ def simulate(project, progress=lambda value: None):
     reason = 'completed'
     count = max(1, round(float(times[-1]) / .02))
     for step in range(count):
-        target = policy.action(data.qpos.copy(), data.qvel.copy(), ref, float(data.time), float(times[-1]))
+        # PD-only uses the reference joint angles directly: no learned balance
+        # controller, root forces, pose teleportation, or ONNX dependency.
+        target = (policy.action(data.qpos.copy(), data.qvel.copy(), ref, float(data.time), float(times[-1]))
+                  if policy is not None else ref.sample(data.time)[0][0, 7:])
         for _ in range(10):
             torque = KP * (target - data.qpos[qa]) - KD * data.qvel[va]
             saturation.append(float(np.mean((torque < limits[:, 0]) | (torque > limits[:, 1]))))
@@ -95,11 +102,12 @@ def simulate(project, progress=lambda value: None):
         if reason != 'completed':
             break
     return {'time': replay_times, 'states': states, 'max_pin_error_mm': 0.,
-            'physics': True, 'policy': 'gear-sonic', 'summary': {
+            'physics': True, 'policy': 'gear-sonic' if policy is not None else None, 'controller': controller, 'summary': {
                 'reason': reason, 'sim_seconds': float(replay_times[-1]),
                 'reference_seconds': float(times[-1]), 'joint_rmse_rad': float(np.sqrt(np.mean(errors))) if errors else 0.,
                 'max_torque_saturation': max(saturation, default=0.),
-                'device': 'cpu', 'physics_hz': 500, 'policy_hz': 50}}
+                'device': 'cpu', 'physics_hz': 500, 'policy_hz': 50 if policy is not None else 0,
+                'target_hz': 50}}
 
 
 class PreviewJobs:
@@ -107,17 +115,19 @@ class PreviewJobs:
         self.lock = threading.Lock()
         self.jobs = {}
 
-    def start(self, project):
+    def start(self, project, controller='gear-sonic'):
+        if controller not in ('pd', 'gear-sonic'):
+            raise ValueError('Unknown physics controller')
         validate_project(Robot(), project)
         frames = project['keyframes']
         duration = frames[0]['duration'] if len(frames) == 1 else sum(f['duration'] for f in frames[1:])
         if duration > MAX_SECONDS:
-            raise ValueError(f'GEAR-SONIC 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
-        if not runtime()['available']:
+            raise ValueError(f'물리 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
+        if controller == 'gear-sonic' and not runtime()['available']:
             raise ValueError('SONIC CPU 실행 환경 또는 모델이 없습니다. scripts/setup-task-cpu.sh를 확인하세요.')
         with self.lock:
             if any(job['status'] == 'running' for job in self.jobs.values()):
-                raise ValueError('GEAR-SONIC 계산이 진행 중입니다. 완료하거나 취소한 뒤 다시 실행하세요.')
+                raise ValueError('물리 계산이 진행 중입니다. 완료하거나 취소한 뒤 다시 실행하세요.')
             # Keep a few recent replays without accumulating temporary data indefinitely.
             while len(self.jobs) >= 4:
                 old_id = next(iter(self.jobs))
@@ -129,12 +139,13 @@ class PreviewJobs:
                    'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '2', 'CUDA_VISIBLE_DEVICES': ''}
             try:
                 with (folder / 'worker.log').open('w') as log:
-                    process = subprocess.Popen([str(ROOT / '.conda-policy/bin/python'), '-m',
-                        'motioncreator.policy_preview', str(folder)], cwd=ROOT, env=env,
+                    executable = str(ROOT / '.conda-policy/bin/python') if controller == 'gear-sonic' else sys.executable
+                    process = subprocess.Popen([executable, '-m',
+                        'motioncreator.policy_preview', str(folder), controller], cwd=ROOT, env=env,
                         stdout=log, stderr=subprocess.STDOUT)
             except OSError as exc:
                 temporary.cleanup()
-                raise ValueError(f'SONIC CPU 작업을 시작할 수 없습니다: {exc}') from exc
+                raise ValueError(f'물리 CPU 작업을 시작할 수 없습니다: {exc}') from exc
             identifier = uuid.uuid4().hex
             job = {'status': 'running', 'process': process, 'folder': folder, 'temporary': temporary}
             self.jobs[identifier] = job
@@ -156,7 +167,7 @@ class PreviewJobs:
             if job['status'] == 'failed':
                 error_path = job['folder'] / 'error.json'
                 job['message'] = message or (json.loads(error_path.read_text())['message'] if error_path.is_file()
-                                            else 'SONIC CPU 작업이 종료되었습니다. 실행 환경을 확인하세요.')
+                                            else '물리 CPU 작업이 종료되었습니다. 실행 환경을 확인하세요.')
 
     def status(self, identifier):
         with self.lock:
@@ -202,11 +213,11 @@ atexit.register(jobs.close)
 
 
 if __name__ == '__main__':
-    import sys
     folder = Path(sys.argv[1])
     try:
         result = simulate(json.loads((folder / 'project.json').read_text()),
-                          lambda value: atomic_json(folder / 'progress.json', {'progress': value}))
+                          lambda value: atomic_json(folder / 'progress.json', {'progress': value}),
+                          controller=sys.argv[2] if len(sys.argv) > 2 else 'gear-sonic')
         atomic_json(folder / 'result.json', result)
     except Exception as exc:
         atomic_json(folder / 'error.json', {'message': str(exc)})

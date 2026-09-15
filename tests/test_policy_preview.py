@@ -81,6 +81,54 @@ def test_worker_start_failure_is_actionable(monkeypatch):
         raise OSError('test interpreter unavailable')
     monkeypatch.setattr(preview.subprocess, 'Popen', fail)
     jobs = preview.PreviewJobs()
-    with pytest.raises(ValueError, match='SONIC CPU 작업을 시작할 수 없습니다'):
+    with pytest.raises(ValueError, match='물리 CPU 작업을 시작할 수 없습니다'):
         jobs.start(new_project(Robot()))
     assert not jobs.jobs
+
+
+def test_pd_preview_runs_real_physics_without_loading_sonic(monkeypatch):
+    def forbidden():
+        pytest.fail('PD-only physics must not load SONIC models')
+    monkeypatch.setattr(preview, 'SonicCPU', forbidden)
+    robot = Robot()
+    project = new_project(robot)
+    project['keyframes'][0]['duration'] = .12
+    original = copy.deepcopy(project)
+    result = preview.simulate(project, controller='pd')
+    assert result['physics'] and result['policy'] is None
+    assert result['controller'] == 'pd'
+    assert result['summary']['policy_hz'] == 0
+    assert result['time'][-1] == pytest.approx(.12)
+    assert not np.allclose(result['states'][-1]['qpos'], robot.home)
+    assert result['summary']['joint_rmse_rad'] > 0
+    assert original == project
+    json.dumps(result, allow_nan=False)
+
+
+def test_pd_worker_uses_server_environment_without_sonic_assets(monkeypatch):
+    monkeypatch.setattr(preview, 'runtime', lambda: {'available': False})
+    calls = []
+    def capture(args, **kwargs):
+        calls.append(args)
+        raise OSError('launch intercepted')
+    monkeypatch.setattr(preview.subprocess, 'Popen', capture)
+    jobs = preview.PreviewJobs()
+    project = new_project(Robot())
+    with pytest.raises(ValueError, match='launch intercepted'):
+        jobs.start(project, controller='pd')
+    assert calls[0][0] == preview.sys.executable
+    assert calls[0][-1] == 'pd'
+    with pytest.raises(ValueError, match='SONIC CPU 실행 환경'):
+        jobs.start(project, controller='gear-sonic')
+    with pytest.raises(ValueError, match='Unknown physics controller'):
+        jobs.start(project, controller='unknown')
+    assert len(calls) == 1
+
+
+def test_preview_api_validates_controller_and_preserves_default():
+    from pydantic import ValidationError
+    from motioncreator.server import PhysicsPreviewInput
+    assert PhysicsPreviewInput(project={}).controller == 'gear-sonic'
+    assert PhysicsPreviewInput(project={}, controller='pd').controller == 'pd'
+    with pytest.raises(ValidationError):
+        PhysicsPreviewInput(project={}, controller='unknown')
