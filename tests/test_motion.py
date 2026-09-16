@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 import httpx
@@ -78,12 +79,25 @@ def test_motion_endpoints_contacts_and_smoothness(robot):
 def test_project_and_npz_roundtrip(robot, tmp_path):
     project = crouch_demo(robot)
     project['name'] = '../../outside/한글 모션'
+    project['scene_objects'] = [{
+        'id': 'crate', 'name': 'Crate', 'shape': 'box', 'position': [.6, 0., .2],
+        'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.4, .3, .4], 'mass_kg': 2.,
+        'friction': .7, 'color': '#336699', 'opacity': .8, 'visible': True,
+    }]
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
     for filename in bundle['files']:
         assert (tmp_path / filename).parent.parent == tmp_path
-    assert [Path(name).name for name in bundle['files']] == ['motion.npz', 'motion.csv', 'project.json', 'metadata.json']
+    assert [Path(name).name for name in bundle['files']] == ['motion.npz', 'motion.csv', 'project.json', 'environment.json', 'metadata.json']
     editable = json.loads((tmp_path / bundle['project_file']).read_text())
     validate_project(robot, editable)
+    environment_path = tmp_path / bundle['environment_file']
+    environment = json.loads(environment_path.read_text())
+    assert environment['format'] == 'motioncreator.environment.v1'
+    assert environment['coordinate_system'] == project['coordinate_system']
+    assert environment['physics']['gravity_m_s2'] == [0., 0., -9.81]
+    assert environment['physics']['floor']['friction'] == [1., .005, .0001]
+    assert environment['scene_objects'] == project['scene_objects']
+    assert bundle['metadata']['environment_sha256'] == hashlib.sha256(environment_path.read_bytes()).hexdigest()
     with np.load(tmp_path / bundle['npz_file'], allow_pickle=False) as data:
         assert set(data.files) == {'posed_joints', 'global_rot_mats', 'local_rot_mats', 'root_positions', 'foot_contacts'}
         assert data['posed_joints'].shape == (61, 34, 3)

@@ -1,4 +1,5 @@
 """Versioned project files and contact-aware kinematic reference exports."""
+import hashlib
 import io
 import json
 import re
@@ -13,6 +14,7 @@ from .robot import Robot, ROOT, FEET, HANDLES, BASIC_ROTATABLE as ROTATABLE, qua
 from .kimodo_format import KIMODO_KEYS, export_kimodo_g1, kimodo_g1_to_qpos
 
 FORMAT = 'motioncreator.g1.v1'
+ENVIRONMENT_FORMAT = 'motioncreator.environment.v1'
 MAX_KEYFRAMES = 100
 MAX_MOTION_SAMPLES = 3000
 SCENE_SHAPES = {'box', 'sphere', 'cylinder'}
@@ -29,6 +31,24 @@ def project_scene_objects(project):
              'position': box['position'], 'quaternion_xyzw': [0., 0., 0., 1.],
              'size': box['size'], 'mass_kg': 1., 'friction': .7,
              'color': '#b98853', 'opacity': .62, 'visible': box['visible']}]
+
+
+def environment_snapshot(project):
+    """Return the portable environment stored beside an exported motion."""
+    return {
+        'format': ENVIRONMENT_FORMAT,
+        'coordinate_system': project['coordinate_system'],
+        'units': project['units'],
+        'physics': {
+            'gravity_m_s2': [0., 0., -9.81],
+            'floor': {
+                'height_m': 0.,
+                'friction': [1., .005, .0001],
+                'friction_semantics': ['sliding', 'torsional', 'rolling'],
+            },
+        },
+        'scene_objects': project_scene_objects(project),
+    }
 
 
 def validate_project(robot: Robot, project):
@@ -290,6 +310,9 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     for q in motion['qpos']:
         state = robot.state(q)
         floor.append(state['floor_min_mm'])
+    environment = environment_snapshot(project)
+    environment_text = json.dumps(environment, ensure_ascii=False, indent=2)
+    environment_sha256 = hashlib.sha256(environment_text.encode('utf-8')).hexdigest()
     metadata = {'format': FORMAT, 'model_sha256': robot.fingerprint, 'joint_names': robot.names,
                 'reference_schema': 'motioncreator.reference.v2',
                 'npz_format': 'kimodo.g1.34',
@@ -311,20 +334,24 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
                 'interpolation': ('imported clip resampled with piecewise-linear position/joints and root SLERP'
                                   if project['keyframes'][0].get('samples') is not None else
                                   'quintic easing, shortest-path root SLERP, orientation-aware IK for shared pins; finite-difference velocities'),
+                'environment_file': 'environment.json', 'environment_sha256': environment_sha256,
                 'fps': fps, 'samples': len(motion['time'])}
     npz_path = folder / 'motion.npz'
     csv_path = folder / 'motion.csv'
     json_path = folder / 'project.json'
+    environment_path = folder / 'environment.json'
     metadata_path = folder / 'metadata.json'
     np.savez_compressed(npz_path, **export_kimodo_g1(robot, motion['qpos'], fps))
     np.savetxt(csv_path, motion['qpos'], delimiter=',')
     json_path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding='utf-8')
+    environment_path.write_text(environment_text, encoding='utf-8')
     metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
     def relative(path):
         return str(path.relative_to(root_folder))
-    exported = [npz_path, csv_path, json_path, metadata_path]
+    exported = [npz_path, csv_path, json_path, environment_path, metadata_path]
     result = {'files': [relative(path) for path in exported], 'directory': str(folder), 'folder': stem,
-              'metadata': metadata, 'project_file': relative(json_path), 'metadata_file': relative(metadata_path),
+              'metadata': metadata, 'project_file': relative(json_path), 'environment_file': relative(environment_path),
+              'metadata_file': relative(metadata_path),
               'npz_file': relative(npz_path), 'csv_file': relative(csv_path)}
     if protomotions:
         from .protomotions_bridge import export_isolated
