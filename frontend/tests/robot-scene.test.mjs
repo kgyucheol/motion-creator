@@ -5,6 +5,22 @@ import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_J
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 import { groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent } from '../lib/scene-objects.ts';
+import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
+
+test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
+  const frames = [
+    { name: 'Start', duration: 2, qpos: [0, 1], pins: ['left_foot'] },
+    { name: 'Reach', duration: 1.25, qpos: [2, 3], pins: ['right_foot'] },
+    { name: 'Finish', duration: .5, qpos: [4, 5], pins: [] },
+  ];
+  const result = duplicateKeyframeAfter(frames, 1);
+  assert.equal(result.index, 2);
+  assert.deepEqual(result.keyframes.map(frame => frame.name), ['Start', 'Reach', 'Reach', 'Finish']);
+  assert.deepEqual(result.keyframes[2], frames[1]);
+  assert.notEqual(result.keyframes[2], frames[1]);
+  assert.notEqual(result.keyframes[2].qpos, frames[1].qpos);
+  assert.notEqual(result.keyframes[2].pins, frames[1].pins);
+});
 
 test('primitive scale constraints preserve spheres and round cylinders', () => {
   assert.deepEqual(normalizedObjectSize('box', [.2, .3, .4]), [.2, .3, .4]);

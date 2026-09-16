@@ -8,15 +8,14 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
 import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectsFromProject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape } from '../lib/scene-objects';
+import { duplicateKeyframeAfter, type Keyframe } from '../lib/keyframes';
 
-type Keyframe = { name: string; duration: number; qpos: number[]; pins: string[]; samples?: number[][] };
 type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
 const feet = ['left_foot', 'right_foot'];
-const copy = <T,>(value: T): T => structuredClone(value);
 function selectionCenter(pose: PoseState, members: string[]) {
   const controls = controlSelection(members);
   return [0, 1, 2].map(i => controls.reduce((sum, key) => sum + pose.handles[key].position[i], 0) / controls.length);
@@ -411,10 +410,20 @@ export default function Editor() {
     invalidate();
   }
   function addFrame() {
-    if (!project || !state) return;
-    const next = { name: `Pose ${project.keyframes.length + 1}`, duration: 2, qpos: [...state.qpos], pins: [...pins] };
-    setProject({ ...project, keyframes: [...project.keyframes, next] }); setFrameIndex(project.keyframes.length);
-    setPoseDirty(false); invalidate(); setMessage('현재 자세를 새 키프레임에 추가했습니다.');
+    if (!project || !state || !project.keyframes[frameIndex]) return;
+    const duplicated = duplicateKeyframeAfter(project.keyframes, frameIndex);
+    const source = project.keyframes[frameIndex];
+    const finish = (restored?: PoseState) => {
+      setProject({ ...project, keyframes: duplicated.keyframes }); setFrameIndex(duplicated.index);
+      if (restored) applyState(restored);
+      setPins([...source.pins]); setPoseDirty(false); setInfo(null); invalidate();
+      setMessage('선택한 키프레임을 바로 다음 순번에 복제했습니다.');
+    };
+    const displayedPoseDiffers = source.qpos.some((value, index) => Math.abs(value - state.qpos[index]) > 1e-10)
+      || source.pins.length !== pins.length || source.pins.some(pin => !pins.includes(pin));
+    if (poseDirty || displayedPoseDiffers) {
+      void run(async () => { const restored = await api<PoseState>('pose', { qpos: source.qpos }); checkpoint(); finish(restored); });
+    } else finish();
   }
   async function chooseFrame(index: number) {
     if (!project) return;
