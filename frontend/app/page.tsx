@@ -15,6 +15,7 @@ type Preview = { time: number[]; states: PoseState[]; object_states?: Record<str
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
+type EditorSnapshot = { qpos: number[]; pins: string[]; objects: SceneObject[]; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
 function selectionCenter(pose: PoseState, members: string[]) {
   const controls = controlSelection(members);
@@ -90,10 +91,11 @@ export default function Editor() {
   const [savedChoice, setSavedChoice] = useState('');
   const [historyCount, setHistoryCount] = useState(0);
   const [futureCount, setFutureCount] = useState(0);
-  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock });
-  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock };
-  const history = useRef<{ qpos: number[]; pins: string[] }[]>([]);
-  const future = useRef<{ qpos: number[]; pins: string[] }[]>([]);
+  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty });
+  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty };
+  const history = useRef<EditorSnapshot[]>([]);
+  const future = useRef<EditorSnapshot[]>([]);
+  const objectDragCheckpointed = useRef(false);
   const anchor = useRef<number[]>([]);
   const anchorPositions = useRef<Record<string, number[]>>({});
   const anchorCenter = useRef<number[]>([0, 0, 0]);
@@ -122,9 +124,14 @@ export default function Editor() {
       setRotation(eulerDegrees(next.handles[controlKey(current.current.members, current.current.selected)].quaternion));
     }
   }
+  function editorSnapshot(): EditorSnapshot | null {
+    const value = current.current;
+    return value.state ? { qpos: [...value.state.qpos], pins: [...value.pins], objects: structuredClone(value.objects), poseDirty: value.poseDirty } : null;
+  }
   function checkpoint() {
-    if (!current.current.state) return;
-    history.current.push({ qpos: [...current.current.state.qpos], pins: [...current.current.pins] });
+    const snapshot = editorSnapshot();
+    if (!snapshot) return;
+    history.current.push(snapshot);
     if (history.current.length > 60) history.current.shift();
     future.current = [];
     setHistoryCount(history.current.length); setFutureCount(0);
@@ -137,7 +144,8 @@ export default function Editor() {
     setProject(value => value ? { ...value, scene_objects: grounded } : value);
     invalidate();
   }
-  function changeObject(id: string, patch: Partial<SceneObject>) {
+  function changeObject(id: string, patch: Partial<SceneObject>, recordHistory = true) {
+    if (recordHistory) checkpoint();
     commitObjects(current.current.objects.map(object => {
       if (object.id !== id) return object;
       const next = { ...object, ...patch };
@@ -159,6 +167,7 @@ export default function Editor() {
     scene.current?.selectSceneObject(current.current.selectedObjectId, mode);
   }
   function addObject(shape: SceneObjectShape) {
+    checkpoint();
     const created = createSceneObject(current.current.objects.length + 1, shape);
     const object = placeSceneObject(created, current.current.objects, {
       preventOverlap: current.current.preventObjectOverlap,
@@ -169,6 +178,7 @@ export default function Editor() {
     selectObject(object.id);
   }
   function removeObject(id: string) {
+    checkpoint();
     commitObjects(current.current.objects.filter(object => object.id !== id));
     selectObject(null);
   }
@@ -309,7 +319,12 @@ export default function Editor() {
         jointAngle: (key, angle) => actions.current.jointAngle(key, angle),
         history: redo => actions.current.history(redo),
         selectObject,
-        transformObject: changeObject,
+        objectTransformBegin: () => { objectDragCheckpointed.current = false; },
+        transformObject: (id, patch) => {
+          if (!objectDragCheckpointed.current) { checkpoint(); objectDragCheckpointed.current = true; }
+          changeObject(id, patch, false);
+        },
+        objectTransformEnd: () => { objectDragCheckpointed.current = false; },
         objectTransformMode: changeObjectMode,
       });
       scene.current = viewer;
@@ -456,11 +471,20 @@ export default function Editor() {
       const to = redo ? history.current : future.current;
       const value = from[from.length - 1];
       if (!value || !current.current.state) return;
-      const restored = await api<PoseState>('pose', { qpos: value.qpos });
+      const currentSnapshot = editorSnapshot();
+      if (!currentSnapshot) return;
+      const poseChanged = value.qpos.some((position, index) => Math.abs(position - current.current.state!.qpos[index]) > 1e-12);
+      const restored = poseChanged ? await api<PoseState>('pose', { qpos: value.qpos }) : current.current.state;
       from.pop();
-      to.push({ qpos: [...current.current.state.qpos], pins: [...current.current.pins] });
-      applyState(restored); setPins(value.pins); setInfo(null);
-      setHistoryCount(history.current.length); setFutureCount(future.current.length); setPoseDirty(true); invalidate();
+      to.push(currentSnapshot);
+      const restoredObjects = structuredClone(value.objects);
+      applyState(restored); current.current.pins = [...value.pins]; setPins([...value.pins]); setInfo(null);
+      current.current.objects = restoredObjects; setObjects(restoredObjects);
+      setProject(projectValue => projectValue ? { ...projectValue, scene_objects: restoredObjects } : projectValue);
+      if (current.current.selectedObjectId && !restoredObjects.some(object => object.id === current.current.selectedObjectId)) selectObject(null);
+      current.current.poseDirty = value.poseDirty; setPoseDirty(value.poseDirty);
+      setHistoryCount(history.current.length); setFutureCount(future.current.length); invalidate();
+      setMessage(redo ? '되돌리기를 취소해 마지막 편집을 다시 적용했습니다.' : '마지막 편집을 되돌렸습니다.');
     });
   }
   function numericMove(values: number[]) {
@@ -653,7 +677,7 @@ export default function Editor() {
         <progress aria-label="물리 계산 진행률" max={1} value={policyJob.progress}/>
         <button type="button" onClick={() => void cancelPolicy()}>계산 취소</button>
       </div>}
-      <div className="viewport-tools"><button title="자세 실행 취소 (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled={disabled || !historyCount} onClick={() => changeHistory(false)}><Undo2 size={17}/></button><button title="자세 다시 실행 (Ctrl+Shift+Z)" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled={disabled || !futureCount} onClick={() => changeHistory(true)}><Redo2 size={17}/></button><span/><button className={showHandles ? 'chosen' : ''} title="조작 표시 켜기/끄기" onClick={() => setShowHandles(!showHandles)}><MousePointer2 size={17}/></button></div>
+      <div className="viewport-tools"><button title="되돌리기 (Ctrl+Z)" aria-label="되돌리기" aria-keyshortcuts="Control+Z Meta+Z" disabled={disabled || !historyCount} onClick={() => changeHistory(false)}><Undo2 size={17}/></button><button title="되돌리기 취소 (Ctrl+Shift+Z)" aria-label="되돌리기 취소" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled={disabled || !futureCount} onClick={() => changeHistory(true)}><Redo2 size={17}/></button><span/><button className={showHandles ? 'chosen' : ''} title="조작 표시 켜기/끄기" onClick={() => setShowHandles(!showHandles)}><MousePointer2 size={17}/></button></div>
       <div className="scene-legend"><span><i className="cyan"/>이동 가능</span><span><i className="amber"/>고정</span><span><i className="mint"/>선택</span></div>
       <div className="viewport-bottom"><span>드래그: 회전 · 휠: 확대 · 우클릭: 이동 · 로봇 W/E · 물체 W/E/R · F: 선택 보기</span><span className="axes"><b>X</b> 전방 <b>Y</b> 왼쪽 <b>Z</b> 위</span></div>
       {busy && <div className="busy-overlay"><span className="spinner"/>모션을 계산하고 있습니다…</div>}

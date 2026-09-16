@@ -52,6 +52,8 @@ type Callbacks = {
   history?: (redo: boolean) => void;
   selectObject?: (id: string | null) => void;
   transformObject?: (id: string, patch: Partial<SceneObject>) => void;
+  objectTransformBegin?: () => void;
+  objectTransformEnd?: () => void;
   objectTransformMode?: (mode: ObjectTransformMode) => void;
 };
 
@@ -133,6 +135,8 @@ export class RobotScene {
     this.gizmo.addEventListener('dragging-changed', event => {
       this.orbit.enabled = !event.value;
       if (this.selectedSceneObject) {
+        if (event.value) this.callbacks.objectTransformBegin?.();
+        else this.callbacks.objectTransformEnd?.();
         this.dirty = true;
         return;
       }
