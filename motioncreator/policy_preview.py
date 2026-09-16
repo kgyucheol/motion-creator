@@ -35,6 +35,25 @@ def _numbers(values):
     return ' '.join(str(float(value)) for value in values)
 
 
+def project_from_keyframe(project, start_frame_index=0):
+    """Create an isolated physics timeline beginning at an authored keyframe."""
+    frames = project.get('keyframes', [])
+    if not isinstance(start_frame_index, int) or isinstance(start_frame_index, bool):
+        raise ValueError('Physics start keyframe index must be an integer')
+    if not 0 <= start_frame_index < len(frames):
+        raise ValueError('Physics start keyframe index is out of range')
+    selected = copy.deepcopy(project)
+    selected['keyframes'] = copy.deepcopy(frames[start_frame_index:])
+    selected['current_qpos'] = copy.deepcopy(selected['keyframes'][0]['qpos'])
+    selected['pins'] = copy.deepcopy(selected['keyframes'][0].get('pins', []))
+    return selected
+
+
+def preview_duration(project):
+    frames = project['keyframes']
+    return float(frames[0]['duration']) if len(frames) == 1 else sum(float(frame['duration']) for frame in frames[1:])
+
+
 def _grounded_position(item):
     position = np.asarray(item['position'], dtype=float).copy()
     size = np.asarray(item['size'], dtype=float)
@@ -95,10 +114,13 @@ def build_model(robot, project=None):
     return model
 
 
-def simulate(project, progress=lambda value: None, *, controller='gear-sonic'):
+def simulate(project, progress=lambda value: None, *, controller='gear-sonic', start_frame_index=0):
     if controller not in ('pd', 'gear-sonic'):
         raise ValueError('Unknown physics controller')
     robot = Robot()
+    validate_project(robot, project)
+    project = project_from_keyframe(project, start_frame_index)
+    start_frame_name = project['keyframes'][0]['name']
     motion = compile_motion(robot, project, fps=50)
     times, poses = motion['time'], motion['qpos']
     # A single authored pose is a hold, so it can also be tested under gravity.
@@ -165,7 +187,7 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic'):
                 'reference_seconds': float(times[-1]), 'joint_rmse_rad': float(np.sqrt(np.mean(errors))) if errors else 0.,
                 'max_torque_saturation': max(saturation, default=0.),
                 'device': 'cpu', 'physics_hz': 500, 'policy_hz': 50 if policy is not None else 0,
-                'target_hz': 50}}
+                'target_hz': 50, 'start_frame_index': start_frame_index, 'start_frame_name': start_frame_name}}
 
 
 class PreviewJobs:
@@ -173,12 +195,13 @@ class PreviewJobs:
         self.lock = threading.Lock()
         self.jobs = {}
 
-    def start(self, project, controller='gear-sonic'):
+    def start(self, project, controller='gear-sonic', start_frame_index=0):
         if controller not in ('pd', 'gear-sonic'):
             raise ValueError('Unknown physics controller')
-        validate_project(Robot(), project)
-        frames = project['keyframes']
-        duration = frames[0]['duration'] if len(frames) == 1 else sum(f['duration'] for f in frames[1:])
+        robot = Robot()
+        validate_project(robot, project)
+        selected_project = project_from_keyframe(project, start_frame_index)
+        duration = preview_duration(selected_project)
         if duration > MAX_SECONDS:
             raise ValueError(f'물리 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
         if controller == 'gear-sonic' and not runtime()['available']:
@@ -199,7 +222,7 @@ class PreviewJobs:
                 with (folder / 'worker.log').open('w') as log:
                     executable = str(ROOT / '.conda-policy/bin/python') if controller == 'gear-sonic' else sys.executable
                     process = subprocess.Popen([executable, '-m',
-                        'motioncreator.policy_preview', str(folder), controller], cwd=ROOT, env=env,
+                        'motioncreator.policy_preview', str(folder), controller, str(start_frame_index)], cwd=ROOT, env=env,
                         stdout=log, stderr=subprocess.STDOUT)
             except OSError as exc:
                 temporary.cleanup()
@@ -208,7 +231,7 @@ class PreviewJobs:
             job = {'status': 'running', 'process': process, 'folder': folder, 'temporary': temporary}
             self.jobs[identifier] = job
             threading.Thread(target=self._watch, args=(job,), daemon=True).start()
-        return {'id': identifier, 'status': 'running', 'progress': 0.}
+        return {'id': identifier, 'status': 'running', 'progress': 0., 'start_frame_index': start_frame_index}
 
     def _watch(self, job):
         try:
@@ -275,7 +298,8 @@ if __name__ == '__main__':
     try:
         result = simulate(json.loads((folder / 'project.json').read_text()),
                           lambda value: atomic_json(folder / 'progress.json', {'progress': value}),
-                          controller=sys.argv[2] if len(sys.argv) > 2 else 'gear-sonic')
+                          controller=sys.argv[2] if len(sys.argv) > 2 else 'gear-sonic',
+                          start_frame_index=int(sys.argv[3]) if len(sys.argv) > 3 else 0)
         atomic_json(folder / 'result.json', result)
     except Exception as exc:
         atomic_json(folder / 'error.json', {'message': str(exc)})

@@ -85,6 +85,33 @@ def test_simulated_replay_preserves_authoring_and_reports_tracking(monkeypatch):
     json.dumps(result, allow_nan=False)
 
 
+def test_physics_preview_starts_at_selected_keyframe():
+    robot = Robot()
+    project = new_project(robot)
+    project['keyframes'][0]['pins'] = []
+    middle = copy.deepcopy(project['keyframes'][0])
+    middle.update(name='Middle', duration=.1)
+    middle['qpos'][7] += .1
+    finish = copy.deepcopy(middle)
+    finish.update(name='Finish', duration=.14)
+    finish['qpos'][7] += .1
+    project['keyframes'] += [middle, finish]
+    original = copy.deepcopy(project)
+
+    selected = preview.project_from_keyframe(project, 1)
+    assert [frame['name'] for frame in selected['keyframes']] == ['Middle', 'Finish']
+    assert preview.preview_duration(selected) == pytest.approx(.14)
+    assert preview.preview_duration(preview.project_from_keyframe(project, 2)) == pytest.approx(.14)
+    result = preview.simulate(project, controller='pd', start_frame_index=1)
+    np.testing.assert_allclose(result['states'][0]['qpos'], middle['qpos'])
+    assert result['summary']['reference_seconds'] == pytest.approx(.14)
+    assert result['summary']['start_frame_index'] == 1
+    assert result['summary']['start_frame_name'] == 'Middle'
+    assert project == original
+    with pytest.raises(ValueError, match='out of range'):
+        preview.project_from_keyframe(project, 3)
+
+
 def test_preview_detects_fall_and_rejects_long_timeline(monkeypatch):
     robot = Robot()
     project = new_project(robot)
@@ -158,7 +185,7 @@ def test_pd_worker_uses_server_environment_without_sonic_assets(monkeypatch):
     with pytest.raises(ValueError, match='launch intercepted'):
         jobs.start(project, controller='pd')
     assert calls[0][0] == preview.sys.executable
-    assert calls[0][-1] == 'pd'
+    assert calls[0][-2:] == ['pd', '0']
     with pytest.raises(ValueError, match='SONIC CPU 실행 환경'):
         jobs.start(project, controller='gear-sonic')
     with pytest.raises(ValueError, match='Unknown physics controller'):
@@ -170,6 +197,10 @@ def test_preview_api_validates_controller_and_preserves_default():
     from pydantic import ValidationError
     from motioncreator.server import PhysicsPreviewInput
     assert PhysicsPreviewInput(project={}).controller == 'gear-sonic'
+    assert PhysicsPreviewInput(project={}).start_frame_index == 0
     assert PhysicsPreviewInput(project={}, controller='pd').controller == 'pd'
+    assert PhysicsPreviewInput(project={}, start_frame_index=3).start_frame_index == 3
     with pytest.raises(ValidationError):
         PhysicsPreviewInput(project={}, controller='unknown')
+    with pytest.raises(ValidationError):
+        PhysicsPreviewInput(project={}, start_frame_index=-1)

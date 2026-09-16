@@ -11,7 +11,7 @@ import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectsFr
 import { duplicateKeyframeAfter, type Keyframe } from '../lib/keyframes';
 
 type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
-type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number } };
+type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
@@ -495,8 +495,9 @@ export default function Editor() {
       policySource.current = state ? { state, pins: [...pins], frameIndex, dirty: poseDirty } : null;
       policyRequest.current = request;
       try {
-        setMessage(`${controllerLabel} 물리 계산 준비 중…`);
-        let job = await api<PolicyJob>('policy-preview', { project, controller: policyEnabled ? 'gear-sonic' : 'pd' });
+        const startFrame = project?.keyframes[frameIndex];
+        setMessage(`${controllerLabel} · ${frameIndex + 1}번 ${startFrame?.name ?? '키프레임'}부터 물리 계산 준비 중…`);
+        let job = await api<PolicyJob>('policy-preview', { project, controller: policyEnabled ? 'gear-sonic' : 'pd', start_frame_index: frameIndex });
         request.id = job.id;
         if (request.cancelled) {
           await api(`policy-preview/${job.id}/cancel`, {});
@@ -508,7 +509,7 @@ export default function Editor() {
           if (!alive.current || request.cancelled) return;
           job = await api<PolicyJob>(`policy-preview/${job.id}`);
           setPolicyJob(job);
-          setMessage(`${controllerLabel} 물리 계산 ${Math.round(job.progress * 100)}% · CPU`);
+          setMessage(`${controllerLabel} · ${frameIndex + 1}번 키프레임부터 물리 계산 ${Math.round(job.progress * 100)}% · CPU`);
         }
         if (job.status === 'cancelled') { setMessage('물리 계산을 취소했습니다.'); return; }
         if (job.status !== 'completed') throw new Error(job.message || '물리 계산에 실패했습니다.');
@@ -518,7 +519,7 @@ export default function Editor() {
         if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
         const summary = result.summary!;
         const outcome = summary.reason === 'fallen' ? '넘어짐으로 조기 종료' : summary.reason === 'completed' ? '계산 완료' : '수치 불안정으로 중단';
-        setMessage(`${controllerLabel} ${outcome} · ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°`);
+        setMessage(`${controllerLabel} ${outcome} · ${frameIndex + 1}번 키프레임부터 ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°`);
       } catch (failure) {
         if (request.id) await api(`policy-preview/${request.id}/cancel`, {}).catch(() => {});
         throw failure;
