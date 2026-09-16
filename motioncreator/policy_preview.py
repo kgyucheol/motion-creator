@@ -35,6 +35,24 @@ def _numbers(values):
     return ' '.join(str(float(value)) for value in values)
 
 
+def _grounded_position(item):
+    position = np.asarray(item['position'], dtype=float).copy()
+    size = np.asarray(item['size'], dtype=float)
+    if item['shape'] == 'sphere':
+        extent = size[0] / 2
+    else:
+        x, y, z, w = np.asarray(item['quaternion_xyzw'], dtype=float)
+        r20 = 2 * (x * z - w * y)
+        r21 = 2 * (y * z + w * x)
+        r22 = 1 - 2 * (x * x + y * y)
+        if item['shape'] == 'cylinder':
+            extent = size[0] / 2 * np.hypot(r20, r21) + size[2] / 2 * abs(r22)
+        else:
+            extent = abs(r20) * size[0] / 2 + abs(r21) * size[1] / 2 + abs(r22) * size[2] / 2
+    position[2] = max(position[2], extent)
+    return position
+
+
 def build_model(robot, project=None):
     root = ET.parse(MODEL_PATH).getroot()
     root.find('compiler').set('meshdir', str(ROOT / 'assets/g1/meshes'))
@@ -59,7 +77,7 @@ def build_model(robot, project=None):
         world = root.find('worldbody')
         for index, item in enumerate(objects):
             body = ET.SubElement(world, 'body', name=f'preview_object_{index}',
-                                 pos=_numbers(item['position']),
+                                 pos=_numbers(_grounded_position(item)),
                                  quat=_numbers(np.asarray(item['quaternion_xyzw'])[[3, 0, 1, 2]]))
             ET.SubElement(body, 'freejoint', name=f'preview_object_joint_{index}')
             size = np.asarray(item['size'], dtype=float)

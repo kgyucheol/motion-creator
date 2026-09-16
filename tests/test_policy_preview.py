@@ -48,6 +48,19 @@ def test_primitive_scene_objects_are_free_bodies_and_replay_from_authored_pose()
     assert project['scene_objects'][0]['position'] == [2., 0., .8]
 
 
+def test_scene_object_start_pose_is_raised_above_floor_for_its_rotation():
+    robot = Robot()
+    project = new_project(robot)
+    project['scene_objects'] = [{
+        'id': 'low-box', 'name': 'Low box', 'shape': 'box', 'position': [2., 0., -.5],
+        'quaternion_xyzw': [0., np.sqrt(.5), 0., np.sqrt(.5)], 'size': [.2, .4, .6],
+        'mass_kg': 1., 'friction': .7, 'color': '#336699', 'opacity': 1., 'visible': True,
+    }]
+    model = preview.build_model(robot, project)
+    address = model.joint('preview_object_joint_0').qposadr[0]
+    assert model.qpos0[address + 2] == pytest.approx(.1)
+
+
 def test_simulated_replay_preserves_authoring_and_reports_tracking(monkeypatch):
     robot = Robot()
     project = new_project(robot)

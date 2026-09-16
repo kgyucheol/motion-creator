@@ -30,6 +30,25 @@ export function normalizedObjectSize(shape: SceneObjectShape, size: number[], ax
   return safe;
 }
 
+export function objectVerticalHalfExtent(object: Pick<SceneObject, 'shape' | 'size' | 'quaternion_xyzw'>) {
+  const size = normalizedObjectSize(object.shape, object.size);
+  if (object.shape === 'sphere') return size[0] / 2;
+  const [x, y, z, w] = object.quaternion_xyzw;
+  const r20 = 2 * (x * z - w * y);
+  const r21 = 2 * (y * z + w * x);
+  const r22 = 1 - 2 * (x * x + y * y);
+  if (object.shape === 'cylinder') {
+    return size[0] / 2 * Math.hypot(r20, r21) + size[2] / 2 * Math.abs(r22);
+  }
+  return Math.abs(r20) * size[0] / 2 + Math.abs(r21) * size[1] / 2 + Math.abs(r22) * size[2] / 2;
+}
+
+export function groundedSceneObject<T extends SceneObject>(object: T): T {
+  const minimumZ = objectVerticalHalfExtent(object);
+  if (object.position[2] >= minimumZ) return object;
+  return { ...object, position: [object.position[0], object.position[1], minimumZ] };
+}
+
 export function createSceneObject(index = 1, shape: SceneObjectShape = 'box'): SceneObject {
   const base = shape === 'sphere' ? [.28, .28, .28] : shape === 'cylinder' ? [.24, .24, .32] : [.3, .32, .24];
   return {
@@ -48,10 +67,10 @@ export function createSceneObject(index = 1, shape: SceneObjectShape = 'box'): S
 }
 
 export function objectsFromProject(project: { scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } }) {
-  if (Array.isArray(project.scene_objects)) return structuredClone(project.scene_objects);
+  if (Array.isArray(project.scene_objects)) return structuredClone(project.scene_objects).map(groundedSceneObject);
   if (project.box) {
     const object = createSceneObject(1);
-    return [{ ...object, id: 'legacy-box', position: [...project.box.position], size: [...project.box.size], visible: project.box.visible }];
+    return [groundedSceneObject({ ...object, id: 'legacy-box', position: [...project.box.position], size: [...project.box.size], visible: project.box.visible })];
   }
   return [createSceneObject(1)];
 }

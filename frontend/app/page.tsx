@@ -7,7 +7,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, Box, ChevronLeft, ChevronRight, Trash2, Download, Check, AlertCircle } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
-import { createSceneObject, normalizedObjectSize, objectsFromProject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape } from '../lib/scene-objects';
+import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectsFromProject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape } from '../lib/scene-objects';
 
 type Keyframe = { name: string; duration: number; qpos: number[]; pins: string[]; samples?: number[][] };
 type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
@@ -129,9 +129,10 @@ export default function Editor() {
   }
   function invalidate() { setPreview(null); setSample(0); setPlaying(false); }
   function commitObjects(next: SceneObject[]) {
-    current.current.objects = next;
-    setObjects(next);
-    setProject(value => value ? { ...value, scene_objects: next } : value);
+    const grounded = next.map(groundedSceneObject);
+    current.current.objects = grounded;
+    setObjects(grounded);
+    setProject(value => value ? { ...value, scene_objects: grounded } : value);
     invalidate();
   }
   function changeObject(id: string, patch: Partial<SceneObject>) {

@@ -4,12 +4,24 @@ import * as THREE from 'three';
 import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { normalizedObjectSize } from '../lib/scene-objects.ts';
+import { groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent } from '../lib/scene-objects.ts';
 
 test('primitive scale constraints preserve spheres and round cylinders', () => {
   assert.deepEqual(normalizedObjectSize('box', [.2, .3, .4]), [.2, .3, .4]);
   assert.deepEqual(normalizedObjectSize('sphere', [.2, .3, .4], 'Y'), [.3, .3, .3]);
   assert.deepEqual(normalizedObjectSize('cylinder', [.2, .3, .4], 'Y'), [.3, .3, .4]);
+});
+
+test('rotated primitives are raised until their lowest point rests on the floor', () => {
+  const base = { id: 'shape', name: 'Shape', position: [0, 0, -.2], size: [.2, .4, .6], mass_kg: 1,
+    friction: .7, color: '#ffffff', opacity: 1, visible: true };
+  const upright = { ...base, shape: 'box', quaternion_xyzw: [0, 0, 0, 1] };
+  assert.equal(objectVerticalHalfExtent(upright), .3);
+  assert.equal(groundedSceneObject(upright).position[2], .3);
+  const turned = { ...upright, quaternion_xyzw: [0, Math.SQRT1_2, 0, Math.SQRT1_2] };
+  assert.ok(Math.abs(objectVerticalHalfExtent(turned) - .1) < 1e-12);
+  const cylinder = { ...base, shape: 'cylinder', size: [.2, .2, .6], quaternion_xyzw: [Math.SQRT1_2, 0, 0, Math.SQRT1_2] };
+  assert.ok(Math.abs(objectVerticalHalfExtent(cylinder) - .1) < 1e-12);
 });
 
 function fixture() {
