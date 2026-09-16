@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent } from '../lib/scene-objects.ts';
+import { groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
@@ -38,6 +38,25 @@ test('rotated primitives are raised until their lowest point rests on the floor'
   assert.ok(Math.abs(objectVerticalHalfExtent(turned) - .1) < 1e-12);
   const cylinder = { ...base, shape: 'cylinder', size: [.2, .2, .6], quaternion_xyzw: [Math.SQRT1_2, 0, 0, Math.SQRT1_2] };
   assert.ok(Math.abs(objectVerticalHalfExtent(cylinder) - .1) < 1e-12);
+});
+
+test('ground-locked objects stop at the nearest non-overlapping surface', () => {
+  const fixed = { id: 'fixed', name: 'Fixed', shape: 'box', position: [0, 0, .5], size: [1, 1, 1],
+    quaternion_xyzw: [0, 0, 0, 1], mass_kg: 1, friction: .7, color: '#ffffff', opacity: 1, visible: true };
+  const previous = { ...fixed, id: 'moving', position: [-2, 0, .5] };
+  const candidate = { ...previous, position: [-.4, 0, 2] };
+  const placed = placeSceneObject(candidate, [fixed], { preventOverlap: true, surfaceSnap: false, groundLock: true }, previous);
+  assert.deepEqual(placed.position, [-1, 0, .5]);
+  assert.equal(sceneObjectsOverlap(placed, fixed), false);
+});
+
+test('surface snapping closes a small gap without requiring an overlap', () => {
+  const fixed = { id: 'fixed', name: 'Fixed', shape: 'box', position: [0, 0, .5], size: [1, 1, 1],
+    quaternion_xyzw: [0, 0, 0, 1], mass_kg: 1, friction: .7, color: '#ffffff', opacity: 1, visible: true };
+  const candidate = { ...fixed, id: 'moving', position: [-1.015, 0, .5] };
+  const placed = placeSceneObject(candidate, [fixed], { preventOverlap: true, surfaceSnap: true, groundLock: true });
+  assert.ok(Math.abs(placed.position[0] + 1) < 1e-12);
+  assert.equal(sceneObjectsOverlap(placed, fixed), false);
 });
 
 function fixture() {

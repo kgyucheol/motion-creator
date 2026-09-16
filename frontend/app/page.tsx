@@ -7,7 +7,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, Box, ChevronLeft, ChevronRight, Trash2, Download, Check, AlertCircle } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
-import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectsFromProject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape } from '../lib/scene-objects';
+import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectsFromProject, placeSceneObject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe } from '../lib/keyframes';
 
 type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
@@ -82,13 +82,16 @@ export default function Editor() {
   const [objects, setObjects] = useState<SceneObject[]>(() => objectsFromProject({}));
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [objectTransformMode, setObjectTransformMode] = useState<ObjectTransformMode>('translate');
+  const [preventObjectOverlap, setPreventObjectOverlap] = useState(true);
+  const [objectSurfaceSnap, setObjectSurfaceSnap] = useState(false);
+  const [objectGroundLock, setObjectGroundLock] = useState(true);
   const [files, setFiles] = useState<string[]>([]);
   const [saved, setSaved] = useState<string[]>([]);
   const [savedChoice, setSavedChoice] = useState('');
   const [historyCount, setHistoryCount] = useState(0);
   const [futureCount, setFutureCount] = useState(0);
-  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode });
-  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode };
+  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock });
+  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock };
   const history = useRef<{ qpos: number[]; pins: string[] }[]>([]);
   const future = useRef<{ qpos: number[]; pins: string[] }[]>([]);
   const anchor = useRef<number[]>([]);
@@ -138,7 +141,13 @@ export default function Editor() {
     commitObjects(current.current.objects.map(object => {
       if (object.id !== id) return object;
       const next = { ...object, ...patch };
-      return { ...next, size: normalizedObjectSize(next.shape, next.size) };
+      const normalized = { ...next, size: normalizedObjectSize(next.shape, next.size) };
+      if (!Object.keys(patch).some(key => ['position', 'quaternion_xyzw', 'size', 'shape'].includes(key))) return normalized;
+      return placeSceneObject(normalized, current.current.objects.filter(other => other.id !== id), {
+        preventOverlap: current.current.preventObjectOverlap,
+        surfaceSnap: current.current.objectSurfaceSnap,
+        groundLock: current.current.objectGroundLock,
+      }, object);
     }));
   }
   function selectObject(id: string | null) {
@@ -150,13 +159,23 @@ export default function Editor() {
     scene.current?.selectSceneObject(current.current.selectedObjectId, mode);
   }
   function addObject(shape: SceneObjectShape) {
-    const object = createSceneObject(current.current.objects.length + 1, shape);
+    const created = createSceneObject(current.current.objects.length + 1, shape);
+    const object = placeSceneObject(created, current.current.objects, {
+      preventOverlap: current.current.preventObjectOverlap,
+      surfaceSnap: current.current.objectSurfaceSnap,
+      groundLock: current.current.objectGroundLock,
+    });
     commitObjects([...current.current.objects, object]);
     selectObject(object.id);
   }
   function removeObject(id: string) {
     commitObjects(current.current.objects.filter(object => object.id !== id));
     selectObject(null);
+  }
+  function changeObjectPlacement(patch: Partial<ScenePlacementOptions>) {
+    if (patch.preventOverlap !== undefined) { current.current.preventObjectOverlap = patch.preventOverlap; setPreventObjectOverlap(patch.preventOverlap); }
+    if (patch.surfaceSnap !== undefined) { current.current.objectSurfaceSnap = patch.surfaceSnap; setObjectSurfaceSnap(patch.surfaceSnap); }
+    if (patch.groundLock !== undefined) { current.current.objectGroundLock = patch.groundLock; setObjectGroundLock(patch.groundLock); }
   }
   async function run(work: () => Promise<void>) {
     if (current.current.busy || inFlight.current) return;
@@ -686,7 +705,7 @@ export default function Editor() {
       </>}
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>
       <div className="section-divider"/>
-      <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} onSelect={selectObject} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode}/>
+      <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock} onSelect={selectObject} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}/>
       <div className="section-divider"/>
       <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>
       <select aria-label="최근 저장한 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">최근 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>

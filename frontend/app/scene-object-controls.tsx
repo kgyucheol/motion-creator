@@ -1,17 +1,21 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { eulerDegrees, quaternionFromDegrees } from '../lib/pose-transforms';
-import { normalizedObjectSize, type ObjectTransformMode, type SceneObject, type SceneObjectShape } from '../lib/scene-objects';
+import { normalizedObjectSize, objectVerticalHalfExtent, type ObjectTransformMode, type SceneObject, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 
 type Props = {
   objects: SceneObject[];
   selectedId: string | null;
   mode: ObjectTransformMode;
   disabled: boolean;
+  preventOverlap: boolean;
+  surfaceSnap: boolean;
+  groundLock: boolean;
   onSelect: (id: string | null) => void;
   onAdd: (shape: SceneObjectShape) => void;
   onRemove: (id: string) => void;
   onChange: (id: string, patch: Partial<SceneObject>) => void;
   onModeChange: (mode: ObjectTransformMode) => void;
+  onPlacementChange: (patch: Partial<ScenePlacementOptions>) => void;
 };
 
 const shapeLabels: Record<SceneObjectShape, string> = { box: '박스', cylinder: '원통', sphere: '구' };
@@ -35,6 +39,14 @@ export default function SceneObjectControls(props: Props) {
       <option value="">물체 선택</option>
       {props.objects.map(object => <option key={object.id} value={object.id}>{object.name} · {shapeLabels[object.shape]}</option>)}
     </select>}
+    <div className="object-placement-options">
+      <label className="checkbox"><input type="checkbox" checked={props.preventOverlap} disabled={props.disabled} onChange={event => props.onPlacementChange({ preventOverlap: event.target.checked })}/>겹침 방지</label>
+      <label className="checkbox"><input type="checkbox" checked={props.surfaceSnap} disabled={props.disabled} onChange={event => props.onPlacementChange({ surfaceSnap: event.target.checked })}/>표면 스냅</label>
+      <label className="checkbox"><input type="checkbox" checked={props.groundLock} disabled={props.disabled} onChange={event => {
+        props.onPlacementChange({ groundLock: event.target.checked });
+        if (event.target.checked && selected) props.onChange(selected.id, { position: [selected.position[0], selected.position[1], objectVerticalHalfExtent(selected)] });
+      }}/>지면 고정</label>
+    </div>
     {selected && <div className="object-editor">
       <div className="object-title-row"><input aria-label="물체 이름" value={selected.name} maxLength={80} disabled={props.disabled} onChange={event => props.onChange(selected.id, { name: event.target.value || selected.name })}/><button title="물체 삭제" disabled={props.disabled} onClick={() => props.onRemove(selected.id)}><Trash2 size={14}/></button></div>
       <div className="segmented object-modes">{(['translate', 'rotate', 'scale'] as ObjectTransformMode[]).map((mode, index) => <button key={mode} className={props.mode === mode ? 'chosen' : ''} disabled={props.disabled} onClick={() => props.onModeChange(mode)}>{['이동 W', '회전 E', '크기 R'][index]}</button>)}</div>
@@ -45,7 +57,7 @@ export default function SceneObjectControls(props: Props) {
       }}>{Object.entries(shapeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
       <label className="checkbox"><input type="checkbox" checked={selected.visible} disabled={props.disabled} onChange={event => props.onChange(selected.id, { visible: event.target.checked })}/>화면에 표시</label>
       <div className="inspector-label">위치 · 월드 XYZ <small>m</small></div>
-      <div className="xyz">{selected.position.map((value, index) => <label key={index}><span>{'XYZ'[index]}</span><input aria-label={`물체 위치 ${'XYZ'[index]}`} type="number" step=".01" value={Number(value.toFixed(4))} disabled={props.disabled} onChange={event => patchVector('position', index, +event.target.value)}/></label>)}</div>
+      <div className="xyz">{selected.position.map((value, index) => <label key={index}><span>{'XYZ'[index]}</span><input aria-label={`물체 위치 ${'XYZ'[index]}`} type="number" step=".01" value={Number(value.toFixed(4))} disabled={props.disabled || props.groundLock && index === 2} onChange={event => patchVector('position', index, +event.target.value)}/></label>)}</div>
       <div className="inspector-label">회전 · 월드 XYZ <small>°</small></div>
       <div className="xyz">{rotation.map((value, index) => <label key={index}><span>{'XYZ'[index]}</span><input aria-label={`물체 회전 ${'XYZ'[index]}`} type="number" step="1" value={Number(value.toFixed(2))} disabled={props.disabled} onChange={event => {
         const next = rotation.map((current, i) => i === index ? +event.target.value : current);
@@ -55,7 +67,7 @@ export default function SceneObjectControls(props: Props) {
       <div className="xyz">{selected.size.map((value, index) => <label key={index} className={selected.shape === 'sphere' && index > 0 || selected.shape === 'cylinder' && index === 1 ? 'linked-size' : ''}><span>{'XYZ'[index]}</span><input aria-label={`물체 크기 ${'XYZ'[index]}`} type="number" min=".01" step=".01" value={Number(value.toFixed(4))} disabled={props.disabled || selected.shape === 'sphere' && index > 0 || selected.shape === 'cylinder' && index === 1} onChange={event => patchVector('size', index, +event.target.value)}/></label>)}</div>
       <div className="object-physics-row"><label>질량 <span><input aria-label="물체 질량" type="number" min=".001" max="1000" step=".1" value={selected.mass_kg} disabled={props.disabled} onChange={event => props.onChange(selected.id, { mass_kg: Math.max(.001, Math.min(1000, +event.target.value || .001)) })}/> kg</span></label><label>마찰 <input aria-label="물체 마찰" type="number" min="0" max="2" step=".05" value={selected.friction} disabled={props.disabled} onChange={event => props.onChange(selected.id, { friction: Math.max(0, Math.min(2, +event.target.value || 0)) })}/></label></div>
       <div className="object-appearance-row"><label>색상 <input aria-label="물체 색상" type="color" value={selected.color} disabled={props.disabled} onChange={event => props.onChange(selected.id, { color: event.target.value })}/></label><label>불투명도 <span>{Math.round(selected.opacity * 100)}%</span><input aria-label="물체 불투명도" type="range" min=".05" max="1" step=".01" value={selected.opacity} disabled={props.disabled} onChange={event => props.onChange(selected.id, { opacity: +event.target.value })}/></label></div>
-      <p className="hint">기즈모로 이동·회전·크기를 조절합니다. 구는 균일 지름, 원통은 원형 지름과 높이를 유지합니다. 회전된 도형의 최저점이 지면 아래로 내려가면 Z 위치를 자동으로 올립니다. 물리 재생을 다시 시작하면 이 초기 위치와 방향에서 출발합니다.</p>
+      <p className="hint">기즈모로 이동·회전·크기를 조절합니다. 겹침 방지는 회전된 도형의 바깥 경계를 기준으로 물체를 가장 가까운 비충돌 위치에 둡니다. 표면 스냅은 2cm 이내의 물체 표면에 붙이고, 지면 고정은 최저점을 바닥에 유지합니다. 물리 재생을 다시 시작하면 이 초기 위치와 방향에서 출발합니다.</p>
     </div>}
   </>;
 }
