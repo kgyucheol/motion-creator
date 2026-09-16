@@ -8,6 +8,22 @@
         "left_hand",
         "right_hand"
       ]
+    },
+    {
+      "id": "6e944584d51143c28b6ef62411b61160",
+      "name": "양무릎",
+      "members": [
+        "right_knee",
+        "left_knee"
+      ]
+    },
+    {
+      "id": "d8feb2701940440cbe16748f080a0ae2",
+      "name": "양어꺠",
+      "members": [
+        "right_shoulder",
+        "left_shoulder"
+      ]
     }
   ]
 }

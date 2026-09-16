@@ -105,13 +105,13 @@ PYTHONPATH="$PWD" OPENBLAS_NUM_THREADS=1 .conda/bin/python -m motioncreator.cli 
 
 ## 타임라인 Physics / GEAR-SONIC 재생
 
-하단 재생 버튼 아래 **Physics**와 **GEAR-SONIC** 토글을 각각 설정한 뒤 재생합니다.
+하단 재생 버튼 아래 세로로 배치된 **Physics**와 **GEAR-SONIC** 토글을 설정한 뒤 재생합니다.
 
 - **Physics OFF:** 물리 없이 기존 기구학 모션을 재생합니다. SONIC도 자동으로 꺼집니다.
 - **Physics ON / GEAR-SONIC OFF:** 기본 PD 제어로 참조 관절 각도를 추종합니다.
   모터는 작동하지만 균형을 잡는 학습 정책은 없으므로 넘어질 수 있습니다. SONIC 모델 없이 서버의 Python 환경으로 실행됩니다.
 - **Physics ON / GEAR-SONIC ON:** 설치된 original-release SONIC ONNX 정책으로 모션을 추종합니다.
-  별도 `.conda-policy` CPU 환경이 필요합니다. SONIC 토글은 Physics를 켠 뒤 사용할 수 있습니다.
+  별도 `.conda-policy` CPU 환경이 필요합니다. Physics가 꺼져 있어도 SONIC을 켜면 둘 다 켜집니다.
 
 두 물리 모드 모두 MuJoCo 중력·바닥 접촉·관절 토크를 500 Hz로 계산하며,
 관절 목표 갱신 및 SONIC 정책 실행은 50 Hz입니다. 루트를 강제로 고정하거나 이동시키지 않습니다.

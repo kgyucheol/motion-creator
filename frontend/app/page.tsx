@@ -698,7 +698,7 @@ export default function Editor() {
         <button className="policy-toggle" type="button" aria-pressed={physicsEnabled} disabled={!state || busy || solving || playing || !physicsAvailable} onClick={() => changeSimulation(!physicsEnabled, false)} title={!physicsAvailable ? '물리 재생을 사용하려면 서버를 업데이트하고 재시작하세요.' : 'ON: 중력·접촉·관절 토크 계산 · OFF: 정책도 끄고 원본 편집으로 돌아가기'}>
           <span className="policy-indicator"/>Physics <b>{physicsEnabled ? 'ON' : 'OFF'}</b>
         </button>
-        <button className="policy-toggle" type="button" aria-pressed={policyEnabled} disabled={!state || busy || solving || playing || !physicsEnabled || !policyAvailable} onClick={() => changeSimulation(true, !policyEnabled)} title={!physicsEnabled ? 'Physics를 먼저 켜세요.' : !policyAvailable ? 'SONIC CPU 환경 또는 서버 업데이트를 확인하세요.' : 'ON: GEAR-SONIC 정책 추종 · OFF: 물리는 유지하고 기본 PD 관절 제어 사용'}>
+        <button className="policy-toggle" type="button" aria-pressed={policyEnabled} disabled={!state || busy || solving || playing || !physicsAvailable || !policyAvailable} onClick={() => changeSimulation(true, !policyEnabled)} title={!physicsAvailable || !policyAvailable ? 'SONIC CPU 환경 또는 서버 업데이트를 확인하세요.' : 'ON: Physics도 함께 켜고 GEAR-SONIC 정책 추종 · OFF: 물리는 유지하고 기본 PD 관절 제어 사용'}>
           <span className="policy-indicator"/>GEAR-SONIC <b>{policyEnabled ? 'ON' : 'OFF'}</b>
         </button>
         </div>
