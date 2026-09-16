@@ -15,6 +15,20 @@ from .kimodo_format import KIMODO_KEYS, export_kimodo_g1, kimodo_g1_to_qpos
 FORMAT = 'motioncreator.g1.v1'
 MAX_KEYFRAMES = 100
 MAX_MOTION_SAMPLES = 3000
+SCENE_SHAPES = {'box', 'sphere', 'cylinder'}
+
+
+def project_scene_objects(project):
+    """Return authored primitive objects, including the legacy single-box format."""
+    if 'scene_objects' in project:
+        return project['scene_objects']
+    box = project.get('box')
+    if not box:
+        return []
+    return [{'id': 'legacy-box', 'name': 'Box', 'shape': 'box',
+             'position': box['position'], 'quaternion_xyzw': [0., 0., 0., 1.],
+             'size': box['size'], 'mass_kg': 1., 'friction': .7,
+             'color': '#b98853', 'opacity': .62, 'visible': box['visible']}]
 
 
 def validate_project(robot: Robot, project):
@@ -69,6 +83,53 @@ def validate_project(robot: Robot, project):
                 raise ValueError('Box dimensions must be at least 0.01 m')
         if not isinstance(box.get('visible'), bool):
             raise ValueError('Box visibility must be a boolean')
+    objects = project.get('scene_objects', [])
+    if not isinstance(objects, list) or len(objects) > 32:
+        raise ValueError('Scene objects must be a list with at most 32 entries')
+    identifiers = set()
+    for item in objects:
+        if not isinstance(item, dict):
+            raise ValueError('Each scene object must be an object')
+        identifier = item.get('id')
+        if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', identifier):
+            raise ValueError('Scene object IDs must use 1–64 letters, numbers, underscores or hyphens')
+        if identifier in identifiers:
+            raise ValueError('Scene object IDs must be unique')
+        identifiers.add(identifier)
+        if not isinstance(item.get('name'), str) or not 1 <= len(item['name']) <= 80:
+            raise ValueError('Scene object names must contain 1–80 characters')
+        shape = item.get('shape')
+        if shape not in SCENE_SHAPES:
+            raise ValueError('Scene object shape must be box, sphere or cylinder')
+        for field, length in (('position', 3), ('quaternion_xyzw', 4), ('size', 3)):
+            value = np.asarray(item.get(field), dtype=float)
+            if value.shape != (length,) or not np.isfinite(value).all():
+                raise ValueError(f'Scene object {field} must contain {length} finite numbers')
+            if field == 'position' and np.max(np.abs(value)) > 5:
+                raise ValueError('Scene object positions must be within 5 m')
+            if field == 'size' and (np.min(value) < .01 or np.max(value) > 5):
+                raise ValueError('Scene object sizes must be 0.01–5 m')
+        quaternion = np.asarray(item['quaternion_xyzw'], dtype=float)
+        if abs(np.linalg.norm(quaternion) - 1.) > 1e-4:
+            raise ValueError('Scene object quaternions must be normalized (xyzw)')
+        size = np.asarray(item['size'], dtype=float)
+        if shape == 'sphere' and not np.allclose(size, size[0], atol=1e-6, rtol=0):
+            raise ValueError('Sphere size must use one uniform diameter')
+        if shape == 'cylinder' and abs(size[0] - size[1]) > 1e-6:
+            raise ValueError('Cylinder X/Y sizes must use one diameter')
+        mass = float(item.get('mass_kg', 1.))
+        friction = float(item.get('friction', .7))
+        opacity = float(item.get('opacity', 1.))
+        if not np.isfinite(mass) or not .001 <= mass <= 1000:
+            raise ValueError('Scene object mass must be 0.001–1000 kg')
+        if not np.isfinite(friction) or not 0 <= friction <= 2:
+            raise ValueError('Scene object friction must be 0–2')
+        if not np.isfinite(opacity) or not .05 <= opacity <= 1:
+            raise ValueError('Scene object opacity must be 0.05–1')
+        if not isinstance(item.get('color'), str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', item['color']):
+            raise ValueError('Scene object color must use #RRGGBB')
+        if not isinstance(item.get('visible'), bool):
+            raise ValueError('Scene object visibility must be a boolean')
     return project
 
 

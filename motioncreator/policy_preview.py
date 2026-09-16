@@ -1,5 +1,6 @@
 """Isolated, cancellable PD or SONIC physics playback on a free G1."""
 import atexit
+import copy
 import json
 import os
 from pathlib import Path
@@ -13,7 +14,7 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 
-from .motion import compile_motion, validate_project
+from .motion import compile_motion, project_scene_objects, validate_project
 from .robot import MODEL_PATH, ROOT, Robot
 from .sonic import KP, KD, Reference, SonicCPU
 from .task_jobs import atomic_json
@@ -30,7 +31,11 @@ def runtime():
             'device': 'cpu', 'max_seconds': MAX_SECONDS}
 
 
-def build_model(robot):
+def _numbers(values):
+    return ' '.join(str(float(value)) for value in values)
+
+
+def build_model(robot, project=None):
     root = ET.parse(MODEL_PATH).getroot()
     root.find('compiler').set('meshdir', str(ROOT / 'assets/g1/meshes'))
     option = root.find('option')
@@ -40,8 +45,34 @@ def build_model(robot):
                          iterations='80', gravity='0 0 -9.81')
     for index, name in enumerate(robot.names):
         root.find(f".//joint[@name='{name}']").set('armature', str(float(KP[index] / (20 * np.pi) ** 2)))
+    objects = project_scene_objects(project or {})
+    if objects:
+        contact = root.find('contact')
+        if contact is None:
+            contact = ET.SubElement(root, 'contact')
+        for side in ('left', 'right'):
+            body = root.find(f".//body[@name='{side}_wrist_yaw_link']")
+            visual = body.find(f"geom[@mesh='{side}_rubber_hand']")
+            grip = copy.deepcopy(visual)
+            grip.attrib.update(name=f'{side}_preview_grip', contype='1', conaffinity='1', group='3', density='0')
+            body.append(grip)
+        world = root.find('worldbody')
+        for index, item in enumerate(objects):
+            body = ET.SubElement(world, 'body', name=f'preview_object_{index}',
+                                 pos=_numbers(item['position']),
+                                 quat=_numbers(np.asarray(item['quaternion_xyzw'])[[3, 0, 1, 2]]))
+            ET.SubElement(body, 'freejoint', name=f'preview_object_joint_{index}')
+            size = np.asarray(item['size'], dtype=float)
+            mj_size = size / 2 if item['shape'] == 'box' else [size[0] / 2] if item['shape'] == 'sphere' else [size[0] / 2, size[2] / 2]
+            geom_name = f'preview_object_geom_{index}'
+            ET.SubElement(body, 'geom', name=geom_name, type=item['shape'], size=_numbers(mj_size),
+                          mass=str(float(item['mass_kg'])), friction=_numbers([item['friction'], .005, .0001]))
+            for side in ('left', 'right'):
+                ET.SubElement(contact, 'pair', geom1=f'{side}_preview_grip', geom2=geom_name,
+                              condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
+                              solref='.01 1', solimp='.95 .99 .001')
     model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding='unicode'))
-    if model.nq != 36 or model.nu != 29 or model.neq:
+    if model.nq != 36 + 7 * len(objects) or model.nu != 29 or model.neq:
         raise ValueError('Unexpected G1 physics model')
     return model
 
@@ -58,18 +89,26 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic'):
         poses = np.repeat(poses, 2, axis=0)
     if times[-1] > MAX_SECONDS:
         raise ValueError(f'물리 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
-    model = build_model(robot)
+    objects = project_scene_objects(project)
+    model = build_model(robot, project)
     data = mujoco.MjData(model)
     ref = Reference(times, poses, robot.model)
     policy = SonicCPU() if controller == 'gear-sonic' else None
-    data.qpos[:] = poses[0]
+    data.qpos[:36] = poses[0]
     # Preserve the reference start; do not silently shift/ground or teleport it.
     mujoco.mj_forward(model, data)
     joints = np.array([model.joint(name).id for name in robot.names])
     qa, va = model.jnt_qposadr[joints], model.jnt_dofadr[joints]
     motors = np.array([np.flatnonzero(model.actuator_trnid[:, 0] == joint)[0] for joint in joints])
     limits = model.jnt_actfrcrange[joints]
-    replay_times, states = [0.], [robot.state(data.qpos.copy())]
+    def object_state():
+        return {item['id']: {
+            'position': data.xpos[model.body(f'preview_object_{index}').id].tolist(),
+            'quaternion_xyzw': data.xquat[model.body(f'preview_object_{index}').id][[1, 2, 3, 0]].tolist(),
+        } for index, item in enumerate(objects)}
+
+    replay_times, states = [0.], [robot.state(data.qpos[:36].copy())]
+    object_states = [object_state()]
     errors, saturation = [], []
     reason = 'completed'
     count = max(1, round(float(times[-1]) / .02))
@@ -96,12 +135,13 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic'):
             reason = 'fallen'
         if step % 2 == 1 or step == count - 1 or reason != 'completed':
             replay_times.append(float(data.time))
-            states.append(robot.state(data.qpos.copy()))
+            states.append(robot.state(data.qpos[:36].copy()))
+            object_states.append(object_state())
         if step % 10 == 0:
             progress((step + 1) / count)
         if reason != 'completed':
             break
-    return {'time': replay_times, 'states': states, 'max_pin_error_mm': 0.,
+    return {'time': replay_times, 'states': states, 'object_states': object_states, 'max_pin_error_mm': 0.,
             'physics': True, 'policy': 'gear-sonic' if policy is not None else None, 'controller': controller, 'summary': {
                 'reason': reason, 'sim_seconds': float(replay_times[-1]),
                 'reference_seconds': float(times[-1]), 'joint_rmse_rad': float(np.sqrt(np.mean(errors))) if errors else 0.,

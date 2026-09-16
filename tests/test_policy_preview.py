@@ -2,11 +2,12 @@
 import copy
 import json
 
+import mujoco
 import numpy as np
 import pytest
 
 from motioncreator import policy_preview as preview
-from motioncreator.motion import new_project
+from motioncreator.motion import new_project, validate_project
 from motioncreator.robot import Robot
 
 
@@ -18,6 +19,33 @@ def test_free_physics_model_uses_named_torque_motors():
     assert model.opt.timestep == .002
     assert model.joint('floating_base_joint').dofadr == 0
     assert np.all(model.dof_armature[6:] > 0)
+
+
+def test_primitive_scene_objects_are_free_bodies_and_replay_from_authored_pose():
+    robot = Robot()
+    project = new_project(robot)
+    project['keyframes'][0]['duration'] = .12
+    project['scene_objects'] = [
+        {'id': 'crate', 'name': 'Crate', 'shape': 'box', 'position': [2., 0., .8],
+         'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.2, .3, .4], 'mass_kg': 2.,
+         'friction': .6, 'color': '#336699', 'opacity': .5, 'visible': True},
+        {'id': 'ball', 'name': 'Ball', 'shape': 'sphere', 'position': [2.5, 0., .8],
+         'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.2, .2, .2], 'mass_kg': 1.,
+         'friction': .4, 'color': '#993366', 'opacity': 1., 'visible': True},
+        {'id': 'can', 'name': 'Can', 'shape': 'cylinder', 'position': [3., 0., .8],
+         'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.2, .2, .4], 'mass_kg': 1.,
+         'friction': .8, 'color': '#669933', 'opacity': .8, 'visible': True},
+    ]
+    validate_project(robot, project)
+    model = preview.build_model(robot, project)
+    assert model.nq == 57
+    for index in range(3):
+        assert model.joint(f'preview_object_joint_{index}').type == mujoco.mjtJoint.mjJNT_FREE
+    result = preview.simulate(project, controller='pd')
+    assert len(result['object_states']) == len(result['states']) == len(result['time'])
+    np.testing.assert_allclose(result['object_states'][0]['crate']['position'], [2., 0., .8])
+    assert result['object_states'][-1]['crate']['position'][2] < .8
+    assert project['scene_objects'][0]['position'] == [2., 0., .8]
 
 
 def test_simulated_replay_preserves_authoring_and_reports_tracking(monkeypatch):

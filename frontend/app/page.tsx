@@ -1,15 +1,17 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import TaskWorkbench from './task-workbench';
+import SceneObjectControls from './scene-object-controls';
 import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, Box, ChevronLeft, ChevronRight, Trash2, Download, Check, AlertCircle } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
+import { createSceneObject, normalizedObjectSize, objectsFromProject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape } from '../lib/scene-objects';
 
 type Keyframe = { name: string; duration: number; qpos: number[]; pins: string[]; samples?: number[][] };
-type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; box?: { position: number[]; size: number[]; visible: boolean } };
-type Preview = { time: number[]; states: PoseState[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number } };
+type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
+type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
@@ -78,14 +80,16 @@ export default function Editor() {
   const [fps, setFps] = useState(30);
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
-  const [box, setBox] = useState({ position: [.4, 0, .30], size: [.3, .32, .24], visible: true });
+  const [objects, setObjects] = useState<SceneObject[]>(() => objectsFromProject({}));
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [objectTransformMode, setObjectTransformMode] = useState<ObjectTransformMode>('translate');
   const [files, setFiles] = useState<string[]>([]);
   const [saved, setSaved] = useState<string[]>([]);
   const [savedChoice, setSavedChoice] = useState('');
   const [historyCount, setHistoryCount] = useState(0);
   const [futureCount, setFutureCount] = useState(0);
-  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, box });
-  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, box };
+  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode });
+  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode };
   const history = useRef<{ qpos: number[]; pins: string[] }[]>([]);
   const future = useRef<{ qpos: number[]; pins: string[] }[]>([]);
   const anchor = useRef<number[]>([]);
@@ -124,6 +128,36 @@ export default function Editor() {
     setHistoryCount(history.current.length); setFutureCount(0);
   }
   function invalidate() { setPreview(null); setSample(0); setPlaying(false); }
+  function commitObjects(next: SceneObject[]) {
+    current.current.objects = next;
+    setObjects(next);
+    setProject(value => value ? { ...value, scene_objects: next } : value);
+    invalidate();
+  }
+  function changeObject(id: string, patch: Partial<SceneObject>) {
+    commitObjects(current.current.objects.map(object => {
+      if (object.id !== id) return object;
+      const next = { ...object, ...patch };
+      return { ...next, size: normalizedObjectSize(next.shape, next.size) };
+    }));
+  }
+  function selectObject(id: string | null) {
+    setSelectedObjectId(id); current.current.selectedObjectId = id;
+    scene.current?.selectSceneObject(id, current.current.objectTransformMode);
+  }
+  function changeObjectMode(mode: ObjectTransformMode) {
+    setObjectTransformMode(mode); current.current.objectTransformMode = mode;
+    scene.current?.selectSceneObject(current.current.selectedObjectId, mode);
+  }
+  function addObject(shape: SceneObjectShape) {
+    const object = createSceneObject(current.current.objects.length + 1, shape);
+    commitObjects([...current.current.objects, object]);
+    selectObject(object.id);
+  }
+  function removeObject(id: string) {
+    commitObjects(current.current.objects.filter(object => object.id !== id));
+    selectObject(null);
+  }
   async function run(work: () => Promise<void>) {
     if (current.current.busy || inFlight.current) return;
     setBusy(true); current.current.busy = true; setError(''); setPlaying(false);
@@ -136,6 +170,7 @@ export default function Editor() {
     current.current.selected = active;
     current.current.members = next;
     setSelected(active); setMembers(next); setInfo(null);
+    setSelectedObjectId(null); current.current.selectedObjectId = null; scene.current?.selectSceneObject(null);
     if (scene.current && !hover) scene.current.selectionLocked = true;
     const previousMode = current.current.transformMode;
     const controls = controlSelection(next);
@@ -254,6 +289,9 @@ export default function Editor() {
         transformMode: mode => actions.current.transformMode(mode),
         jointAngle: (key, angle) => actions.current.jointAngle(key, angle),
         history: redo => actions.current.history(redo),
+        selectObject,
+        transformObject: changeObject,
+        objectTransformMode: changeObjectMode,
       });
       scene.current = viewer;
     } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
@@ -269,10 +307,12 @@ export default function Editor() {
           nextProject = await api<Project>('validate', { project: JSON.parse(draft) });
           initialState = await api<PoseState>('pose', { qpos: nextProject.current_qpos ?? nextProject.keyframes[0].qpos });
           initialPins = nextProject.pins ?? feet;
-          if (nextProject.box) setBox(nextProject.box);
         }
       } catch { setMessage('이전 자동 저장을 복원하지 못해 기본 자세로 시작했습니다.'); nextProject = init.project; }
       if (!alive.current) return;
+      const nextObjects = objectsFromProject(nextProject);
+      nextProject = { ...nextProject, scene_objects: nextObjects };
+      setObjects(nextObjects); current.current.objects = nextObjects;
       setProject(nextProject); current.current.project = nextProject;
       setPins(initialPins); current.current.pins = initialPins;
       applyState(initialState); setTarget(initialState.handles.pelvis.position);
@@ -302,15 +342,15 @@ export default function Editor() {
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
   useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
   useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
-  useEffect(() => { scene.current?.setBox(box.position, box.size, box.visible); }, [box]);
+  useEffect(() => { scene.current?.setSceneObjects(objects); }, [objects]);
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
-      try { localStorage.setItem('g1-motion-draft-v1', JSON.stringify({ ...project, current_qpos: state.qpos, pins, box })); }
+      try { localStorage.setItem('g1-motion-draft-v1', JSON.stringify({ ...project, current_qpos: state.qpos, pins, scene_objects: objects })); }
       catch { setMessage('브라우저 자동 저장 공간이 부족합니다. 파일 저장을 사용하세요.'); }
     }, 500);
     return () => clearTimeout(timer);
-  }, [project, state, pins, box, playing, preview]);
+  }, [project, state, pins, objects, playing, preview]);
   useEffect(() => {
     if (!playing || !preview) return;
     const start = performance.now() - preview.time[sample] * 1000;
@@ -321,7 +361,9 @@ export default function Editor() {
       // Physics replays may end between display frames when a fall is detected.
       let index = 0;
       while (index < end && preview.time[index + 1] <= time) index++;
-      applyState(preview.states[index]); setSample(index);
+      applyState(preview.states[index]);
+      if (preview.object_states?.[index]) scene.current?.setObjectPoses(preview.object_states[index]);
+      setSample(index);
       if (index === end) { setPlaying(false); return; }
       id = requestAnimationFrame(tick);
     };
@@ -338,8 +380,11 @@ export default function Editor() {
   async function loadProject(next: Project) {
     const valid = await api<Project>('validate', { project: next });
     const pose = await api<PoseState>('pose', { qpos: valid.current_qpos ?? valid.keyframes[0].qpos });
-    setProject(valid); current.current.project = valid; setFrameIndex(0);
-    setPins(valid.pins ?? valid.keyframes[0].pins); if (valid.box) setBox(valid.box);
+    const nextObjects = objectsFromProject(valid);
+    const normalized = { ...valid, scene_objects: nextObjects };
+    setProject(normalized); current.current.project = normalized; setFrameIndex(0);
+    setObjects(nextObjects); current.current.objects = nextObjects; selectObject(null);
+    setPins(valid.pins ?? valid.keyframes[0].pins);
     applyState(pose); invalidate(); setPoseDirty(false); setInfo(null);
     history.current = []; future.current = []; setHistoryCount(0); setFutureCount(0);
   }
@@ -417,7 +462,7 @@ export default function Editor() {
     if (!project || !state) return;
     void run(async () => {
       const result = await api<{ files: string[]; directory: string; warnings?: string[]; metadata: { samples: number; validation: { max_pin_error_mm: number } } }>('save', {
-        project: { ...project, current_qpos: state.qpos, pins, box }, fps, protomotions: exportProto,
+        project: { ...project, current_qpos: state.qpos, pins, scene_objects: objects }, fps, protomotions: exportProto,
       });
       setFiles(result.files); setSaved(await api<string[]>('saved'));
       setMessage(`${result.metadata.samples}프레임 저장 완료 · ${result.directory} · 고정 오차 최대 ${result.metadata.validation.max_pin_error_mm.toFixed(2)} mm`);
@@ -432,6 +477,7 @@ export default function Editor() {
       if (!physicsEnabled) {
         const result = await api<Preview>('preview', { project, fps: 30 });
         setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
+        if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
         setMessage('원본 모션 재생 · 물리 OFF');
         return;
       }
@@ -459,6 +505,7 @@ export default function Editor() {
         const result = await api<Preview>(`policy-preview/${job.id}/result`);
         if (!alive.current || request.cancelled) return;
         setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
+        if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
         const summary = result.summary!;
         const outcome = summary.reason === 'fallen' ? '넘어짐으로 조기 종료' : summary.reason === 'completed' ? '계산 완료' : '수치 불안정으로 중단';
         setMessage(`${controllerLabel} ${outcome} · ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°`);
@@ -486,6 +533,7 @@ export default function Editor() {
       applyState(source.state); setFrameIndex(source.frameIndex); setPins(source.pins); setPoseDirty(source.dirty);
     }
     policySource.current = null;
+    scene.current?.setSceneObjects(current.current.objects);
     invalidate(); setPhysicsEnabled(physics); setPolicyEnabled(physics && policy);
     setMessage(!physics ? '원본 모션 재생 · 물리 OFF' : policy
       ? 'MuJoCo + GEAR-SONIC · 재생하면 CPU 계산 후 결과를 보여줍니다.'
@@ -577,7 +625,7 @@ export default function Editor() {
       </div>}
       <div className="viewport-tools"><button title="자세 실행 취소 (Ctrl+Z)" aria-keyshortcuts="Control+Z Meta+Z" disabled={disabled || !historyCount} onClick={() => changeHistory(false)}><Undo2 size={17}/></button><button title="자세 다시 실행 (Ctrl+Shift+Z)" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled={disabled || !futureCount} onClick={() => changeHistory(true)}><Redo2 size={17}/></button><span/><button className={showHandles ? 'chosen' : ''} title="조작 표시 켜기/끄기" onClick={() => setShowHandles(!showHandles)}><MousePointer2 size={17}/></button></div>
       <div className="scene-legend"><span><i className="cyan"/>이동 가능</span><span><i className="amber"/>고정</span><span><i className="mint"/>선택</span></div>
-      <div className="viewport-bottom"><span>드래그: 회전 · 휠: 확대 · 우클릭: 이동 · W/E: 이동/회전 · F: 선택 보기</span><span className="axes"><b>X</b> 전방 <b>Y</b> 왼쪽 <b>Z</b> 위</span></div>
+      <div className="viewport-bottom"><span>드래그: 회전 · 휠: 확대 · 우클릭: 이동 · 로봇 W/E · 물체 W/E/R · F: 선택 보기</span><span className="axes"><b>X</b> 전방 <b>Y</b> 왼쪽 <b>Z</b> 위</span></div>
       {busy && <div className="busy-overlay"><span className="spinner"/>모션을 계산하고 있습니다…</div>}
     </main>
     <aside className="right-panel panel">
@@ -627,13 +675,7 @@ export default function Editor() {
       </>}
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>
       <div className="section-divider"/>
-      <div className="panel-heading"><span>REFERENCE BOX</span><Box size={15}/></div>
-      <label className="checkbox"><input type="checkbox" checked={box.visible} onChange={e => setBox({ ...box, visible: e.target.checked })}/>작업 위치 가이드 표시</label>
-      <label className="inspector-label">박스 중심 <small>m</small></label>
-      <div className="xyz">{box.position.map((v, i) => <label key={i}><span>{'XYZ'[i]}</span><input aria-label={`박스 ${'XYZ'[i]}`} type="number" step=".01" value={v} onChange={e => setBox({ ...box, position: box.position.map((n, j) => i === j ? +e.target.value : n) })}/></label>)}</div>
-      <label className="inspector-label">박스 크기 <small>m</small></label>
-      <div className="xyz">{box.size.map((v, i) => <label key={i}><span>{'XYZ'[i]}</span><input aria-label={`박스 크기 ${'XYZ'[i]}`} type="number" min=".01" step=".01" value={v} onChange={e => setBox({ ...box, size: box.size.map((n, j) => i === j ? Math.max(.01, +e.target.value) : n) })}/></label>)}</div>
-      <p className="hint">박스는 위치 가이드입니다. 파지·충돌·하중 계산은 포함하지 않습니다.</p>
+      <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} onSelect={selectObject} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode}/>
       <div className="section-divider"/>
       <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>
       <select aria-label="최근 저장한 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">최근 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>
@@ -664,7 +706,7 @@ export default function Editor() {
         <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · {f.pins.length} 고정</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
         <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>{motionClip ? '클립 재생 시간' : '이동 시간'} <input aria-label="키프레임 이동 시간" type="number" min={motionClip ? 1/120 : .1} max={motionClip ? 600 : 60} step=".01" disabled={disabled || (!motionClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = motionClip ? 1/120 : .1; const maximum = motionClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
       </div>
-      <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) applyState(preview.states[i]); }}/>
+      <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) { applyState(preview.states[i]); if (preview.object_states?.[i]) scene.current?.setObjectPoses(preview.object_states[i]); } }}/>
     </section>
     <footer className={`statusbar ${error ? 'error' : ''}`}><span>{error ? <AlertCircle size={13}/> : <span className="status-dot"/>}{error || message}</span><span>{physicsEnabled ? `MuJoCo + ${controllerLabel} · ${preview?.physics ? '시뮬레이션 결과' : 'CPU 재생 준비'}` : '원본 모션 · 물리 OFF'}</span></footer>
   </div>;

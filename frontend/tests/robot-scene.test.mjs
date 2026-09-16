@@ -4,6 +4,13 @@ import * as THREE from 'three';
 import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
+import { normalizedObjectSize } from '../lib/scene-objects.ts';
+
+test('primitive scale constraints preserve spheres and round cylinders', () => {
+  assert.deepEqual(normalizedObjectSize('box', [.2, .3, .4]), [.2, .3, .4]);
+  assert.deepEqual(normalizedObjectSize('sphere', [.2, .3, .4], 'Y'), [.3, .3, .3]);
+  assert.deepEqual(normalizedObjectSize('cylinder', [.2, .3, .4], 'Y'), [.3, .3, .4]);
+});
 
 function fixture() {
   const viewer = Object.create(RobotScene.prototype);

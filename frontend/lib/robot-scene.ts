@@ -4,6 +4,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { controlKey, controlSelection } from './body-groups.ts';
 import { canMirrorSelection } from './pose-transforms.ts';
+import { normalizedObjectSize, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
 
 export type PoseState = {
   qpos: number[];
@@ -49,6 +50,9 @@ type Callbacks = {
   end: () => void;
   error: (message: string) => void;
   history?: (redo: boolean) => void;
+  selectObject?: (id: string | null) => void;
+  transformObject?: (id: string, patch: Partial<SceneObject>) => void;
+  objectTransformMode?: (mode: ObjectTransformMode) => void;
 };
 
 export class RobotScene {
@@ -75,6 +79,9 @@ export class RobotScene {
   ray = new THREE.Raycaster();
   pointer = new THREE.Vector2();
   box: THREE.Mesh;
+  sceneObjects: Record<string, THREE.Mesh> = {};
+  selectedSceneObject: string | null = null;
+  objectTransformMode: ObjectTransformMode = 'translate';
   com: THREE.Mesh;
   markerVisible = true;
   handleLayer: 'body' | 'joints' = 'body';
@@ -125,6 +132,10 @@ export class RobotScene {
     this.scene.add(this.pivot, this.gizmo.getHelper());
     this.gizmo.addEventListener('dragging-changed', event => {
       this.orbit.enabled = !event.value;
+      if (this.selectedSceneObject) {
+        this.dirty = true;
+        return;
+      }
       if (event.value) {
         const ring = jointForRing(controlKey(this.members, this.selected), this.gizmo.axis);
         const hinge = this.transformMode === 'rotate' && controlSelection(this.members).length === 1 && ring ? this.state?.hinges?.[ring.key] : undefined;
@@ -139,7 +150,14 @@ export class RobotScene {
     this.gizmo.addEventListener('objectChange', () => {
       this.dirty = true;
       if (this.gizmo.dragging && this.editable) {
-        if (this.hingeDrag) {
+        const object = this.selectedSceneObject ? this.sceneObjects[this.selectedSceneObject] : undefined;
+        if (object && this.selectedSceneObject) {
+          const shape = object.userData.shape as SceneObject['shape'];
+          const size = normalizedObjectSize(shape, object.scale.toArray(), this.gizmo.axis ?? '');
+          this.callbacks.transformObject?.(this.selectedSceneObject, {
+            position: object.position.toArray(), quaternion_xyzw: object.quaternion.toArray(), size,
+          });
+        } else if (this.hingeDrag) {
           this.applyHingeDrag();
         } else if (this.transformMode === 'rotate') {
           if (!ANKLE_HANDLES.includes(controlKey(this.members, this.selected))) this.callbacks.rotate(this.selected, this.pivot.quaternion.toArray());
@@ -207,6 +225,12 @@ export class RobotScene {
     const keys = [...new Set(this.ray.intersectObjects(Object.values(this.markers).filter(m => m.visible), false).map(hit => hit.object.name))];
     return event.altKey ? keys[(keys.indexOf(this.selected) + 1) % keys.length] : keys[0];
   }
+  private pickSceneObject(event: PointerEvent) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
+    this.ray.setFromCamera(this.pointer, this.camera);
+    return this.ray.intersectObjects(Object.values(this.sceneObjects).filter(object => object.visible), false)[0]?.object.userData.sceneObjectId as string | undefined;
+  }
   hover = (event: PointerEvent) => {
     if (!this.editable || event.buttons || event.shiftKey || event.altKey || this.selectionLocked || this.members.length > 1 || this.gizmo.dragging || this.gizmo.axis) return;
     const key = this.pick(event);
@@ -229,7 +253,11 @@ export class RobotScene {
     }
     if (this.gizmo.axis) return;
     if (key) this.callbacks.select(key, event.shiftKey, false);
-    else if (!event.shiftKey) this.selectionLocked = false;
+    else {
+      const object = this.pickSceneObject(event);
+      if (object) this.callbacks.selectObject?.(object);
+      else if (!event.shiftKey) { this.selectionLocked = false; this.callbacks.selectObject?.(null); }
+    }
   };
 
   keydown = (event: KeyboardEvent) => this.handleKeyDown(event);
@@ -249,6 +277,9 @@ export class RobotScene {
     if (key === 'KeyF' || key === 'f') {
       event.preventDefault();
       this.focusSelection();
+    } else if (this.editable && this.selectedSceneObject && ['KeyW', 'KeyE', 'KeyR', 'w', 'e', 'r'].includes(key)) {
+      event.preventDefault();
+      this.callbacks.objectTransformMode?.(key === 'KeyW' || key === 'w' ? 'translate' : key === 'KeyE' || key === 'e' ? 'rotate' : 'scale');
     } else if (this.editable && this.state && ['KeyW', 'KeyE', 'w', 'e'].includes(key)) {
       event.preventDefault();
       this.callbacks.transformMode(key === 'KeyW' || key === 'w' ? 'translate' : 'rotate');
@@ -264,8 +295,9 @@ export class RobotScene {
 
   focusSelection() {
     if (!this.state) return;
-    const center = this.center();
-    const radius = Math.max(.12, ...this.members.map(k => new THREE.Vector3().fromArray(this.state!.handles[k].position).distanceTo(center) + .10));
+    const object = this.selectedSceneObject ? this.sceneObjects[this.selectedSceneObject] : undefined;
+    const center = object ? object.position.clone() : this.center();
+    const radius = object ? Math.max(.12, object.scale.length() / 2) : Math.max(.12, ...this.members.map(k => new THREE.Vector3().fromArray(this.state!.handles[k].position).distanceTo(center) + .10));
     const halfFov = Math.atan(Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2)) * Math.min(1, this.camera.aspect));
     const distance = Math.max(.55, radius / Math.sin(halfFov));
     const direction = this.camera.position.clone().sub(this.orbit.target).normalize();
@@ -304,7 +336,7 @@ export class RobotScene {
     const blocked = this.transformMode === 'rotate'
       ? !canRotateSelection(controls) || controls.some(k => pins.includes(k) && (controls.length > 1 || k.endsWith('_foot')))
       : members.some(k => pins.includes(k));
-    if (this.editable && !blocked && this.markerVisible) this.gizmo.attach(this.pivot); else this.gizmo.detach();
+    if (this.editable && !blocked && this.markerVisible && !this.selectedSceneObject) this.gizmo.attach(this.pivot); else if (!this.selectedSceneObject) this.gizmo.detach();
     this.dirty = true;
   }
 
@@ -370,18 +402,91 @@ export class RobotScene {
     this.mirrorTranslation = enabled;
     this.select(this.selected, this.pins, this.members);
   }
-  setEditable(editable: boolean) { this.editable = editable; this.select(this.selected, this.pins, this.members); }
+  setEditable(editable: boolean) {
+    this.editable = editable;
+    if (this.selectedSceneObject) this.selectSceneObject(this.selectedSceneObject, this.objectTransformMode);
+    else this.select(this.selected, this.pins, this.members);
+  }
   setTransformMode(mode: TransformMode, space: 'world' | 'local') {
     this.transformMode = mode;
     this.space = space;
-    this.gizmo.setMode(mode);
-    this.gizmo.setSpace(space);
-    this.select(this.selected, this.pins, this.members);
+    if (!this.selectedSceneObject) {
+      this.gizmo.setMode(mode);
+      this.gizmo.setSpace(space);
+      this.select(this.selected, this.pins, this.members);
+    }
   }
   setBox(position: number[], size: number[], visible: boolean) {
     this.box.visible = visible;
     this.box.position.fromArray(position);
     this.box.scale.set(size[0] / .3, size[1] / .32, size[2] / .24);
+    this.dirty = true;
+  }
+  setSceneObjects(objects: SceneObject[]) {
+    this.box.visible = false;
+    const incoming = new Set(objects.map(object => object.id));
+    for (const [id, mesh] of Object.entries(this.sceneObjects)) {
+      if (incoming.has(id)) continue;
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+      delete this.sceneObjects[id];
+    }
+    for (const object of objects) {
+      let mesh = this.sceneObjects[object.id];
+      if (!mesh || mesh.userData.shape !== object.shape) {
+        if (mesh) {
+          this.scene.remove(mesh); mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose();
+        }
+        const geometry = object.shape === 'box' ? new THREE.BoxGeometry(1, 1, 1)
+          : object.shape === 'sphere' ? new THREE.SphereGeometry(.5, 32, 20)
+          : new THREE.CylinderGeometry(.5, .5, 1, 32);
+        if (object.shape === 'cylinder') geometry.rotateX(Math.PI / 2);
+        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ roughness: .82, metalness: .04 }));
+        mesh.userData.sceneObjectId = object.id;
+        mesh.userData.shape = object.shape;
+        this.sceneObjects[object.id] = mesh;
+        this.scene.add(mesh);
+      }
+      mesh.position.fromArray(object.position);
+      mesh.quaternion.fromArray(object.quaternion_xyzw);
+      mesh.scale.fromArray(normalizedObjectSize(object.shape, object.size));
+      mesh.visible = object.visible;
+      const material = mesh.material as THREE.MeshStandardMaterial;
+      material.color.set(object.color);
+      material.opacity = object.opacity;
+      material.transparent = object.opacity < 1;
+      material.depthWrite = object.opacity >= .98;
+      material.emissive.set(this.selectedSceneObject === object.id ? '#254e43' : '#000000');
+    }
+    if (this.selectedSceneObject && !incoming.has(this.selectedSceneObject)) this.selectedSceneObject = null;
+    if (this.selectedSceneObject) this.selectSceneObject(this.selectedSceneObject, this.objectTransformMode);
+    this.dirty = true;
+  }
+  selectSceneObject(id: string | null, mode: ObjectTransformMode = this.objectTransformMode) {
+    this.selectedSceneObject = id && this.sceneObjects[id] ? id : null;
+    this.selectionLocked = !!this.selectedSceneObject;
+    this.objectTransformMode = mode;
+    Object.entries(this.sceneObjects).forEach(([key, mesh]) => {
+      (mesh.material as THREE.MeshStandardMaterial).emissive.set(key === this.selectedSceneObject ? '#254e43' : '#000000');
+    });
+    const object = this.selectedSceneObject ? this.sceneObjects[this.selectedSceneObject] : undefined;
+    if (object && this.editable) {
+      this.gizmo.showX = this.gizmo.showY = this.gizmo.showZ = true;
+      this.gizmo.setMode(mode);
+      this.gizmo.setSpace(mode === 'translate' ? this.space : 'local');
+      this.gizmo.attach(object);
+    } else {
+      this.gizmo.detach();
+      if (!id) this.select(this.selected, this.pins, this.members);
+    }
+    this.dirty = true;
+  }
+  setObjectPoses(poses: Record<string, SceneObjectPose>) {
+    Object.entries(poses).forEach(([id, pose]) => {
+      const object = this.sceneObjects[id];
+      if (object) { object.position.fromArray(pose.position); object.quaternion.fromArray(pose.quaternion_xyzw); }
+    });
     this.dirty = true;
   }
   dispose() {
