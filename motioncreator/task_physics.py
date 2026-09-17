@@ -1,9 +1,10 @@
 """Free-base, torque-actuated MuJoCo box test. No attachments or external support."""
-import copy, hashlib, json, time
+import hashlib, json, time
 import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
+from .grip_geometry import grip_pad_center, grip_pad_contact_anchor, grip_pad_half_size
 from .robot import MODEL_PATH, ROOT, Robot
 from .tasks import TaskSpec, TaskFSM
 from .sonic import KP,KD,Reference,SonicCPU
@@ -24,10 +25,10 @@ def build_scene(spec:TaskSpec):
     if contact is None: contact=ET.SubElement(root,'contact')
     for side in ('left','right'):
         body=root.find(f".//body[@name='{side}_wrist_yaw_link']")
-        visual=body.find(f"geom[@mesh='{side}_rubber_hand']")
-        geom=copy.deepcopy(visual)
-        geom.attrib.update(name=side+'_grip',contype='1',conaffinity='1',group='3',density='0')
-        body.append(geom)
+        ET.SubElement(body,'geom',name=side+'_grip',type='box',pos=numbers(grip_pad_center(side)),
+                      size=numbers(grip_pad_half_size()),contype='1',conaffinity='1',group='3',
+                      density='0',friction=numbers([spec.hand_friction,.005,.0001]),
+                      rgba='.15 .9 .72 .45' if side=='left' else '1 .62 .25 .45')
         ET.SubElement(contact,'pair',geom1=side+'_grip',geom2='task_box_geom',condim='3',
                       friction=numbers([spec.hand_friction]*2+[0,0,0]),solref='.01 1',solimp='.95 .99 .001')
     floor=root.find(".//geom[@name='floor']"); floor.set('friction',numbers([spec.floor_friction,.005,.0001])); floor.set('priority','1')
@@ -36,7 +37,8 @@ def build_scene(spec:TaskSpec):
                       quat=numbers(np.array(spec.actual.pose.quaternion_xyzw)[[3,0,1,2]]))
     ET.SubElement(box,'freejoint',name='task_box_free')
     ET.SubElement(box,'geom',name='task_box_geom',type='box',size=numbers(np.array(spec.actual.size)/2),
-                  mass=str(spec.mass_kg),rgba='.65 .42 .20 1',friction=numbers([spec.floor_friction,.005,.0001]))
+                  mass=str(spec.mass_kg),rgba='.65 .42 .20 1',friction=numbers([spec.floor_friction,.005,.0001]),
+                  contype='0',conaffinity='0')
     pp=np.array(spec.destination.position); pp[2]=spec.pallet_height/2
     yaw=Rotation.from_matrix(spec.destination.rotation()).as_euler('xyz')[2]
     ET.SubElement(world,'geom',name='task_pallet',type='box',size=numbers([.4,.4,spec.pallet_height/2]),
@@ -49,19 +51,8 @@ def build_scene(spec:TaskSpec):
     return model,xml
 
 def hand_surface_offsets(model):
-    """Approximate inner support plane of the actual convex fake-hand mesh, wrist-local.
-    Contact solver still uses the whole mesh; these planning points are calibration defaults.
-    """
-    out={}
-    for side in ('left','right'):
-        gid=model.geom(side+'_grip').id; mesh=model.geom_dataid[gid]
-        vertices=model.mesh_vert[model.mesh_vertadr[mesh]:model.mesh_vertadr[mesh]+model.mesh_vertnum[mesh]]
-        r=Rotation.from_quat(model.geom_quat[gid][[1,2,3,0]]).as_matrix()
-        points=vertices@r.T+model.geom_pos[gid]
-        p=(points.min(0)+points.max(0))/2
-        p[1]=points[:,1].min() if side=='left' else points[:,1].max()
-        out[side]=p
-    return out
+    """Return the exact inner support-plane centers used by the collision model."""
+    return {side: grip_pad_contact_anchor(side) for side in ('left','right')}
 
 def contact_metrics(m,d):
     box=m.geom('task_box_geom').id

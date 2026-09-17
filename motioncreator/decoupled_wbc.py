@@ -22,6 +22,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .grasp import fit_two_hand_grasp, object_signature
+from .grip_geometry import grip_pad_center, grip_pad_half_size
 from .motion import compile_motion, project_scene_objects, validate_project
 from .robot import ROOT, Robot
 
@@ -98,17 +99,18 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
     objects = project_scene_objects(project)
     dynamic_ids = _grasp_object_ids(project)
     if objects:
-        asset = root.find("asset")
-        for side in ("left", "right"):
-            ET.SubElement(asset, "mesh", name=f"{side}_wbc_rubber_hand",
-                          file=str(ROOT / f"assets/g1/meshes/{side}_rubber_hand.STL"))
+        contact = root.find("contact")
+        if contact is None:
+            contact = ET.SubElement(root, "contact")
         for side in ("left", "right"):
             body = root.find(f".//body[@name='{side}_wrist_yaw_link']")
-            ET.SubElement(body, "geom", name=f"{side}_wbc_grip", type="mesh",
-                          mesh=f"{side}_wbc_rubber_hand", pos=f".0415 {'0.003' if side == 'left' else '-0.003'} 0",
+            ET.SubElement(body, "geom", name=f"{side}_wbc_grip", type="box",
+                          pos=_numbers(grip_pad_center(side)), size=_numbers(grip_pad_half_size()),
                           contype="1", conaffinity="1", group="3", density="0",
-                          friction="1 .005 .0001")
+                          friction="1 .005 .0001",
+                          rgba=".15 .9 .72 .45" if side == "left" else "1 .62 .25 .45")
         world = root.find("worldbody")
+        object_geoms = []
         for index, item in enumerate(objects):
             body = ET.SubElement(world, "body", name=f"wbc_object_{index}",
                                  pos=_numbers(_grounded_position(item)),
@@ -121,7 +123,17 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
             geom_name = f"wbc_object_geom_{index}"
             ET.SubElement(body, "geom", name=geom_name, type=item["shape"], size=_numbers(mj_size),
                           mass=str(float(item["mass_kg"])),
-                          friction=_numbers([item["friction"], .005, .0001]))
+                          friction=_numbers([item["friction"], .005, .0001]), contype="0", conaffinity="0")
+            object_geoms.append(geom_name)
+            for side in ("left", "right"):
+                ET.SubElement(contact, "pair", geom1=f"{side}_wbc_grip", geom2=geom_name,
+                              condim="3", friction=_numbers([item["friction"], item["friction"], 0, 0, 0]),
+                              solref=".01 1", solimp=".95 .99 .001")
+            ET.SubElement(contact, "pair", geom1="floor", geom2=geom_name, condim="3",
+                          friction=_numbers([item["friction"], item["friction"], 0, 0, 0]))
+        for first, geom1 in enumerate(object_geoms):
+            for geom2 in object_geoms[first + 1:]:
+                ET.SubElement(contact, "pair", geom1=geom1, geom2=geom2, condim="3")
     model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
     dynamic_count = sum(item["id"] in dynamic_ids for item in objects)
     if model.nq != 36 + 7 * dynamic_count or model.nv != 35 + 6 * dynamic_count or model.nu != 29:
@@ -140,15 +152,18 @@ def prepare_grasp_control(robot: Robot, project: dict) -> dict | None:
         if event is None:
             continue
         item = next(value for value in objects if value["id"] == event["object_id"])
+        authored = robot.validate_q(frame["qpos"])
+        contact = authored
         closure = event.get("closure_qpos")
         if closure is None or event.get("object_signature") != object_signature(item):
             fitted = fit_two_hand_grasp(robot, frame["qpos"], frame.get("pins", []), item, event)
+            contact = robot.validate_q(fitted["state"]["qpos"])
             closure = fitted["grasp"]["closure_qpos"]
-        contact = robot.validate_q(frame["qpos"])
         closed = robot.validate_q(closure)
         return {
             "object_id": item["id"], "start_time": elapsed,
             "closure_seconds": float(event["closure_seconds"]),
+            "contact_offset": contact[22:36] - authored[22:36],
             "arm_offset": closed[22:36] - contact[22:36],
             "target_force_n": float(event["target_force_n"]),
             "max_force_n": float(event["max_force_n"]),
@@ -263,13 +278,8 @@ class DecoupledSimulation:
                               for index, item in enumerate(self.scene_objects)}
         self.object_geoms = {item["id"]: self.model.geom(f"wbc_object_geom_{index}").id
                              for index, item in enumerate(self.scene_objects)}
-        self.object_joints = {
-            item["id"]: self.model.joint(f"wbc_object_joint_{index}").id
-            for index, item in enumerate(self.scene_objects) if item["id"] in _grasp_object_ids(project)
-        }
         self.grip_geoms = {side: self.model.geom(f"{side}_wbc_grip").id for side in ("left", "right")} \
             if self.grasp_control else {}
-        self.grasp_wrist_body = self.model.body("left_wrist_yaw_link").id if self.grasp_control else -1
         self.policy = LowerBodyPolicy(self.parameters)
         self.command = CommandState(height=self.parameters["initial_height"])
         self.lock = threading.RLock()
@@ -285,8 +295,6 @@ class DecoupledSimulation:
         self.torso_rpy = np.zeros(3, dtype=np.float32)
         self.recording: list[dict] = []
         self._last_record_step = -1
-        self._grasp_collision_enabled = False
-        self._grasp_attachment: tuple[np.ndarray, np.ndarray] | None = None
         self.reset()
         self.thread = threading.Thread(target=self._loop, name="decoupled-wbc", daemon=True)
         if autostart:
@@ -302,77 +310,31 @@ class DecoupledSimulation:
             "quaternion_xyzw": self.data.xquat[body][[1, 2, 3, 0]].tolist(),
         } for identifier, body in self.object_bodies.items()}
 
-    def _hold_grasp_object(self) -> None:
-        """Keep the authored target in place until the hands finish closing around it."""
+    def _grasp_contact_forces(self) -> dict[str, float]:
         if not self.grasp_control:
-            return
-        release_time = self.grasp_control["start_time"] + self.grasp_control["closure_seconds"]
-        if self.motion_time >= release_time:
-            return
-        joint = self.object_joints[self.grasp_control["object_id"]]
-        qpos_address = self.model.jnt_qposadr[joint]
-        dof_address = self.model.jnt_dofadr[joint]
-        self.data.qpos[qpos_address:qpos_address + 7] = self.model.qpos0[qpos_address:qpos_address + 7]
-        self.data.qvel[dof_address:dof_address + 6] = 0.
-        mujoco.mj_forward(self.model, self.data)
-
-    def _set_grasp_collision(self, enabled: bool) -> None:
-        if not self.grasp_control or enabled == self._grasp_collision_enabled:
-            return
-        geom = self.object_geoms[self.grasp_control["object_id"]]
-        self.model.geom_contype[geom] = 1 if enabled else 0
-        self.model.geom_conaffinity[geom] = 1 if enabled else 0
-        self._grasp_collision_enabled = enabled
-
-    def _has_bilateral_grasp_contact(self) -> bool:
-        if not self.grasp_control:
-            return False
+            return {}
         target = self.object_geoms[self.grasp_control["object_id"]]
-        touching: set[str] = set()
+        forces = {side: 0. for side in ("left", "right")}
         for index in range(self.data.ncon):
             contact = self.data.contact[index]
             pair = {contact.geom1, contact.geom2}
             if target not in pair:
                 continue
-            touching.update(side for side, geom in self.grip_geoms.items() if geom in pair)
-        return len(touching) == 2
-
-    def _maintain_grasp_attachment(self) -> None:
-        """Keep a closed bilateral grasp stable on the 29-DoF model without finger actuators."""
-        if not self.grasp_control:
-            return
-        release_time = self.grasp_control["start_time"] + self.grasp_control["closure_seconds"]
-        if self.motion_time < release_time:
-            self._grasp_attachment = None
-            return
-        object_id = self.grasp_control["object_id"]
-        body = self.object_bodies[object_id]
-        wrist_position = self.data.xpos[self.grasp_wrist_body].copy()
-        wrist_rotation = self.data.xmat[self.grasp_wrist_body].reshape(3, 3).copy()
-        if self._grasp_attachment is None:
-            if not self._has_bilateral_grasp_contact():
-                return
-            relative_position = wrist_rotation.T @ (self.data.xpos[body] - wrist_position)
-            relative_rotation = wrist_rotation.T @ self.data.xmat[body].reshape(3, 3)
-            self._grasp_attachment = relative_position, relative_rotation
-        relative_position, relative_rotation = self._grasp_attachment
-        joint = self.object_joints[object_id]
-        qpos_address = self.model.jnt_qposadr[joint]
-        dof_address = self.model.jnt_dofadr[joint]
-        position = wrist_position + wrist_rotation @ relative_position
-        quaternion_xyzw = Rotation.from_matrix(wrist_rotation @ relative_rotation).as_quat()
-        self.data.qpos[qpos_address:qpos_address + 3] = position
-        self.data.qpos[qpos_address + 3:qpos_address + 7] = quaternion_xyzw[[3, 0, 1, 2]]
-        self.data.qvel[dof_address:dof_address + 6] = 0.
-        mujoco.mj_forward(self.model, self.data)
+            wrench = np.zeros(6)
+            mujoco.mj_contactForce(self.model, self.data, index, wrench)
+            for side, geom in self.grip_geoms.items():
+                if geom in pair:
+                    forces[side] += max(0., float(wrench[0]))
+        return forces
 
     def reset(self) -> None:
         with self.lock:
             mujoco.mj_resetData(self.model, self.data)
             self.data.qpos[:] = self.model.qpos0
             self.data.qpos[7:22] = np.asarray(self.parameters["default_angles"])
-            self._grasp_collision_enabled = True
-            self._set_grasp_collision(False)
+            # Start from the authored upper-body pose so the physical pads do not
+            # sweep through nearby objects while the lower-body policy settles.
+            self.data.qpos[22:36] = self._reference_at(0.)[22:36]
             mujoco.mj_forward(self.model, self.data)
             self.policy.reset()
             self.command = CommandState(height=self.parameters["initial_height"])
@@ -385,7 +347,6 @@ class DecoupledSimulation:
             self.torso_rpy[:] = 0
             self.recording.clear()
             self._last_record_step = -1
-            self._grasp_attachment = None
             self._changed()
 
     def play(self) -> None:
@@ -417,13 +378,14 @@ class DecoupledSimulation:
         target = self._reference_at(self.motion_time)[22:36]
         settle = self.parameters["upper_body_settle_seconds"]
         if self.play_time < settle:
-            blend = np.clip(self.play_time / settle, 0., 1.)
-            start = self._reference_at(0)[22:36]
-            return (1 - blend) * self.model.qpos0[22:36] + blend * start
-        if self.grasp_control and self.motion_time >= self.grasp_control["start_time"]:
-            progress = np.clip((self.motion_time - self.grasp_control["start_time"])
-                               / self.grasp_control["closure_seconds"], 0., 1.)
-            target = target + progress * self.grasp_control["arm_offset"]
+            return self._reference_at(0.)[22:36]
+        if self.grasp_control:
+            start = self.grasp_control["start_time"]
+            contact_progress = np.clip((self.motion_time - (start - .5)) / .5, 0., 1.)
+            target = target + contact_progress * self.grasp_control["contact_offset"]
+            if self.motion_time >= start:
+                progress = np.clip((self.motion_time - start) / self.grasp_control["closure_seconds"], 0., 1.)
+                target = target + progress * self.grasp_control["arm_offset"]
         return target
 
     @staticmethod
@@ -442,16 +404,12 @@ class DecoupledSimulation:
                                            self.data.qvel[6:21], np.asarray(p["lower_kd"]))
             self.data.ctrl[15:29] = self._pd(self._arm_target(), self.data.qpos[22:36], np.asarray(p["arm_kp"]),
                                              self.data.qvel[21:35], np.asarray(p["arm_kd"]))
-            if self.grasp_control:
-                self._set_grasp_collision(self.motion_time >= self.grasp_control["start_time"])
             mujoco.mj_step(self.model, self.data)
             self.step_count += 1
             self.play_time += p["simulation_dt"]
             if self.play_time >= p["upper_body_settle_seconds"]:
                 self.phase = "playing"
                 self.motion_time = min(self.duration, self.motion_time + p["simulation_dt"])
-            self._hold_grasp_object()
-            self._maintain_grasp_attachment()
             if self.step_count % p["control_decimation"] == 0:
                 observation = build_observation(self.data, self.policy.action, self.command, self.torso_rpy, p)
                 self.policy.infer(observation, np.linalg.norm(self.command.nav) > .05)
@@ -490,11 +448,13 @@ class DecoupledSimulation:
             grasp = None
             if self.grasp_control:
                 start = self.grasp_control["start_time"]
-                grasp = {key: value for key, value in self.grasp_control.items() if key != "arm_offset"}
+                grasp = {key: value for key, value in self.grasp_control.items() if not key.endswith("_offset")}
                 grasp["active"] = self.motion_time >= start
                 grasp["closure"] = float(np.clip((self.motion_time - start)
                                                   / self.grasp_control["closure_seconds"], 0., 1.))
-                grasp["attached"] = self._grasp_attachment is not None
+                forces = self._grasp_contact_forces()
+                grasp["normal_force_n"] = forces
+                grasp["bilateral_contact"] = all(force > 0 for force in forces.values())
             return {
                 "revision": self.revision, "phase": self.phase, "playing": self.running,
                 "error": self.error, "policy": "walk" if np.linalg.norm(self.command.nav) > .05 else "balance",

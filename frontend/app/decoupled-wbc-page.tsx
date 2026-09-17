@@ -9,7 +9,8 @@ type Snapshot = {
   nav: number[]; height: number; torso_rpy: number[]; upper_time: number; upper_duration: number;
   recording_frames: number; state: PoseState; scene_objects: SceneObject[];
   object_states: Record<string, SceneObjectPose>;
-  grasp: null | { object_id: string; active: boolean; closure: number; target_force_n: number; attached: boolean };
+  grasp: null | { object_id: string; active: boolean; closure: number; target_force_n: number;
+    bilateral_contact: boolean; normal_force_n: Record<'left' | 'right', number> };
 };
 type SaveResult = { folder: string; files: string[] };
 
@@ -202,7 +203,9 @@ export default function DecoupledWbcPage() {
         <span>정책 <b>{snapshot?.policy ?? 'balance'}</b></span>
         <span>상체 <b>{(snapshot?.upper_time ?? 0).toFixed(2)} / {(snapshot?.upper_duration ?? 0).toFixed(2)} s</b></span>
         <span>환경 <b>{snapshot?.scene_objects.length ?? 0} objects</b></span>
-        {snapshot?.grasp && <span>파지 <b>{snapshot.grasp.attached ? '잡힘' : snapshot.grasp.active ? `닫힘 ${(snapshot.grasp.closure * 100).toFixed(0)}%` : '대기'}</b></span>}
+        {snapshot?.grasp && <span>파지 <b>{snapshot.grasp.bilateral_contact
+          ? `물리 접촉 L ${snapshot.grasp.normal_force_n.left.toFixed(1)} · R ${snapshot.grasp.normal_force_n.right.toFixed(1)} N`
+          : snapshot.grasp.active ? `닫힘 ${(snapshot.grasp.closure * 100).toFixed(0)}%` : '대기'}</b></span>}
         <span>녹화 <b>{snapshot?.recording_frames ?? 0} frames</b></span>
       </div>
       {busy && <div className="busy-overlay"><span className="spinner"/> 준비하는 중…</div>}

@@ -1,12 +1,14 @@
 import copy
 import json
 
+import mujoco
 import numpy as np
 import pytest
 
 from motioncreator.grasp import GRASP_FORMAT, fit_two_hand_grasp
+from motioncreator.grip_geometry import grip_pad_contact_anchor, grip_pad_half_size
 from motioncreator.motion import new_project, save_bundle, validate_project
-from motioncreator.policy_preview import compile_preview_motion, simulate
+from motioncreator.policy_preview import build_model, compile_preview_motion, simulate
 from motioncreator.robot import Robot
 
 
@@ -38,7 +40,7 @@ def test_grasp_fit_uses_imported_pose_and_stores_physics_closure(tmp_path):
     validate_project(robot, project)
     assert result['solver']['contact']['target_error_mm'] < 1
     assert result['solver']['closure']['target_error_mm'] < 1
-    assert result['grasp']['contact_anchor'] == 'lower_palm_wrist'
+    assert result['grasp']['contact_anchor'] == 'finger_wrist_pad'
     assert len(result['grasp']['closure_qpos']) == robot.model.nq
     assert not np.allclose(result['state']['qpos'][7:], result['grasp']['closure_qpos'][7:])
     json.dumps(project, allow_nan=False)
@@ -46,6 +48,17 @@ def test_grasp_fit_uses_imported_pose_and_stores_physics_closure(tmp_path):
     reopened = json.loads((tmp_path / bundle['project_file']).read_text())
     assert reopened['keyframes'][0]['grasp']['object_id'] == 'grasp-box'
     validate_project(robot, reopened)
+
+
+def test_grasp_uses_visible_finger_to_wrist_box_pads():
+    robot, project, _ = fitted_project()
+    model = build_model(robot, project)
+    for side in ('left', 'right'):
+        geom = model.geom(f'{side}_preview_grip')
+        assert geom.type == mujoco.mjtGeom.mjGEOM_BOX
+        np.testing.assert_allclose(geom.size, grip_pad_half_size())
+        sign = -1 if side == 'left' else 1
+        assert geom.pos[1] + sign * geom.size[1] == pytest.approx(grip_pad_contact_anchor(side)[1])
 
 
 def test_physics_preview_prepends_grasp_closure_and_reports_contact():

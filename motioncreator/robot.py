@@ -7,6 +7,8 @@ import mujoco
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 
+from .grip_geometry import grip_pad_center, grip_pad_half_size
+
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / 'assets/g1/g1.xml'
 HANDLES = {
@@ -297,9 +299,18 @@ class Robot:
                    for k in HANDLES for p, r in [self.point(d, k)]}
         geoms = {str(i): {'position': d.geom_xpos[i].tolist(), 'quaternion': Rotation.from_matrix(d.geom_xmat[i].reshape(3, 3)).as_quat().tolist()}
                  for i in self.visual_ids}
+        grip_pads = {}
+        for side in ('left', 'right'):
+            body = self.model.body(f'{side}_wrist_yaw_link').id
+            rotation = d.xmat[body].reshape(3, 3)
+            grip_pads[side] = {
+                'position': (d.xpos[body] + rotation @ grip_pad_center(side)).tolist(),
+                'quaternion': Rotation.from_matrix(rotation).as_quat().tolist(),
+                'size': (2 * grip_pad_half_size()).tolist(),
+            }
         floor_min = min(self.point(d, k)[0][2] + (self.point(d, k)[1] @ np.array(o))[2]
                         for k in FEET for o in ((-.085, -.03, 0), (-.085, .03, 0), (.085, -.03, 0), (.085, .03, 0)))
-        return {'qpos': np.asarray(q).tolist(), 'handles': handles, 'geoms': geoms,
+        return {'qpos': np.asarray(q).tolist(), 'handles': handles, 'geoms': geoms, 'grip_pads': grip_pads,
                 'com': d.subtree_com[self.ids['pelvis']].tolist(), 'floor_min_mm': float(floor_min * 1000),
                 'hinges': {k: {'joint_name': name, 'angle': float(q[self.model.joint(name).qposadr[0]]),
                               'limits': self.model.joint(name).range.tolist(),

@@ -3,14 +3,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from functools import lru_cache
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+from .grip_geometry import GRIP_PAD_FORMAT, grip_pad_contact_anchor
 from .robot import HANDLES, Robot
-from .task_physics import build_scene
-from .tasks import TaskSpec
 
 
 GRASP_FORMAT = 'motioncreator.two-hand-grasp.v1'
@@ -19,32 +17,13 @@ HAND_KEYS = ('left_hand', 'right_hand')
 
 def object_signature(item):
     payload = {key: item[key] for key in ('id', 'shape', 'position', 'quaternion_xyzw', 'size')}
+    payload['grip_geometry'] = GRIP_PAD_FORMAT
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-@lru_cache(maxsize=1)
 def lower_palm_wrist_anchors():
-    """Return wrist-local contact anchors biased toward the lower palm/wrist pad.
-
-    The full convex rubber-hand mesh remains the physics collider. These points only
-    calibrate which part of that mesh is aligned to the authored box surface.
-    """
-    model, _ = build_scene(TaskSpec())
-    anchors = {}
-    for side in ('left', 'right'):
-        geom_id = model.geom(f'{side}_grip').id
-        mesh_id = int(model.geom_dataid[geom_id])
-        start = int(model.mesh_vertadr[mesh_id])
-        count = int(model.mesh_vertnum[mesh_id])
-        vertices = model.mesh_vert[start:start + count]
-        rotation = Rotation.from_quat(model.geom_quat[geom_id][[1, 2, 3, 0]]).as_matrix()
-        points = vertices @ rotation.T + model.geom_pos[geom_id]
-        low, high = points.min(0), points.max(0)
-        # A repeatable point near the wrist-side and lower portion of the inner pad.
-        point = low + .35 * (high - low)
-        point[1] = low[1] if side == 'left' else high[1]
-        anchors[side] = point
-    return anchors
+    """Return the center of each finger-tip-to-wrist contact plane in wrist coordinates."""
+    return {side: grip_pad_contact_anchor(side) for side in ('left', 'right')}
 
 
 def _validate_uv(value, label):
@@ -147,7 +126,7 @@ def fit_two_hand_grasp(robot: Robot, qpos, pins, item, event):
     if closure_info['rejected'] or closure_info['target_error_mm'] > 15:
         raise ValueError('설정한 안쪽 오프셋까지 안전하게 닫을 수 없습니다. 값을 줄여주세요.')
     fitted = {**event, 'object_signature': object_signature(item),
-              'contact_anchor': 'lower_palm_wrist', 'hand_twist_deg': twist,
+              'contact_anchor': 'finger_wrist_pad', 'hand_twist_deg': twist,
               'contact_points_world': contacts, 'closure_qpos': closure_pose.tolist()}
     return {'state': robot.state(contact_pose), 'grasp': fitted,
             'solver': {'contact': contact_info, 'closure': closure_info}}

@@ -17,6 +17,7 @@ import numpy as np
 
 from .motion import compile_motion, project_scene_objects, validate_project
 from .grasp import object_signature
+from .grip_geometry import grip_pad_center, grip_pad_half_size
 from .robot import MODEL_PATH, ROOT, Robot
 from .sonic import KP, KD, Reference, SonicCPU
 from .task_jobs import atomic_json
@@ -123,11 +124,12 @@ def build_model(robot, project=None):
             contact = ET.SubElement(root, 'contact')
         for side in ('left', 'right'):
             body = root.find(f".//body[@name='{side}_wrist_yaw_link']")
-            visual = body.find(f"geom[@mesh='{side}_rubber_hand']")
-            grip = copy.deepcopy(visual)
-            grip.attrib.update(name=f'{side}_preview_grip', contype='1', conaffinity='1', group='3', density='0')
-            body.append(grip)
+            ET.SubElement(body, 'geom', name=f'{side}_preview_grip', type='box',
+                          pos=_numbers(grip_pad_center(side)), size=_numbers(grip_pad_half_size()),
+                          contype='1', conaffinity='1', group='3', density='0', friction='1 .005 .0001',
+                          rgba='.15 .9 .72 .45' if side == 'left' else '1 .62 .25 .45')
         world = root.find('worldbody')
+        object_geoms = []
         for index, item in enumerate(objects):
             body = ET.SubElement(world, 'body', name=f'preview_object_{index}',
                                  pos=_numbers(_grounded_position(item)),
@@ -137,11 +139,18 @@ def build_model(robot, project=None):
             mj_size = size / 2 if item['shape'] == 'box' else [size[0] / 2] if item['shape'] == 'sphere' else [size[0] / 2, size[2] / 2]
             geom_name = f'preview_object_geom_{index}'
             ET.SubElement(body, 'geom', name=geom_name, type=item['shape'], size=_numbers(mj_size),
-                          mass=str(float(item['mass_kg'])), friction=_numbers([item['friction'], .005, .0001]))
+                          mass=str(float(item['mass_kg'])), friction=_numbers([item['friction'], .005, .0001]),
+                          contype='0', conaffinity='0')
+            object_geoms.append(geom_name)
             for side in ('left', 'right'):
                 ET.SubElement(contact, 'pair', geom1=f'{side}_preview_grip', geom2=geom_name,
                               condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
                               solref='.01 1', solimp='.95 .99 .001')
+            ET.SubElement(contact, 'pair', geom1='floor', geom2=geom_name, condim='3',
+                          friction=_numbers([item['friction'], item['friction'], 0, 0, 0]))
+        for first, geom1 in enumerate(object_geoms):
+            for geom2 in object_geoms[first + 1:]:
+                ET.SubElement(contact, 'pair', geom1=geom1, geom2=geom2, condim='3')
     model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding='unicode'))
     if model.nq != 36 + 7 * len(objects) or model.nu != 29 or model.neq:
         raise ValueError('Unexpected G1 physics model')

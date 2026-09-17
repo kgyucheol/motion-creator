@@ -10,6 +10,7 @@ export type PoseState = {
   qpos: number[];
   handles: Record<string, { position: number[]; quaternion: number[]; label: string }>;
   geoms: Record<string, { position: number[]; quaternion: number[] }>;
+  grip_pads: Record<'left' | 'right', { position: number[]; quaternion: number[]; size: number[] }>;
   com: number[];
   floor_min_mm: number;
   hinges: Record<string, { joint_name: string; angle: number; limits: number[]; axis_world: number[]; position: number[] }>;
@@ -94,6 +95,7 @@ export class RobotScene {
   gripMarkerObjectId: string | null = null;
   gripMarkerUV: { left: number[]; right: number[] } | null = null;
   gripMarkers: Record<'left' | 'right', THREE.Mesh>;
+  gripPads: Record<'left' | 'right', THREE.Mesh>;
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
   hingeDrag: { quaternion: THREE.Quaternion; angle: number; lastTwist: number; delta: number; limits: number[]; key: string; component: 'x' | 'y' | 'z' } | null = null;
@@ -185,6 +187,16 @@ export class RobotScene {
     this.gripMarkers = Object.fromEntries((['left', 'right'] as const).map(side => {
       const marker = new THREE.Mesh(new THREE.SphereGeometry(.018, 16, 10), new THREE.MeshBasicMaterial({ color: side === 'left' ? '#55e7c1' : '#ffbd70', depthTest: false }));
       marker.visible = false; marker.renderOrder = 5; this.scene.add(marker); return [side, marker];
+    })) as unknown as Record<'left' | 'right', THREE.Mesh>;
+    this.gripPads = Object.fromEntries((['left', 'right'] as const).map(side => {
+      const color = side === 'left' ? '#42e5bc' : '#ff9e45';
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({
+        color, emissive: color, emissiveIntensity: .18, transparent: true, opacity: .5,
+        roughness: .55, metalness: .05, side: THREE.DoubleSide, depthWrite: false,
+      }));
+      pad.renderOrder = 1;
+      const outline = new THREE.LineSegments(new THREE.EdgesGeometry(pad.geometry), new THREE.LineBasicMaterial({ color, transparent: true, opacity: .9 }));
+      pad.add(outline); this.scene.add(pad); return [side, pad];
     })) as unknown as Record<'left' | 'right', THREE.Mesh>;
     this.renderer.domElement.addEventListener('pointermove', this.hover);
     this.renderer.domElement.addEventListener('pointerdown', this.click, true);
@@ -374,6 +386,10 @@ export class RobotScene {
     for (const [id, pose] of Object.entries(state.geoms)) {
       const obj = this.geoms[id];
       if (obj) { obj.position.fromArray(pose.position); obj.quaternion.fromArray(pose.quaternion); }
+    }
+    for (const [side, pose] of Object.entries(state.grip_pads ?? {})) {
+      const pad = this.gripPads[side as 'left' | 'right'];
+      pad.position.fromArray(pose.position); pad.quaternion.fromArray(pose.quaternion); pad.scale.fromArray(pose.size);
     }
     for (const [key, h] of Object.entries(state.handles)) {
       if (!this.markers[key]) {

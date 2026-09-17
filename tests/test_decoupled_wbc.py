@@ -102,8 +102,12 @@ def test_environment_uses_a_free_body_for_grasp_target_and_fixed_support():
     assert model.joint("wbc_object_joint_0").type == mujoco.mjtJoint.mjJNT_FREE
     assert model.body("wbc_object_0").id > 0
     assert model.body("wbc_object_1").jntnum == 0
+    assert model.geom("left_wbc_grip").type == mujoco.mjtGeom.mjGEOM_BOX
+    assert model.geom("right_wbc_grip").type == mujoco.mjtGeom.mjGEOM_BOX
     assert model.geom("left_wbc_grip").contype == 1
     assert model.geom("right_wbc_grip").contype == 1
+    assert model.geom("wbc_object_geom_0").contype == 0
+    assert model.npair == 7
 
 
 def test_http_command_fallback_dispatches_without_websocket(monkeypatch):

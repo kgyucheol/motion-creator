@@ -34,7 +34,7 @@ export default function GraspControls({ objects, selectedObjectId, grasp, disabl
   return <section className="grasp-controls">
     <div className="panel-heading"><span>양손 파지</span><small>키프레임 상호작용</small></div>
     {!grasp ? <>
-      <p className="hint">선택 키프레임의 자세를 기반으로 페이크 핸드의 손바닥 하단–손목 접촉부를 박스 양면에 맞춥니다.</p>
+      <p className="hint">손가락 끝과 손목 요 링크 사이를 잇는 직사각형 파지 패드를 박스 양면에 맞춥니다. 화면의 청록·주황 면이 실제 물리 접촉면입니다.</p>
       <button className="wide" disabled={disabled || !selectedBox} onClick={() => selectedBox && onChange(freshGrasp(selectedBox.id))}><Hand size={15}/>선택 박스에 파지 설정</button>
       {!selectedBox && <p className="hint">먼저 장면에서 파지할 박스를 선택하세요.</p>}
     </> : <>
@@ -52,7 +52,7 @@ export default function GraspControls({ objects, selectedObjectId, grasp, disabl
       <div className="grasp-force-row"><label>검증 목표 힘 <input type="number" min="1" max="200" value={grasp.target_force_n} disabled={disabled} onChange={event => { const value = +event.target.value; update({ target_force_n: value, max_force_n: Math.max(value, grasp.max_force_n) }); }}/>N</label><label>안전 상한 <input type="number" min={grasp.target_force_n} max="400" value={grasp.max_force_n} disabled={disabled} onChange={event => update({ max_force_n: Math.max(grasp.target_force_n, +event.target.value) })}/>N</label></div>
       <button className="wide primary" disabled={disabled || !selectedBox} onClick={onFit}><Hand size={15}/>양손 파지 자세 맞추기</button>
       <button className="wide" disabled={disabled || !grasp.closure_qpos} onClick={onValidate}><Play size={15}/>이 키프레임부터 물리 검증</button>
-      {grasp.closure_qpos && <p className="hint">접촉 자세 보정 완료 · 손목 비틀림 {grasp.hand_twist_deg?.toFixed(0) ?? 0}° · 물리 재생 시작 시 {grasp.closure_seconds.toFixed(1)}초 동안 닫습니다.</p>}
+      {grasp.closure_qpos && <p className="hint">직사각형 패드 접촉 자세 보정 완료 · 손목 비틀림 {grasp.hand_twist_deg?.toFixed(0) ?? 0}° · 물리 재생 시작 시 {grasp.closure_seconds.toFixed(1)}초 동안 닫습니다.</p>}
       <button className="wide danger-subtle" disabled={disabled} onClick={() => { onPickMode(null); onChange(undefined); }}><RotateCcw size={14}/>파지 설정 제거</button>
       <p className="hint">안쪽 오프셋은 힘이 아닌 위치 목표입니다. 접촉력은 MuJoCo 검증 결과에서 측정합니다.</p>
     </>}
