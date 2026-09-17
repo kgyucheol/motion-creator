@@ -7,7 +7,7 @@ import json
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .grip_geometry import GRIP_PAD_FORMAT, grip_pad_contact_anchor
+from .grip_geometry import GRIP_PAD_FORMAT, grip_pad_contact_anchor, grip_pad_rotation
 from .robot import HANDLES, Robot
 
 
@@ -78,7 +78,10 @@ def _targets(item, left_uv, right_uv, inward_offset, twist_degrees):
         surface, outward = _box_contact(item, uv, sign)
         desired_contact = surface - outward * inward_offset / 2
         twist = twist_degrees if side == 'left' else -twist_degrees
-        hand_rotation = box_rotation @ Rotation.from_euler('y', twist, degrees=True).as_matrix()
+        pad_rotation = box_rotation @ Rotation.from_euler('y', twist, degrees=True).as_matrix()
+        # The pad is angled in the wrist frame so its proximal edge intersects
+        # the wrist-yaw link and its distal edge intersects all four fingertips.
+        hand_rotation = pad_rotation @ grip_pad_rotation(side).T
         wrist = desired_contact - hand_rotation @ anchors[side]
         key = f'{side}_hand'
         targets[key] = (wrist + hand_rotation @ np.asarray(HANDLES[key][1])).tolist()

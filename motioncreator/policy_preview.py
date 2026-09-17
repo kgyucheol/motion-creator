@@ -17,7 +17,8 @@ import numpy as np
 
 from .motion import compile_motion, project_scene_objects, validate_project
 from .grasp import object_signature
-from .grip_geometry import grip_pad_center, grip_pad_half_size
+from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_quaternion_wxyz
+from .hand_collision import physical_hand_geom_names
 from .robot import MODEL_PATH, ROOT, Robot
 from .sonic import KP, KD, Reference, SonicCPU
 from .task_jobs import atomic_json
@@ -124,9 +125,11 @@ def build_model(robot, project=None):
             contact = ET.SubElement(root, 'contact')
         for side in ('left', 'right'):
             body = root.find(f".//body[@name='{side}_wrist_yaw_link']")
+            physical_hand_geom_names(root, side)
             ET.SubElement(body, 'geom', name=f'{side}_preview_grip', type='box',
-                          pos=_numbers(grip_pad_center(side)), size=_numbers(grip_pad_half_size()),
-                          contype='1', conaffinity='1', group='3', density='0', friction='1 .005 .0001',
+                          pos=_numbers(grip_pad_center(side)), quat=_numbers(grip_pad_quaternion_wxyz(side)),
+                          size=_numbers(grip_pad_half_size()),
+                          contype='0', conaffinity='0', group='3', density='0',
                           rgba='.15 .9 .72 .45' if side == 'left' else '1 .62 .25 .45')
         world = root.find('worldbody')
         object_geoms = []
@@ -143,9 +146,10 @@ def build_model(robot, project=None):
                           contype='0', conaffinity='0')
             object_geoms.append(geom_name)
             for side in ('left', 'right'):
-                ET.SubElement(contact, 'pair', geom1=f'{side}_preview_grip', geom2=geom_name,
-                              condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
-                              solref='.01 1', solimp='.95 .99 .001')
+                for hand_index in range(2):
+                    ET.SubElement(contact, 'pair', geom1=f'{side}_physical_hand_{hand_index}', geom2=geom_name,
+                                  condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
+                                  solref='.01 1', solimp='.95 .99 .001')
             ET.SubElement(contact, 'pair', geom1='floor', geom2=geom_name, condim='3',
                           friction=_numbers([item['friction'], item['friction'], 0, 0, 0]))
         for first, geom1 in enumerate(object_geoms):
@@ -203,7 +207,8 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
             grasp_stats['max_penetration_m'] = max(grasp_stats['max_penetration_m'], -float(contact.dist))
             other = contact.geom1 if contact.geom2 == object_geom else contact.geom2
             for side in ('left', 'right'):
-                if other != model.geom(f'{side}_preview_grip').id:
+                actual_hand = {model.geom(f'{side}_physical_hand_{index}').id for index in range(2)}
+                if other not in actual_hand:
                     continue
                 wrench = np.zeros(6)
                 mujoco.mj_contactForce(model, data, contact_index, wrench)

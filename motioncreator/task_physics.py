@@ -4,7 +4,9 @@ import xml.etree.ElementTree as ET
 import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
-from .grip_geometry import grip_pad_center, grip_pad_contact_anchor, grip_pad_half_size
+from .grip_geometry import (grip_pad_center, grip_pad_contact_anchor, grip_pad_half_size,
+                            grip_pad_quaternion_wxyz)
+from .hand_collision import physical_hand_geom_names
 from .robot import MODEL_PATH, ROOT, Robot
 from .tasks import TaskSpec, TaskFSM
 from .sonic import KP,KD,Reference,SonicCPU
@@ -17,7 +19,8 @@ def build_scene(spec:TaskSpec):
     opt=root.find('option')
     if opt is None: opt=ET.SubElement(root,'option')
     opt.attrib.update(timestep='0.002',integrator='implicitfast',cone='elliptic',iterations='80',gravity='0 0 -9.81')
-    # Retain editor's robot inertias and torque limits; add only collision surfaces to its existing fake hands.
+    # Retain editor inertias/limits. The colored alignment pads are visual-only;
+    # explicit object contacts use the actual wrist and hand meshes.
     # Effective motor rotor inertia from the same released SONIC stiffness/armature constants.
     for i,name in enumerate(Robot().names):
         root.find(f".//joint[@name='{name}']").set('armature',str(float(KP[i]/(20*np.pi)**2)))
@@ -25,12 +28,15 @@ def build_scene(spec:TaskSpec):
     if contact is None: contact=ET.SubElement(root,'contact')
     for side in ('left','right'):
         body=root.find(f".//body[@name='{side}_wrist_yaw_link']")
+        physical_geoms=physical_hand_geom_names(root,side)
         ET.SubElement(body,'geom',name=side+'_grip',type='box',pos=numbers(grip_pad_center(side)),
-                      size=numbers(grip_pad_half_size()),contype='1',conaffinity='1',group='3',
-                      density='0',friction=numbers([spec.hand_friction,.005,.0001]),
+                      quat=numbers(grip_pad_quaternion_wxyz(side)), size=numbers(grip_pad_half_size()),
+                      contype='0',conaffinity='0',group='3',density='0',
                       rgba='.15 .9 .72 .45' if side=='left' else '1 .62 .25 .45')
-        ET.SubElement(contact,'pair',geom1=side+'_grip',geom2='task_box_geom',condim='3',
-                      friction=numbers([spec.hand_friction]*2+[0,0,0]),solref='.01 1',solimp='.95 .99 .001')
+        for geom_name in physical_geoms:
+            ET.SubElement(contact,'pair',geom1=geom_name,geom2='task_box_geom',condim='3',
+                          friction=numbers([spec.hand_friction]*2+[0,0,0]),
+                          solref='.01 1',solimp='.95 .99 .001')
     floor=root.find(".//geom[@name='floor']"); floor.set('friction',numbers([spec.floor_friction,.005,.0001])); floor.set('priority','1')
     world=root.find('worldbody')
     box=ET.SubElement(world,'body',name='task_box',pos=numbers(spec.actual.pose.position),
@@ -51,12 +57,19 @@ def build_scene(spec:TaskSpec):
     return model,xml
 
 def hand_surface_offsets(model):
-    """Return the exact inner support-plane centers used by the collision model."""
+    """Return the virtual hand-alignment plane centers used by grasp planning."""
     return {side: grip_pad_contact_anchor(side) for side in ('left','right')}
 
 def contact_metrics(m,d):
     box=m.geom('task_box_geom').id
     out={s:{'normal_n':0.,'tangent_n':0.,'slip_m_s':0.,'force_world_n':np.zeros(3),'wrist_contact_torque_world_nm':np.zeros(3),'contacts':0} for s in ('left','right')}
+    hand_geoms={}
+    for side in out:
+        ids={mujoco.mj_name2id(m,mujoco.mjtObj.mjOBJ_GEOM,f'{side}_physical_hand_{index}')
+             for index in range(2)}-{-1}
+        if not ids:
+            ids={m.geom(f'{side}_grip').id}
+        hand_geoms[side]=ids
     support=0.; pallet_support=0.; penetration=0.
     for i in range(d.ncon):
         c=d.contact[i]
@@ -70,7 +83,7 @@ def contact_metrics(m,d):
             support+=max(0.,force[2])
             if other==m.geom('task_pallet').id: pallet_support+=max(0.,force[2])
         for side in out:
-            if other!=m.geom(side+'_grip').id: continue
+            if other not in hand_geoms[side]: continue
             h=out[side]; h['normal_n']+=max(0.,f[0]); h['tangent_n']+=np.linalg.norm(f[1:3]); h['contacts']+=1
             # External box force/wrench ON the hand, expressed in world axes at wrist origin.
             h['force_world_n']-=force
@@ -159,8 +172,8 @@ def simulate(plan,t,q,folder,controller='sonic',progress=lambda *a:None,cancel=l
             'sim_seconds':float(d.time),'wall_seconds':time.perf_counter()-start,'physics_hz':500,'policy_hz':50,
             'scene_sha256':hashlib.sha256(xml.encode()).hexdigest(),'max_torque_saturation_fraction':maxsat,
             'max_hand_normal_n':maxforce,'attachments':False,'external_support_forces':False,
-            'wrench_semantics':'box contact wrench on fake hand, at wrist origin, world axes; not total wrist load',
-            'limitations':['Rigid box and convex fake-hand mesh; no cardboard deformation','A successful trial is specific to this reference, box and controller configuration']}
+            'wrench_semantics':'box contact wrench on real hand meshes, at wrist origin, world axes; not total wrist load',
+            'limitations':['Rigid box and convex hand/wrist collision meshes; no cardboard deformation','A successful trial is specific to this reference, box and controller configuration']}
     (folder/'report.json').write_text(json.dumps(report,indent=2,allow_nan=False))
     (folder/'contact-log.json').write_text(json.dumps(logs,allow_nan=False))
     (folder/'replay.json').write_text(json.dumps(trace,allow_nan=False))

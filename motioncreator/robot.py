@@ -7,7 +7,7 @@ import mujoco
 from scipy.optimize import least_squares
 from scipy.spatial.transform import Rotation
 
-from .grip_geometry import grip_pad_center, grip_pad_half_size
+from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_rotation
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / 'assets/g1/g1.xml'
@@ -305,7 +305,7 @@ class Robot:
             rotation = d.xmat[body].reshape(3, 3)
             grip_pads[side] = {
                 'position': (d.xpos[body] + rotation @ grip_pad_center(side)).tolist(),
-                'quaternion': Rotation.from_matrix(rotation).as_quat().tolist(),
+                'quaternion': Rotation.from_matrix(rotation @ grip_pad_rotation(side)).as_quat().tolist(),
                 'size': (2 * grip_pad_half_size()).tolist(),
             }
         floor_min = min(self.point(d, k)[0][2] + (self.point(d, k)[1] @ np.array(o))[2]

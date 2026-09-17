@@ -62,9 +62,13 @@ def test_physics_free_box_and_explicit_friction_and_no_robot_asset_mutation():
     assert m.jnt_type[m.joint('task_box_free').id]==mujoco.mjtJoint.mjJNT_FREE
     for s in ['left','right']:
         gid=m.geom(s+'_grip').id
-        assert m.geom_contype[gid] and m.geom_conaffinity[gid]
-        idx=np.where(((m.pair_geom1==gid)&(m.pair_geom2==m.geom('task_box_geom').id))|((m.pair_geom2==gid)&(m.pair_geom1==m.geom('task_box_geom').id)))[0][0]
-        np.testing.assert_array_equal(m.pair_friction[idx,:2],[0.,0.])
+        assert not m.geom_contype[gid] and not m.geom_conaffinity[gid]
+        box=m.geom('task_box_geom').id
+        assert not np.any(((m.pair_geom1==gid)&(m.pair_geom2==box))|((m.pair_geom2==gid)&(m.pair_geom1==box)))
+        for hand_index in range(2):
+            hand=m.geom(f'{s}_physical_hand_{hand_index}').id
+            idx=np.where(((m.pair_geom1==hand)&(m.pair_geom2==box))|((m.pair_geom2==hand)&(m.pair_geom1==box)))[0][0]
+            np.testing.assert_array_equal(m.pair_friction[idx,:2],[0.,0.])
     assert np.all(m.dof_armature[6:35]>0)
     assert Robot().fingerprint==original
     offsets=hand_surface_offsets(m)

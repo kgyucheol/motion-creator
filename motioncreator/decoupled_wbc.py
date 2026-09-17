@@ -22,7 +22,8 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .grasp import fit_two_hand_grasp, object_signature
-from .grip_geometry import grip_pad_center, grip_pad_half_size
+from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_quaternion_wxyz
+from .hand_collision import physical_hand_geom_names
 from .motion import compile_motion, project_scene_objects, validate_project
 from .robot import ROOT, Robot
 
@@ -104,10 +105,11 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
             contact = ET.SubElement(root, "contact")
         for side in ("left", "right"):
             body = root.find(f".//body[@name='{side}_wrist_yaw_link']")
+            physical_hand_geom_names(root, side, dex3=True)
             ET.SubElement(body, "geom", name=f"{side}_wbc_grip", type="box",
-                          pos=_numbers(grip_pad_center(side)), size=_numbers(grip_pad_half_size()),
-                          contype="1", conaffinity="1", group="3", density="0",
-                          friction="1 .005 .0001",
+                          pos=_numbers(grip_pad_center(side)), quat=_numbers(grip_pad_quaternion_wxyz(side)),
+                          size=_numbers(grip_pad_half_size()),
+                          contype="0", conaffinity="0", group="3", density="0",
                           rgba=".15 .9 .72 .45" if side == "left" else "1 .62 .25 .45")
         world = root.find("worldbody")
         object_geoms = []
@@ -126,9 +128,11 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
                           friction=_numbers([item["friction"], .005, .0001]), contype="0", conaffinity="0")
             object_geoms.append(geom_name)
             for side in ("left", "right"):
-                ET.SubElement(contact, "pair", geom1=f"{side}_wbc_grip", geom2=geom_name,
-                              condim="3", friction=_numbers([item["friction"], item["friction"], 0, 0, 0]),
-                              solref=".01 1", solimp=".95 .99 .001")
+                for hand_index in range(6):
+                    ET.SubElement(contact, "pair", geom1=f"{side}_physical_hand_{hand_index}", geom2=geom_name,
+                                  condim="3",
+                                  friction=_numbers([item["friction"], item["friction"], 0, 0, 0]),
+                                  solref=".01 1", solimp=".95 .99 .001")
             ET.SubElement(contact, "pair", geom1="floor", geom2=geom_name, condim="3",
                           friction=_numbers([item["friction"], item["friction"], 0, 0, 0]))
         for first, geom1 in enumerate(object_geoms):
@@ -278,8 +282,10 @@ class DecoupledSimulation:
                               for index, item in enumerate(self.scene_objects)}
         self.object_geoms = {item["id"]: self.model.geom(f"wbc_object_geom_{index}").id
                              for index, item in enumerate(self.scene_objects)}
-        self.grip_geoms = {side: self.model.geom(f"{side}_wbc_grip").id for side in ("left", "right")} \
-            if self.grasp_control else {}
+        self.hand_geoms = {
+            side: {self.model.geom(f"{side}_physical_hand_{index}").id for index in range(6)}
+            for side in ("left", "right")
+        } if self.grasp_control else {}
         self.policy = LowerBodyPolicy(self.parameters)
         self.command = CommandState(height=self.parameters["initial_height"])
         self.lock = threading.RLock()
@@ -322,8 +328,8 @@ class DecoupledSimulation:
                 continue
             wrench = np.zeros(6)
             mujoco.mj_contactForce(self.model, self.data, index, wrench)
-            for side, geom in self.grip_geoms.items():
-                if geom in pair:
+            for side, geoms in self.hand_geoms.items():
+                if pair & geoms:
                     forces[side] += max(0., float(wrench[0]))
         return forces
 
@@ -332,8 +338,8 @@ class DecoupledSimulation:
             mujoco.mj_resetData(self.model, self.data)
             self.data.qpos[:] = self.model.qpos0
             self.data.qpos[7:22] = np.asarray(self.parameters["default_angles"])
-            # Start from the authored upper-body pose so the physical pads do not
-            # sweep through nearby objects while the lower-body policy settles.
+            # Start from the authored upper-body pose so the real hand meshes do
+            # not sweep through nearby objects while the lower-body policy settles.
             self.data.qpos[22:36] = self._reference_at(0.)[22:36]
             mujoco.mj_forward(self.model, self.data)
             self.policy.reset()

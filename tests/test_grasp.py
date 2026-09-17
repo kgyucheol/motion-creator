@@ -6,7 +6,9 @@ import numpy as np
 import pytest
 
 from motioncreator.grasp import GRASP_FORMAT, fit_two_hand_grasp
-from motioncreator.grip_geometry import grip_pad_contact_anchor, grip_pad_half_size
+from motioncreator.grip_geometry import (GRIP_PAD_FORMAT, grip_pad_contact_anchor,
+                                         grip_pad_contact_normal, grip_pad_half_size,
+                                         grip_pad_rotation)
 from motioncreator.motion import new_project, save_bundle, validate_project
 from motioncreator.policy_preview import build_model, compile_preview_motion, simulate
 from motioncreator.robot import Robot
@@ -56,9 +58,57 @@ def test_grasp_uses_visible_finger_to_wrist_box_pads():
     for side in ('left', 'right'):
         geom = model.geom(f'{side}_preview_grip')
         assert geom.type == mujoco.mjtGeom.mjGEOM_BOX
+        assert geom.contype == 0 and geom.conaffinity == 0
         np.testing.assert_allclose(geom.size, grip_pad_half_size())
-        sign = -1 if side == 'left' else 1
-        assert geom.pos[1] + sign * geom.size[1] == pytest.approx(grip_pad_contact_anchor(side)[1])
+        geom_matrix = np.zeros(9)
+        mujoco.mju_quat2Mat(geom_matrix, model.geom_quat[geom.id])
+        np.testing.assert_allclose(geom_matrix.reshape(3, 3), grip_pad_rotation(side), atol=1e-7)
+        contact = geom.pos + grip_pad_contact_normal(side) * geom.size[1]
+        np.testing.assert_allclose(contact, grip_pad_contact_anchor(side), atol=1e-7)
+        actual = {model.geom(f'{side}_physical_hand_{index}').id for index in range(2)}
+        paired = [{int(model.pair_geom1[index]), int(model.pair_geom2[index])}
+                  for index in range(model.npair)]
+        assert geom.id not in set().union(*paired)
+        assert any(actual & pair for pair in paired)
+    assert GRIP_PAD_FORMAT.endswith('four-finger-wrist-pad.v2')
+
+
+def test_grip_pad_spans_four_fingers_but_excludes_thumb():
+    # Measured wrist-local bounds of the four long rubber-hand fingers. The
+    # thumb begins at z=47.4 mm and must remain outside the auxiliary surface.
+    four_finger_z = np.array([-.0430289, .03604572])
+    thumb_z_min = .04737843
+    left_support_points = np.array([
+        [.02899996, -.02383722, -.002614],     # wrist-yaw link
+        [.16557813, -.04289171, -.01588409],  # index/ring finger surfaces
+        [.16991816, -.04487687, .00655421],
+        [.15710959, -.04102468, -.0383332],
+        [.16417232, -.0435376, .03054256],
+    ])
+    for side in ('left', 'right'):
+        rotation = grip_pad_rotation(side)
+        center = grip_pad_contact_anchor(side)
+        half = grip_pad_half_size()
+        corners = np.array([center + rotation @ np.array([x, 0., z])
+                            for x in (-half[0], half[0]) for z in (-half[2], half[2])])
+        assert corners[:, 2].min() <= four_finger_z[0]
+        assert corners[:, 2].max() >= four_finger_z[1]
+        assert corners[:, 2].max() < thumb_z_min
+
+        # The angled centerline overlaps both measured support points: the
+        # wrist-yaw link near x=29 mm and the four-finger tips near x=170 mm.
+        endpoints = np.array([center + rotation[:, 0] * value
+                              for value in (-half[0], half[0])])
+        assert endpoints[0, 0] < .029
+        assert endpoints[1, 0] > .169
+
+        support_points = left_support_points.copy()
+        if side == 'right':
+            support_points[:, 1] *= -1
+        local = (support_points - center) @ rotation
+        assert np.max(np.abs(local[:, 1])) < .0015
+        assert np.max(np.abs(local[:, 0])) <= half[0]
+        assert np.max(np.abs(local[:, 2])) <= half[2]
 
 
 def test_physics_preview_prepends_grasp_closure_and_reports_contact():

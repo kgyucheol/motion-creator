@@ -34,7 +34,7 @@ export default function GraspControls({ objects, selectedObjectId, grasp, disabl
   return <section className="grasp-controls">
     <div className="panel-heading"><span>양손 파지</span><small>키프레임 상호작용</small></div>
     {!grasp ? <>
-      <p className="hint">손가락 끝과 손목 요 링크 사이를 잇는 직사각형 파지 패드를 박스 양면에 맞춥니다. 화면의 청록·주황 면이 실제 물리 접촉면입니다.</p>
+      <p className="hint">손가락 끝과 손목 요 링크 사이를 잇는 청록·주황 면은 자세를 맞추는 가상 기준면이며 충돌하지 않습니다. 물리 재생에서는 실제 손·손목 메시가 박스와 접촉합니다.</p>
       <button className="wide" disabled={disabled || !selectedBox} onClick={() => selectedBox && onChange(freshGrasp(selectedBox.id))}><Hand size={15}/>선택 박스에 파지 설정</button>
       {!selectedBox && <p className="hint">먼저 장면에서 파지할 박스를 선택하세요.</p>}
     </> : <>
