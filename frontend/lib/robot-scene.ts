@@ -55,6 +55,7 @@ type Callbacks = {
   objectTransformBegin?: () => void;
   objectTransformEnd?: () => void;
   objectTransformMode?: (mode: ObjectTransformMode) => void;
+  pickObjectSurface?: (id: string, localPoint: number[], localNormal: number[]) => void;
 };
 
 export class RobotScene {
@@ -89,6 +90,10 @@ export class RobotScene {
   handleLayer: 'body' | 'joints' = 'body';
   visibleHandles: string[] | null = null;
   mirrorTranslation = false;
+  surfacePickMode = false;
+  gripMarkerObjectId: string | null = null;
+  gripMarkerUV: { left: number[]; right: number[] } | null = null;
+  gripMarkers: Record<'left' | 'right', THREE.Mesh>;
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
   hingeDrag: { quaternion: THREE.Quaternion; angle: number; lastTwist: number; delta: number; limits: number[]; key: string; component: 'x' | 'y' | 'z' } | null = null;
@@ -177,6 +182,10 @@ export class RobotScene {
     this.box.add(edges);
     this.com = new THREE.Mesh(new THREE.RingGeometry(.022, .03, 24), new THREE.MeshBasicMaterial({ color: '#f1c267', side: THREE.DoubleSide }));
     this.scene.add(this.com);
+    this.gripMarkers = Object.fromEntries((['left', 'right'] as const).map(side => {
+      const marker = new THREE.Mesh(new THREE.SphereGeometry(.018, 16, 10), new THREE.MeshBasicMaterial({ color: side === 'left' ? '#55e7c1' : '#ffbd70', depthTest: false }));
+      marker.visible = false; marker.renderOrder = 5; this.scene.add(marker); return [side, marker];
+    })) as unknown as Record<'left' | 'right', THREE.Mesh>;
     this.renderer.domElement.addEventListener('pointermove', this.hover);
     this.renderer.domElement.addEventListener('pointerdown', this.click, true);
     window.addEventListener('keydown', this.keydown);
@@ -235,6 +244,12 @@ export class RobotScene {
     this.ray.setFromCamera(this.pointer, this.camera);
     return this.ray.intersectObjects(Object.values(this.sceneObjects).filter(object => object.visible), false)[0]?.object.userData.sceneObjectId as string | undefined;
   }
+  private pickSceneObjectSurface(event: PointerEvent) {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
+    this.ray.setFromCamera(this.pointer, this.camera);
+    return this.ray.intersectObjects(Object.values(this.sceneObjects).filter(object => object.visible), false)[0];
+  }
   hover = (event: PointerEvent) => {
     if (!this.editable || event.buttons || event.shiftKey || event.altKey || this.selectionLocked || this.members.length > 1 || this.gizmo.dragging || this.gizmo.axis) return;
     const key = this.pick(event);
@@ -242,6 +257,16 @@ export class RobotScene {
   };
   click = (event: PointerEvent) => {
     if (!this.editable || this.gizmo.dragging || event.button !== 0) return;
+    if (this.surfacePickMode) {
+      const hit = this.pickSceneObjectSurface(event);
+      if (hit?.face) {
+        event.preventDefault(); event.stopImmediatePropagation();
+        const mesh = hit.object as THREE.Mesh;
+        const localPoint = mesh.worldToLocal(hit.point.clone()).toArray();
+        this.callbacks.pickObjectSurface?.(mesh.userData.sceneObjectId as string, localPoint, hit.face.normal.toArray());
+      }
+      return;
+    }
     const key = this.pick(event);
     if (event.altKey && key) {
       event.preventDefault();
@@ -465,6 +490,30 @@ export class RobotScene {
     }
     if (this.selectedSceneObject && !incoming.has(this.selectedSceneObject)) this.selectedSceneObject = null;
     if (this.selectedSceneObject) this.selectSceneObject(this.selectedSceneObject, this.objectTransformMode);
+    this.refreshGripMarkers();
+    this.dirty = true;
+  }
+  setSurfacePickMode(enabled: boolean) {
+    this.surfacePickMode = enabled;
+    this.renderer.domElement.style.cursor = enabled ? 'crosshair' : '';
+  }
+  setGripMarkers(id: string | null, leftUV?: number[], rightUV?: number[]) {
+    this.gripMarkerObjectId = id;
+    this.gripMarkerUV = id && leftUV && rightUV ? { left: [...leftUV], right: [...rightUV] } : null;
+    this.refreshGripMarkers();
+  }
+  private refreshGripMarkers() {
+    const object = this.gripMarkerObjectId ? this.sceneObjects[this.gripMarkerObjectId] : undefined;
+    if (!object || object.userData.shape !== 'box' || !this.gripMarkerUV) {
+      Object.values(this.gripMarkers).forEach(marker => { marker.visible = false; });
+      return;
+    }
+    object.updateMatrixWorld(true);
+    for (const [side, sign] of [['left', 1], ['right', -1]] as const) {
+      const uv = this.gripMarkerUV[side];
+      this.gripMarkers[side].position.copy(new THREE.Vector3(uv[0] / 2, sign / 2, uv[1] / 2).applyMatrix4(object.matrixWorld));
+      this.gripMarkers[side].visible = true;
+    }
     this.dirty = true;
   }
   selectSceneObject(id: string | null, mode: ObjectTransformMode = this.objectTransformMode) {

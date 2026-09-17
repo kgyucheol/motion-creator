@@ -16,6 +16,7 @@ import mujoco
 import numpy as np
 
 from .motion import compile_motion, project_scene_objects, validate_project
+from .grasp import object_signature
 from .robot import MODEL_PATH, ROOT, Robot
 from .sonic import KP, KD, Reference, SonicCPU
 from .task_jobs import atomic_json
@@ -52,7 +53,39 @@ def project_from_keyframe(project, start_frame_index=0):
 
 def preview_duration(project):
     frames = project['keyframes']
-    return float(frames[0]['duration']) if len(frames) == 1 else sum(float(frame['duration']) for frame in frames[1:])
+    base = float(frames[0]['duration']) if len(frames) == 1 else sum(float(frame['duration']) for frame in frames[1:])
+    grasp = frames[0].get('grasp')
+    return base + (float(grasp['closure_seconds']) if grasp and grasp.get('closure_qpos') is not None else 0.)
+
+
+def compile_preview_motion(robot, project, fps=50):
+    """Prepend a physics-only closing ramp when the first keyframe has a fitted grasp."""
+    grasp = project['keyframes'][0].get('grasp')
+    if not grasp or grasp.get('closure_qpos') is None:
+        motion = compile_motion(robot, project, fps=fps)
+        return motion['time'], motion['qpos'], None
+    objects = project_scene_objects(project)
+    item = next((value for value in objects if value['id'] == grasp['object_id']), None)
+    if item is None or object_signature(item) != grasp.get('object_signature'):
+        raise ValueError('파지 설정 후 대상 상자가 변경되었습니다. 양손 파지 자세를 다시 맞춰주세요.')
+    closed = copy.deepcopy(project)
+    contact_qpos = np.asarray(closed['keyframes'][0]['qpos'], dtype=float)
+    closure_qpos = robot.validate_q(grasp['closure_qpos'])
+    closed['keyframes'][0]['qpos'] = closure_qpos.tolist()
+    closed_motion = compile_motion(robot, closed, fps=fps)
+    base_times, base_poses = closed_motion['time'], closed_motion['qpos']
+    if len(base_times) == 1:
+        hold = float(closed['keyframes'][0]['duration'])
+        base_times = np.array([0., hold])
+        base_poses = np.stack([closure_qpos, closure_qpos])
+    duration = float(grasp['closure_seconds'])
+    count = max(1, round(duration * fps))
+    close_times = np.arange(count + 1, dtype=float) / fps
+    progress = (close_times / close_times[-1])[:, None]
+    close_poses = np.repeat(contact_qpos[None], len(close_times), axis=0)
+    close_poses[:, 7:] = contact_qpos[7:] + progress * (closure_qpos[7:] - contact_qpos[7:])
+    return (np.r_[close_times, duration + base_times[1:]],
+            np.concatenate([close_poses, base_poses[1:]], axis=0), grasp)
 
 
 def _grounded_position(item):
@@ -122,8 +155,7 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
     validate_project(robot, project)
     project = project_from_keyframe(project, start_frame_index)
     start_frame_name = project['keyframes'][0]['name']
-    motion = compile_motion(robot, project, fps=50)
-    times, poses = motion['time'], motion['qpos']
+    times, poses, grasp = compile_preview_motion(robot, project, fps=50)
     # A single authored pose is a hold, so it can also be tested under gravity.
     if len(times) == 1:
         times = np.array([0., float(project['keyframes'][0]['duration'])])
@@ -144,6 +176,35 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
     qa, va = model.jnt_qposadr[joints], model.jnt_dofadr[joints]
     motors = np.array([np.flatnonzero(model.actuator_trnid[:, 0] == joint)[0] for joint in joints])
     limits = model.jnt_actfrcrange[joints]
+    grasp_object = next((index for index, item in enumerate(objects)
+                         if grasp and item['id'] == grasp['object_id']), None)
+    grasp_stats = {'left': {'max_normal_n': 0., 'contact_samples': 0},
+                   'right': {'max_normal_n': 0., 'contact_samples': 0},
+                   'bilateral_samples': 0, 'max_penetration_m': 0.}
+
+    def update_grasp_stats():
+        if grasp_object is None:
+            return
+        object_geom = model.geom(f'preview_object_geom_{grasp_object}').id
+        per_hand = {'left': 0., 'right': 0.}
+        for contact_index in range(data.ncon):
+            contact = data.contact[contact_index]
+            if object_geom not in (contact.geom1, contact.geom2):
+                continue
+            grasp_stats['max_penetration_m'] = max(grasp_stats['max_penetration_m'], -float(contact.dist))
+            other = contact.geom1 if contact.geom2 == object_geom else contact.geom2
+            for side in ('left', 'right'):
+                if other != model.geom(f'{side}_preview_grip').id:
+                    continue
+                wrench = np.zeros(6)
+                mujoco.mj_contactForce(model, data, contact_index, wrench)
+                per_hand[side] += max(0., float(wrench[0]))
+        for side, normal in per_hand.items():
+            grasp_stats[side]['max_normal_n'] = max(grasp_stats[side]['max_normal_n'], normal)
+            if normal > 0:
+                grasp_stats[side]['contact_samples'] += 1
+        if all(value > 0 for value in per_hand.values()):
+            grasp_stats['bilateral_samples'] += 1
     def object_state():
         return {item['id']: {
             'position': data.xpos[model.body(f'preview_object_{index}').id].tolist(),
@@ -165,6 +226,7 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
             saturation.append(float(np.mean((torque < limits[:, 0]) | (torque > limits[:, 1]))))
             data.ctrl[motors] = np.clip(torque, limits[:, 0], limits[:, 1])
             mujoco.mj_step(model, data)
+            update_grasp_stats()
         if (not np.isfinite(data.qpos).all() or not np.isfinite(data.qvel).all()
                 or any(data.warning[k].number for k in (mujoco.mjtWarning.mjWARN_BADQPOS,
                     mujoco.mjtWarning.mjWARN_BADQVEL, mujoco.mjtWarning.mjWARN_BADQACC,
@@ -184,13 +246,23 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
             progress((step + 1) / count)
         if reason != 'completed':
             break
+    grasp_summary = None
+    if grasp is not None:
+        target_force = float(grasp['target_force_n'])
+        max_force = float(grasp['max_force_n'])
+        grasp_summary = {**grasp_stats, 'object_id': grasp['object_id'],
+                         'target_force_n': target_force, 'max_force_n': max_force,
+                         'bilateral_contact': grasp_stats['bilateral_samples'] > 0,
+                         'target_reached': all(grasp_stats[side]['max_normal_n'] >= target_force for side in ('left', 'right')),
+                         'force_limit_exceeded': any(grasp_stats[side]['max_normal_n'] > max_force for side in ('left', 'right'))}
     return {'time': replay_times, 'states': states, 'object_states': object_states, 'max_pin_error_mm': 0.,
             'physics': True, 'policy': 'gear-sonic' if policy is not None else None, 'controller': controller, 'summary': {
                 'reason': reason, 'sim_seconds': float(replay_times[-1]),
                 'reference_seconds': float(times[-1]), 'joint_rmse_rad': float(np.sqrt(np.mean(errors))) if errors else 0.,
                 'max_torque_saturation': max(saturation, default=0.),
                 'device': 'cpu', 'physics_hz': 500, 'policy_hz': 50 if policy is not None else 0,
-                'target_hz': 50, 'start_frame_index': start_frame_index, 'start_frame_name': start_frame_name}}
+                'target_hz': 50, 'start_frame_index': start_frame_index, 'start_frame_name': start_frame_name,
+                'grasp': grasp_summary}}
 
 
 class PreviewJobs:

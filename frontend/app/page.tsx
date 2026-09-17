@@ -1,21 +1,22 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import TaskWorkbench from './task-workbench';
 import SceneObjectControls from './scene-object-controls';
+import GraspControls, { type GraspPickMode } from './grasp-controls';
 import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
-import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, Box, ChevronLeft, ChevronRight, Trash2, Download, Check, AlertCircle } from 'lucide-react';
+import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, Trash2, Download, Check, AlertCircle } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
 import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectsFromProject, placeSceneObject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeAfter, type Keyframe } from '../lib/keyframes';
+import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
-type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string } };
+type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
+type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
-type EditorSnapshot = { qpos: number[]; pins: string[]; objects: SceneObject[]; poseDirty: boolean };
+type EditorSnapshot = { qpos: number[]; pins: string[]; objects: SceneObject[]; keyframes: Keyframe[]; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
 function selectionCenter(pose: PoseState, members: string[]) {
   const controls = controlSelection(members);
@@ -32,7 +33,6 @@ async function api<T>(path: string, body?: unknown, method = body === undefined 
 const fileApiPath = (name: string) => name.split('/').map(encodeURIComponent).join('/');
 
 export default function Editor() {
-  const [taskOpen, setTaskOpen] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('task'));
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<RobotScene | null>(null);
   const file = useRef<HTMLInputElement>(null);
@@ -86,6 +86,8 @@ export default function Editor() {
   const [preventObjectOverlap, setPreventObjectOverlap] = useState(true);
   const [objectSurfaceSnap, setObjectSurfaceSnap] = useState(false);
   const [objectGroundLock, setObjectGroundLock] = useState(true);
+  const [graspPickMode, setGraspPickMode] = useState<GraspPickMode>(null);
+  const graspPickModeRef = useRef<GraspPickMode>(null);
   const [files, setFiles] = useState<string[]>([]);
   const [saved, setSaved] = useState<string[]>([]);
   const [savedChoice, setSavedChoice] = useState('');
@@ -106,7 +108,7 @@ export default function Editor() {
   const inFlight = useRef(false);
   const dragActive = useRef(false);
   const alive = useRef(true);
-  const actions = useRef({ select: (_key: string, _additive: boolean, _hover: boolean) => {}, begin: () => {}, move: (_key: string, _target: number[]) => {}, rotate: (_key: string, _quaternion: number[]) => {}, jointAngle: (_key: string, _angle: number) => {}, transformMode: (_mode: TransformMode) => {}, history: (_redo: boolean) => {}, end: () => {} });
+  const actions = useRef({ select: (_key: string, _additive: boolean, _hover: boolean) => {}, begin: () => {}, move: (_key: string, _target: number[]) => {}, rotate: (_key: string, _quaternion: number[]) => {}, jointAngle: (_key: string, _angle: number) => {}, transformMode: (_mode: TransformMode) => {}, history: (_redo: boolean) => {}, pickSurface: (_id: string, _point: number[], _normal: number[]) => {}, end: () => {} });
 
   function selectionPosition(pose: PoseState, items: string[], active: string) {
     const c = current.current;
@@ -126,7 +128,7 @@ export default function Editor() {
   }
   function editorSnapshot(): EditorSnapshot | null {
     const value = current.current;
-    return value.state ? { qpos: [...value.state.qpos], pins: [...value.pins], objects: structuredClone(value.objects), poseDirty: value.poseDirty } : null;
+    return value.state && value.project ? { qpos: [...value.state.qpos], pins: [...value.pins], objects: structuredClone(value.objects), keyframes: structuredClone(value.project.keyframes), poseDirty: value.poseDirty } : null;
   }
   function checkpoint() {
     const snapshot = editorSnapshot();
@@ -186,6 +188,28 @@ export default function Editor() {
     if (patch.preventOverlap !== undefined) { current.current.preventObjectOverlap = patch.preventOverlap; setPreventObjectOverlap(patch.preventOverlap); }
     if (patch.surfaceSnap !== undefined) { current.current.objectSurfaceSnap = patch.surfaceSnap; setObjectSurfaceSnap(patch.surfaceSnap); }
     if (patch.groundLock !== undefined) { current.current.objectGroundLock = patch.groundLock; setObjectGroundLock(patch.groundLock); }
+  }
+  function changeGraspPickMode(mode: GraspPickMode) {
+    graspPickModeRef.current = mode; setGraspPickMode(mode); scene.current?.setSurfacePickMode(!!mode);
+  }
+  function pickGripSurface(id: string, localPoint: number[], localNormal: number[]) {
+    const hand = graspPickModeRef.current;
+    const frame = project?.keyframes[frameIndex];
+    const grasp = frame?.grasp;
+    if (!hand || !grasp) return;
+    if (id !== grasp.object_id) { setError('파지 설정에서 선택한 박스의 표면을 클릭하세요.'); return; }
+    const expected = hand === 'left' ? 1 : -1;
+    if (localNormal[1] * expected < .5) { setError(`${hand === 'left' ? '왼손은 박스 +Y 면' : '오른손은 박스 −Y 면'}을 클릭하세요.`); return; }
+    const snapped = [localPoint[0] * 2, localPoint[2] * 2].map(value => {
+      const clamped = Math.max(-.9, Math.min(.9, value));
+      return Math.abs(clamped) < .12 ? 0 : Math.round(clamped * 10) / 10;
+    });
+    const patch = hand === 'left' ? { left_surface_uv: snapped } : { right_surface_uv: snapped };
+    checkpoint();
+    editFrame(frameIndex, { grasp: { ...grasp, ...patch, closure_qpos: undefined, object_signature: undefined,
+      contact_points_world: undefined, hand_twist_deg: undefined } });
+    setError(''); changeGraspPickMode(null);
+    setMessage(`${hand === 'left' ? '왼손' : '오른손'} 접촉점을 박스 표면에 배치했습니다.`);
   }
   async function run(work: () => Promise<void>) {
     if (current.current.busy || inFlight.current) return;
@@ -303,7 +327,8 @@ export default function Editor() {
     const group = groupForControl(key);
     if (group && (!expanded.includes(group.id) || !nodeMembers(group).includes(key))) selectBatch(nodeMembers(group), additive, hover);
     else select(key, additive, hover);
-  }, begin, move, rotate, jointAngle, transformMode: changeTransformMode, history: changeHistory, end: () => {
+  }, begin, move, rotate, jointAngle, transformMode: changeTransformMode, history: changeHistory,
+  pickSurface: pickGripSurface, end: () => {
     dragActive.current = false;
     if (current.current.state) applyState(current.current.state);
   } };
@@ -326,6 +351,7 @@ export default function Editor() {
         },
         objectTransformEnd: () => { objectDragCheckpointed.current = false; },
         objectTransformMode: changeObjectMode,
+        pickObjectSurface: (id, point, normal) => actions.current.pickSurface(id, point, normal),
       });
       scene.current = viewer;
     } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
@@ -372,11 +398,16 @@ export default function Editor() {
     const pose = current.current.state;
     if (pose) setTarget(selectionPosition(pose, members, selected));
   }, [transformMode, space, mirror]);
-  useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !taskOpen && !preview?.physics); scene.current.keyboardEnabled = !taskOpen && !preview?.physics; } }, [busy, playing, taskOpen, preview]);
+  useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !preview?.physics); scene.current.keyboardEnabled = !preview?.physics; } }, [busy, playing, preview]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
   useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
   useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
   useEffect(() => { scene.current?.setSceneObjects(objects); }, [objects]);
+  useEffect(() => { current.current.project = project; }, [project]);
+  useEffect(() => {
+    const grasp = project?.keyframes[frameIndex]?.grasp;
+    scene.current?.setGripMarkers(grasp?.object_id ?? null, grasp?.left_surface_uv, grasp?.right_surface_uv);
+  }, [project, frameIndex, objects]);
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
@@ -421,6 +452,7 @@ export default function Editor() {
     setPins(valid.pins ?? valid.keyframes[0].pins);
     applyState(pose); invalidate(); setPoseDirty(false); setInfo(null);
     history.current = []; future.current = []; setHistoryCount(0); setFutureCount(0);
+    changeGraspPickMode(null);
   }
   async function openFile(source: File) {
     const extension = source.name.slice(source.name.lastIndexOf('.')).toLowerCase();
@@ -440,8 +472,35 @@ export default function Editor() {
     setMessage(`${source.name}의 모션 프레임을 ${fps} FPS 키프레임으로 불러왔습니다.`);
   }
   function editFrame(index: number, patch: Partial<Keyframe>) {
-    setProject(p => p ? { ...p, keyframes: p.keyframes.map((f, i) => i === index ? { ...f, ...patch } : f) } : p);
+    setProject(p => p ? { ...p, keyframes: p.keyframes.map((f, i) => {
+      if (i !== index) return f;
+      if ('grasp' in patch) return { ...f, ...patch };
+      const grasp = patch.qpos && f.grasp ? { ...f.grasp, closure_qpos: undefined,
+        object_signature: undefined, contact_points_world: undefined, hand_twist_deg: undefined } : f.grasp;
+      return { ...f, ...patch, ...(grasp ? { grasp } : {}) };
+    }) } : p);
     invalidate();
+  }
+  function changeGrasp(grasp?: TwoHandGrasp) {
+    checkpoint();
+    editFrame(frameIndex, { grasp });
+    if (!grasp) changeGraspPickMode(null);
+  }
+  async function fitGrasp() {
+    const frame = project?.keyframes[frameIndex];
+    const grasp = frame?.grasp;
+    const object = objects.find(value => value.id === grasp?.object_id);
+    if (!frame || !grasp || !object) return;
+    await run(async () => {
+      const result = await api<{ state: PoseState; grasp: TwoHandGrasp; solver: { contact: SolveInfo; closure: SolveInfo } }>('grasp-fit', {
+        qpos: frame.qpos, pins: frame.pins, object, grasp,
+      });
+      checkpoint(); applyState(result.state); setPins([...frame.pins]); setPoseDirty(false); setInfo(result.solver.contact);
+      setProject(value => value ? { ...value, keyframes: value.keyframes.map((item, index) => index === frameIndex
+        ? { ...item, qpos: [...result.state.qpos], grasp: result.grasp } : item) } : value);
+      invalidate(); changeGraspPickMode(null);
+      setMessage(`양손 파지 자세를 맞췄습니다 · 접촉점 오차 ${result.solver.contact.target_error_mm.toFixed(2)} mm · 손목 비틀림 ${result.grasp.hand_twist_deg?.toFixed(0) ?? 0}°`);
+    });
   }
   function addFrame() {
     if (!project || !state || !project.keyframes[frameIndex]) return;
@@ -462,7 +521,7 @@ export default function Editor() {
   async function chooseFrame(index: number) {
     if (!project) return;
     const f = project.keyframes[index];
-    await run(async () => { checkpoint(); applyState(await api<PoseState>('pose', { qpos: f.qpos })); setPins(f.pins); setFrameIndex(index); setPoseDirty(false); setInfo(null); });
+    await run(async () => { checkpoint(); changeGraspPickMode(null); applyState(await api<PoseState>('pose', { qpos: f.qpos })); setPins(f.pins); setFrameIndex(index); setPoseDirty(false); setInfo(null); });
   }
   function changeHistory(redo: boolean) {
     if (current.current.busy || current.current.playing || inFlight.current || dragActive.current) return;
@@ -480,7 +539,7 @@ export default function Editor() {
       const restoredObjects = structuredClone(value.objects);
       applyState(restored); current.current.pins = [...value.pins]; setPins([...value.pins]); setInfo(null);
       current.current.objects = restoredObjects; setObjects(restoredObjects);
-      setProject(projectValue => projectValue ? { ...projectValue, scene_objects: restoredObjects } : projectValue);
+      setProject(projectValue => projectValue ? { ...projectValue, scene_objects: restoredObjects, keyframes: structuredClone(value.keyframes) } : projectValue);
       if (current.current.selectedObjectId && !restoredObjects.some(object => object.id === current.current.selectedObjectId)) selectObject(null);
       current.current.poseDirty = value.poseDirty; setPoseDirty(value.poseDirty);
       setHistoryCount(history.current.length); setFutureCount(future.current.length); invalidate();
@@ -523,11 +582,11 @@ export default function Editor() {
     });
   }
   const controllerLabel = policyEnabled ? 'GEAR-SONIC' : '기본 PD';
-  async function play() {
+  async function play(forcePhysics = false) {
     if (playing) { setPlaying(false); return; }
     if (preview) { if (sample >= preview.states.length - 1) setSample(0); setPlaying(true); return; }
     await run(async () => {
-      if (!physicsEnabled) {
+      if (!physicsEnabled && !forcePhysics) {
         const result = await api<Preview>('preview', { project, fps: 30 });
         setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
         if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
@@ -562,7 +621,9 @@ export default function Editor() {
         if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
         const summary = result.summary!;
         const outcome = summary.reason === 'fallen' ? '넘어짐으로 조기 종료' : summary.reason === 'completed' ? '계산 완료' : '수치 불안정으로 중단';
-        setMessage(`${controllerLabel} ${outcome} · ${frameIndex + 1}번 키프레임부터 ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°`);
+        const grip = summary.grasp;
+        const gripText = grip ? ` · 양손 ${grip.bilateral_contact ? '접촉' : '접촉 실패'} · 힘 L ${grip.left.max_normal_n.toFixed(1)} / R ${grip.right.max_normal_n.toFixed(1)} N${grip.force_limit_exceeded ? ' · 힘 상한 초과' : ''}` : '';
+        setMessage(`${controllerLabel} ${outcome} · ${frameIndex + 1}번 키프레임부터 ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°${gripText}`);
       } catch (failure) {
         if (request.id) await api(`policy-preview/${request.id}/cancel`, {}).catch(() => {});
         throw failure;
@@ -571,6 +632,11 @@ export default function Editor() {
         policyRequest.current = null;
       }
     });
+  }
+  async function validateGraspPhysics() {
+    if (!project?.keyframes[frameIndex]?.grasp?.closure_qpos) return;
+    if (!physicsEnabled) { setPhysicsEnabled(true); setMessage('양손 파지 물리 검증을 준비합니다.'); }
+    await play(true);
   }
   async function cancelPolicy() {
     const request = policyRequest.current;
@@ -613,11 +679,10 @@ export default function Editor() {
   const selectedGroup = allNodes().find(node => node.children && nodeMembers(node).length === members.length && nodeMembers(node).every(key => members.includes(key)));
 
   return <div className="editor">
-    {taskOpen && state && <TaskWorkbench initialQ={state.qpos} onClose={() => { setTaskOpen(false); scene.current?.setEditable(true); }}/>}
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><b>G1 / 29 DOF</b></div>
       <div className="project-title"><span className="status-dot"/>{project ? <input aria-label="프로젝트 이름" value={project.name} onChange={e => setProject({ ...project, name: e.target.value })}/> : '연결 중'}</div>
-      <div className="top-actions"><button disabled={disabled} onClick={() => { setPlaying(false); scene.current?.setEditable(false); setTaskOpen(true); }}><Box size={16}/>상자 태스크</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled} onClick={exportProject}><Save size={16}/> 모션 저장</button></div>
+      <div className="top-actions"><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled} onClick={exportProject}><Save size={16}/> 모션 저장</button></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">
@@ -671,6 +736,7 @@ export default function Editor() {
         <span>GEAR-SONIC <b data-active={policyEnabled}>{policyEnabled ? 'ON' : 'OFF'}</b></span>
         {physicsEnabled && <small>{controllerLabel} · {preview?.physics ? '계산된 결과' : policyJob ? '계산 중' : '재생 대기'}</small>}
         {preview?.summary && <small>{preview.summary.reason === 'completed' ? '추종 결과' : preview.summary.reason === 'fallen' ? '넘어짐 감지' : '계산 중단'} · 오차 {(preview.summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°</small>}
+        {preview?.summary?.grasp && <small>파지 L {preview.summary.grasp.left.max_normal_n.toFixed(1)}N · R {preview.summary.grasp.right.max_normal_n.toFixed(1)}N · {preview.summary.grasp.bilateral_contact ? '양손 접촉' : '접촉 실패'}</small>}
       </div>
       {policyJob && <div className="policy-progress">
         <span>{controllerLabel} 물리 계산 <b>{Math.round(policyJob.progress * 100)}%</b></span>
@@ -730,6 +796,8 @@ export default function Editor() {
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>
       <div className="section-divider"/>
       <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock} onSelect={selectObject} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}/>
+      <div className="section-divider"/>
+      <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={changeGraspPickMode} onFit={() => void fitGrasp()} onValidate={() => void validateGraspPhysics()}/>
       <div className="section-divider"/>
       <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>
       <select aria-label="최근 저장한 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">최근 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>

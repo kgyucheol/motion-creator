@@ -59,6 +59,13 @@ class GroupPresetInput(BaseModel):
     members: list[str]
 
 
+class GraspFitInput(PoseInput):
+    model_config = {'extra': 'forbid'}
+    pins: list[str] = Field(default_factory=lambda: list(FEET))
+    object: dict
+    grasp: dict
+
+
 @app.get('/api/groups')
 def list_groups():
     return checked(groups.list)
@@ -139,6 +146,12 @@ def solve_group(payload: GroupSolveInput):
                              orientation_targets=payload.orientations, joint_targets=payload.joints)
         return {'state': robot.state(q), 'solver': info}
     return checked(run)
+
+
+@app.post('/api/grasp-fit')
+def grasp_fit(payload: GraspFitInput):
+    from .grasp import fit_two_hand_grasp
+    return checked(lambda: fit_two_hand_grasp(robot, payload.qpos, payload.pins, payload.object, payload.grasp))
 
 
 @app.post('/api/preview')

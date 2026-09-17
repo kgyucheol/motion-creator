@@ -150,6 +150,13 @@ def validate_project(robot: Robot, project):
             raise ValueError('Scene object color must use #RRGGBB')
         if not isinstance(item.get('visible'), bool):
             raise ValueError('Scene object visibility must be a boolean')
+    from .grasp import validate_grasp_event
+    for frame in frames:
+        grasp = frame.get('grasp')
+        if grasp is not None:
+            if frame.get('samples') is not None:
+                raise ValueError('Grasp interactions require editable keyframes, not an imported motion clip')
+            validate_grasp_event(robot, grasp, objects)
     return project
 
 
