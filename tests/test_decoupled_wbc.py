@@ -1,0 +1,96 @@
+import json
+
+import mujoco
+import numpy as np
+import pytest
+
+from motioncreator.decoupled_wbc import (
+    ASSET_ROOT,
+    CommandState,
+    DecoupledSimulation,
+    authored_waist_to_torso_rpy,
+    build_observation,
+    save_recording_bundle,
+    verify_assets,
+)
+from motioncreator.motion import new_project
+from motioncreator.robot import Robot
+
+
+def parameters():
+    return json.loads((ASSET_ROOT.parents[2] / "integrations/decoupled-wbc-parameters.json").read_text())
+
+
+def test_keyboard_commands_are_clamped_and_reset():
+    values = parameters()
+    command = CommandState()
+    for _ in range(20): command.apply_key("w", values)
+    for _ in range(20): command.apply_key("q", values)
+    for _ in range(20): command.apply_key("2", values)
+    np.testing.assert_allclose(command.nav, [.5, 0., 1.])
+    assert command.height == pytest.approx(.2)
+    assert command.apply_key("x", values) is False
+    command.apply_key("z", values)
+    np.testing.assert_allclose(command.nav, 0.)
+    assert command.height == pytest.approx(.74)
+
+
+def test_policy_observation_has_exact_training_layout():
+    values = parameters()
+    model = mujoco.MjModel.from_xml_path(str(ASSET_ROOT / "g1_gear_wbc.xml")) if verify_assets()["available"] else Robot().model
+    data = mujoco.MjData(model)
+    data.qpos[:] = model.qpos0
+    mujoco.mj_forward(model, data)
+    command = CommandState(nav=np.array([.1, -.2, .3], dtype=np.float32), height=.7)
+    observation = build_observation(data, np.arange(15, dtype=np.float32), command,
+                                    np.array([.1, .2, .3]), values)
+    assert observation.shape == (86,)
+    np.testing.assert_allclose(observation[:7], [.2, -.4, .15, .7, .1, .2, .3])
+    np.testing.assert_allclose(observation[71:], np.arange(15))
+
+
+def test_authored_waist_is_converted_to_policy_rpy_and_limited():
+    limits = np.array([.52, .52, 2.618])
+    np.testing.assert_allclose(authored_waist_to_torso_rpy([.2, 0., 0.], limits), [0., 0., .2], atol=1e-6)
+    converted = authored_waist_to_torso_rpy([3., 1., 1.], limits)
+    assert np.all(np.abs(converted) <= limits + 1e-7)
+
+
+def test_recording_bundle_is_reimportable(tmp_path):
+    frames = [{"time": i / 25, "qpos": np.r_[0., 0., .74, 1., 0., 0., 0., np.zeros(29)],
+               "nav": np.array([.1, 0., 0.]), "height": .74,
+               "torso_rpy": np.zeros(3), "upper_time": i / 25} for i in range(3)]
+    result = save_recording_bundle(frames, "wave", tmp_path)
+    folder = tmp_path / result["folder"]
+    with np.load(folder / "motion.npz") as motion:
+        assert motion["qpos"].shape == (3, 36)
+        assert motion["navigate_command"].shape == (3, 3)
+        assert motion["fps"] == 25
+    assert (folder / "commands.csv").read_text().startswith("time,vx,vy,yaw_rate")
+    metadata = json.loads((folder / "metadata.json").read_text())
+    assert metadata["source_project"] == "wave" and metadata["samples"] == 3
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_policy_drives_lower_body_while_authored_arm_tracks():
+    robot = Robot()
+    project = new_project(robot)
+    project["keyframes"][0]["pins"] = []
+    target = json.loads(json.dumps(project["keyframes"][0]))
+    target.update(name="arm target", duration=1., pins=[])
+    target["qpos"][22] = .35
+    project["keyframes"].append(target)
+    simulation = DecoupledSimulation(robot, project, autostart=False)
+    try:
+        simulation.play()
+        for index in range(700):
+            if index == 450: simulation.apply_key("w")
+            simulation.step()
+        snapshot = simulation.snapshot()
+        assert snapshot["phase"] == "playing" and snapshot["policy"] == "walk"
+        assert snapshot["upper_time"] == pytest.approx(1., abs=.01)
+        assert snapshot["recording_frames"] == 87
+        assert simulation.data.qpos[22] == pytest.approx(.35, abs=.08)
+        assert simulation.data.qpos[0] > .01
+    finally:
+        simulation.close()

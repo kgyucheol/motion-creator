@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
-if [[ ! -x .conda/bin/python ]]; then
+python_executable=.conda-policy/bin/python
+if [[ ! -x "$python_executable" ]]; then
+  python_executable=.conda/bin/python
+fi
+if [[ ! -x "$python_executable" ]]; then
   echo '먼저 ./setup.sh 를 실행하세요.' >&2
   exit 1
 fi
@@ -12,4 +16,4 @@ export OPENBLAS_NUM_THREADS=1
 export OMP_NUM_THREADS=1
 export PYTHONNOUSERSITE=1
 export PYTHONPATH="$PWD"
-exec .conda/bin/python -m motioncreator.server "$@"
+exec "$python_executable" -m motioncreator.server "$@"
