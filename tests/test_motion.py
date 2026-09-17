@@ -134,6 +134,15 @@ def test_automatic_project_name_uses_keyframe_intent_and_creation_date(robot):
     assert automatic_project_name(project) == '상자 접근-양손 파지-들어 올리기_20260917'
 
 
+def test_manual_project_folder_also_includes_creation_time(robot, tmp_path):
+    project = new_project(robot, '파지 실험')
+    project['created_at'] = '2026-09-17T09:30:45+09:00'
+
+    result = save_bundle(robot, project, fps=15, directory=tmp_path)
+
+    assert Path(result['directory']).name.startswith('파지_실험_20260917T093045_')
+
+
 def test_repeated_save_updates_same_project_folder_and_save_as_creates_copy(robot, tmp_path):
     project = new_project(robot)
     project['created_at'] = '2026-09-17T09:30:00+09:00'
@@ -141,6 +150,7 @@ def test_repeated_save_updates_same_project_folder_and_save_as_creates_copy(robo
 
     first = save_bundle(robot, project, fps=15, directory=tmp_path)
     original_id = project['project_id']
+    assert Path(first['directory']).name.startswith('상자_접근_20260917T093000_')
     project['keyframes'][0]['name'] = '상자 파지'
     second = save_bundle(robot, project, fps=15, directory=tmp_path)
 
@@ -187,7 +197,8 @@ def test_legacy_saved_project_reuses_and_renames_its_existing_folder(robot, tmp_
     assert result['display_name'] == '손 접근-상자 파지-상자 들기_20260917'
     assert result['reused'] is True
     assert not legacy_folder.exists()
-    assert Path(result['directory']).name.startswith('손_접근-상자_파지-상자_들기_20260917_')
+    created_stamp = datetime.fromisoformat(reopened['created_at']).strftime('%Y%m%dT%H%M%S')
+    assert Path(result['directory']).name.startswith(f'손_접근-상자_파지-상자_들기_{created_stamp}_')
     assert len(list(tmp_path.glob('*/project.json'))) == 1
     unchanged = save_bundle(robot, reopened, fps=15, directory=tmp_path)
     assert unchanged['directory'] == result['directory']

@@ -445,6 +445,11 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     display_name = project_display_name(project)
     project['display_name'] = display_name
     name = re.sub(r'[^\w-]', '_', display_name, flags=re.UNICODE).strip('_')[:72] or 'motion'
+    created = datetime.fromisoformat(project['created_at'])
+    if project['name_mode'] == 'auto':
+        name = f'{name}T{created.strftime("%H%M%S")}'
+    else:
+        name = f'{name}_{created.strftime("%Y%m%dT%H%M%S")}'
     folder = _existing_project_folder(root_folder, project['project_id'])
     reused = folder is not None
     desired_folder = root_folder / f'{name}_{project["project_id"][:8]}'
