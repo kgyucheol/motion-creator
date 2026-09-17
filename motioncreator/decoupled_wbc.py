@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import deque
+import copy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import atexit
@@ -14,12 +15,14 @@ from pathlib import Path
 import threading
 import time
 import uuid
+import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .motion import compile_motion, validate_project
+from .grasp import fit_two_hand_grasp, object_signature
+from .motion import compile_motion, project_scene_objects, validate_project
 from .robot import ROOT, Robot
 
 
@@ -60,6 +63,97 @@ def _require_assets() -> None:
     if not result["available"]:
         details = ", ".join([*result["missing"], *result["invalid"]]) or "unknown"
         raise ValueError(f"Decoupled WBC assets are not installed or invalid: {details}. Run {result['setup_command']}")
+
+
+def _numbers(values) -> str:
+    return " ".join(str(float(value)) for value in values)
+
+
+def _grounded_position(item: dict) -> np.ndarray:
+    position = np.asarray(item["position"], dtype=float).copy()
+    size = np.asarray(item["size"], dtype=float)
+    if item["shape"] == "sphere":
+        extent = size[0] / 2
+    else:
+        x, y, z, w = np.asarray(item["quaternion_xyzw"], dtype=float)
+        r20 = 2 * (x * z - w * y)
+        r21 = 2 * (y * z + w * x)
+        r22 = 1 - 2 * (x * x + y * y)
+        extent = (size[0] / 2 * np.hypot(r20, r21) + size[2] / 2 * abs(r22)
+                  if item["shape"] == "cylinder" else
+                  abs(r20) * size[0] / 2 + abs(r21) * size[1] / 2 + abs(r22) * size[2] / 2)
+    position[2] = max(position[2], extent)
+    return position
+
+
+def _grasp_object_ids(project: dict) -> set[str]:
+    return {event["object_id"] for frame in project.get("keyframes", [])
+            if (event := frame.get("grasp")) and event.get("object_id")}
+
+
+def build_environment_model(project: dict) -> mujoco.MjModel:
+    """Load the WBC MJCF and add authored primitive environment objects."""
+    root = ET.parse(ASSET_ROOT / "g1_gear_wbc.xml").getroot()
+    root.find("compiler").set("meshdir", str(ASSET_ROOT / "meshes"))
+    objects = project_scene_objects(project)
+    dynamic_ids = _grasp_object_ids(project)
+    if objects:
+        asset = root.find("asset")
+        for side in ("left", "right"):
+            ET.SubElement(asset, "mesh", name=f"{side}_wbc_rubber_hand",
+                          file=str(ROOT / f"assets/g1/meshes/{side}_rubber_hand.STL"))
+        for side in ("left", "right"):
+            body = root.find(f".//body[@name='{side}_wrist_yaw_link']")
+            ET.SubElement(body, "geom", name=f"{side}_wbc_grip", type="mesh",
+                          mesh=f"{side}_wbc_rubber_hand", pos=f".0415 {'0.003' if side == 'left' else '-0.003'} 0",
+                          contype="1", conaffinity="1", group="3", density="0",
+                          friction="1 .005 .0001")
+        world = root.find("worldbody")
+        for index, item in enumerate(objects):
+            body = ET.SubElement(world, "body", name=f"wbc_object_{index}",
+                                 pos=_numbers(_grounded_position(item)),
+                                 quat=_numbers(np.asarray(item["quaternion_xyzw"])[[3, 0, 1, 2]]))
+            if item["id"] in dynamic_ids:
+                ET.SubElement(body, "freejoint", name=f"wbc_object_joint_{index}")
+            size = np.asarray(item["size"], dtype=float)
+            mj_size = (size / 2 if item["shape"] == "box" else [size[0] / 2]
+                       if item["shape"] == "sphere" else [size[0] / 2, size[2] / 2])
+            geom_name = f"wbc_object_geom_{index}"
+            ET.SubElement(body, "geom", name=geom_name, type=item["shape"], size=_numbers(mj_size),
+                          mass=str(float(item["mass_kg"])),
+                          friction=_numbers([item["friction"], .005, .0001]))
+    model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
+    dynamic_count = sum(item["id"] in dynamic_ids for item in objects)
+    if model.nq != 36 + 7 * dynamic_count or model.nv != 35 + 6 * dynamic_count or model.nu != 29:
+        raise ValueError("Unexpected decoupled-WBC environment model")
+    return model
+
+
+def prepare_grasp_control(robot: Robot, project: dict) -> dict | None:
+    """Resolve the first authored grasp into an arm closure offset and timeline time."""
+    objects = project_scene_objects(project)
+    elapsed = 0.
+    for index, frame in enumerate(project["keyframes"]):
+        if index:
+            elapsed += float(frame["duration"])
+        event = frame.get("grasp")
+        if event is None:
+            continue
+        item = next(value for value in objects if value["id"] == event["object_id"])
+        closure = event.get("closure_qpos")
+        if closure is None or event.get("object_signature") != object_signature(item):
+            fitted = fit_two_hand_grasp(robot, frame["qpos"], frame.get("pins", []), item, event)
+            closure = fitted["grasp"]["closure_qpos"]
+        contact = robot.validate_q(frame["qpos"])
+        closed = robot.validate_q(closure)
+        return {
+            "object_id": item["id"], "start_time": elapsed,
+            "closure_seconds": float(event["closure_seconds"]),
+            "arm_offset": closed[22:36] - contact[22:36],
+            "target_force_n": float(event["target_force_n"]),
+            "max_force_n": float(event["max_force_n"]),
+        }
+    return None
 
 
 def quat_rotate_inverse(wxyz: np.ndarray, vector: np.ndarray) -> np.ndarray:
@@ -160,9 +254,22 @@ class DecoupledSimulation:
         self.parameters = _parameters()
         self.reference = compile_motion(robot, project, fps=50)
         self.duration = float(self.reference["time"][-1])
-        self.model = mujoco.MjModel.from_xml_path(str(ASSET_ROOT / "g1_gear_wbc.xml"))
+        self.scene_objects = copy.deepcopy(project_scene_objects(project))
+        self.grasp_control = prepare_grasp_control(robot, project)
+        self.model = build_environment_model(project)
         self.model.opt.timestep = self.parameters["simulation_dt"]
         self.data = mujoco.MjData(self.model)
+        self.object_bodies = {item["id"]: self.model.body(f"wbc_object_{index}").id
+                              for index, item in enumerate(self.scene_objects)}
+        self.object_geoms = {item["id"]: self.model.geom(f"wbc_object_geom_{index}").id
+                             for index, item in enumerate(self.scene_objects)}
+        self.object_joints = {
+            item["id"]: self.model.joint(f"wbc_object_joint_{index}").id
+            for index, item in enumerate(self.scene_objects) if item["id"] in _grasp_object_ids(project)
+        }
+        self.grip_geoms = {side: self.model.geom(f"{side}_wbc_grip").id for side in ("left", "right")} \
+            if self.grasp_control else {}
+        self.grasp_wrist_body = self.model.body("left_wrist_yaw_link").id if self.grasp_control else -1
         self.policy = LowerBodyPolicy(self.parameters)
         self.command = CommandState(height=self.parameters["initial_height"])
         self.lock = threading.RLock()
@@ -178,6 +285,8 @@ class DecoupledSimulation:
         self.torso_rpy = np.zeros(3, dtype=np.float32)
         self.recording: list[dict] = []
         self._last_record_step = -1
+        self._grasp_collision_enabled = False
+        self._grasp_attachment: tuple[np.ndarray, np.ndarray] | None = None
         self.reset()
         self.thread = threading.Thread(target=self._loop, name="decoupled-wbc", daemon=True)
         if autostart:
@@ -187,11 +296,83 @@ class DecoupledSimulation:
         index = min(int(round(seconds * 50)), len(self.reference["qpos"]) - 1)
         return self.reference["qpos"][index]
 
+    def _object_states(self) -> dict:
+        return {identifier: {
+            "position": self.data.xpos[body].tolist(),
+            "quaternion_xyzw": self.data.xquat[body][[1, 2, 3, 0]].tolist(),
+        } for identifier, body in self.object_bodies.items()}
+
+    def _hold_grasp_object(self) -> None:
+        """Keep the authored target in place until the hands finish closing around it."""
+        if not self.grasp_control:
+            return
+        release_time = self.grasp_control["start_time"] + self.grasp_control["closure_seconds"]
+        if self.motion_time >= release_time:
+            return
+        joint = self.object_joints[self.grasp_control["object_id"]]
+        qpos_address = self.model.jnt_qposadr[joint]
+        dof_address = self.model.jnt_dofadr[joint]
+        self.data.qpos[qpos_address:qpos_address + 7] = self.model.qpos0[qpos_address:qpos_address + 7]
+        self.data.qvel[dof_address:dof_address + 6] = 0.
+        mujoco.mj_forward(self.model, self.data)
+
+    def _set_grasp_collision(self, enabled: bool) -> None:
+        if not self.grasp_control or enabled == self._grasp_collision_enabled:
+            return
+        geom = self.object_geoms[self.grasp_control["object_id"]]
+        self.model.geom_contype[geom] = 1 if enabled else 0
+        self.model.geom_conaffinity[geom] = 1 if enabled else 0
+        self._grasp_collision_enabled = enabled
+
+    def _has_bilateral_grasp_contact(self) -> bool:
+        if not self.grasp_control:
+            return False
+        target = self.object_geoms[self.grasp_control["object_id"]]
+        touching: set[str] = set()
+        for index in range(self.data.ncon):
+            contact = self.data.contact[index]
+            pair = {contact.geom1, contact.geom2}
+            if target not in pair:
+                continue
+            touching.update(side for side, geom in self.grip_geoms.items() if geom in pair)
+        return len(touching) == 2
+
+    def _maintain_grasp_attachment(self) -> None:
+        """Keep a closed bilateral grasp stable on the 29-DoF model without finger actuators."""
+        if not self.grasp_control:
+            return
+        release_time = self.grasp_control["start_time"] + self.grasp_control["closure_seconds"]
+        if self.motion_time < release_time:
+            self._grasp_attachment = None
+            return
+        object_id = self.grasp_control["object_id"]
+        body = self.object_bodies[object_id]
+        wrist_position = self.data.xpos[self.grasp_wrist_body].copy()
+        wrist_rotation = self.data.xmat[self.grasp_wrist_body].reshape(3, 3).copy()
+        if self._grasp_attachment is None:
+            if not self._has_bilateral_grasp_contact():
+                return
+            relative_position = wrist_rotation.T @ (self.data.xpos[body] - wrist_position)
+            relative_rotation = wrist_rotation.T @ self.data.xmat[body].reshape(3, 3)
+            self._grasp_attachment = relative_position, relative_rotation
+        relative_position, relative_rotation = self._grasp_attachment
+        joint = self.object_joints[object_id]
+        qpos_address = self.model.jnt_qposadr[joint]
+        dof_address = self.model.jnt_dofadr[joint]
+        position = wrist_position + wrist_rotation @ relative_position
+        quaternion_xyzw = Rotation.from_matrix(wrist_rotation @ relative_rotation).as_quat()
+        self.data.qpos[qpos_address:qpos_address + 3] = position
+        self.data.qpos[qpos_address + 3:qpos_address + 7] = quaternion_xyzw[[3, 0, 1, 2]]
+        self.data.qvel[dof_address:dof_address + 6] = 0.
+        mujoco.mj_forward(self.model, self.data)
+
     def reset(self) -> None:
         with self.lock:
             mujoco.mj_resetData(self.model, self.data)
             self.data.qpos[:] = self.model.qpos0
             self.data.qpos[7:22] = np.asarray(self.parameters["default_angles"])
+            self._grasp_collision_enabled = True
+            self._set_grasp_collision(False)
             mujoco.mj_forward(self.model, self.data)
             self.policy.reset()
             self.command = CommandState(height=self.parameters["initial_height"])
@@ -204,6 +385,7 @@ class DecoupledSimulation:
             self.torso_rpy[:] = 0
             self.recording.clear()
             self._last_record_step = -1
+            self._grasp_attachment = None
             self._changed()
 
     def play(self) -> None:
@@ -238,6 +420,10 @@ class DecoupledSimulation:
             blend = np.clip(self.play_time / settle, 0., 1.)
             start = self._reference_at(0)[22:36]
             return (1 - blend) * self.model.qpos0[22:36] + blend * start
+        if self.grasp_control and self.motion_time >= self.grasp_control["start_time"]:
+            progress = np.clip((self.motion_time - self.grasp_control["start_time"])
+                               / self.grasp_control["closure_seconds"], 0., 1.)
+            target = target + progress * self.grasp_control["arm_offset"]
         return target
 
     @staticmethod
@@ -256,21 +442,26 @@ class DecoupledSimulation:
                                            self.data.qvel[6:21], np.asarray(p["lower_kd"]))
             self.data.ctrl[15:29] = self._pd(self._arm_target(), self.data.qpos[22:36], np.asarray(p["arm_kp"]),
                                              self.data.qvel[21:35], np.asarray(p["arm_kd"]))
+            if self.grasp_control:
+                self._set_grasp_collision(self.motion_time >= self.grasp_control["start_time"])
             mujoco.mj_step(self.model, self.data)
             self.step_count += 1
             self.play_time += p["simulation_dt"]
             if self.play_time >= p["upper_body_settle_seconds"]:
                 self.phase = "playing"
                 self.motion_time = min(self.duration, self.motion_time + p["simulation_dt"])
+            self._hold_grasp_object()
+            self._maintain_grasp_attachment()
             if self.step_count % p["control_decimation"] == 0:
                 observation = build_observation(self.data, self.policy.action, self.command, self.torso_rpy, p)
                 self.policy.infer(observation, np.linalg.norm(self.command.nav) > .05)
             # Record at 25 Hz (every eight 200 Hz physics steps).
             if self.step_count % 8 == 0 and self._last_record_step != self.step_count:
                 if len(self.recording) < int(p["maximum_recording_seconds"] * 25):
-                    self.recording.append({"time": self.play_time, "qpos": self.data.qpos.copy(),
+                    self.recording.append({"time": self.play_time, "qpos": self.data.qpos[:36].copy(),
                                            "nav": self.command.nav.copy(), "height": self.command.height,
-                                           "torso_rpy": self.torso_rpy.copy(), "upper_time": self.motion_time})
+                                           "torso_rpy": self.torso_rpy.copy(), "upper_time": self.motion_time,
+                                           "object_states": self._object_states()})
                     self._last_record_step = self.step_count
             tilt = np.linalg.norm(Rotation.from_quat(self.data.qpos[3:7][[1, 2, 3, 0]]).as_euler("xyz")[:2])
             if self.data.qpos[2] < .25 or tilt > np.deg2rad(45):
@@ -295,18 +486,27 @@ class DecoupledSimulation:
 
     def snapshot(self) -> dict:
         with self.lock:
-            qpos = self.data.qpos.copy()
+            qpos = self.data.qpos[:36].copy()
+            grasp = None
+            if self.grasp_control:
+                start = self.grasp_control["start_time"]
+                grasp = {key: value for key, value in self.grasp_control.items() if key != "arm_offset"}
+                grasp["active"] = self.motion_time >= start
+                grasp["closure"] = float(np.clip((self.motion_time - start)
+                                                  / self.grasp_control["closure_seconds"], 0., 1.))
+                grasp["attached"] = self._grasp_attachment is not None
             return {
                 "revision": self.revision, "phase": self.phase, "playing": self.running,
                 "error": self.error, "policy": "walk" if np.linalg.norm(self.command.nav) > .05 else "balance",
                 "nav": self.command.nav.tolist(), "height": self.command.height,
                 "torso_rpy": self.torso_rpy.tolist(), "upper_time": self.motion_time,
                 "upper_duration": self.duration, "recording_frames": len(self.recording),
-                "state": self.robot.state(qpos),
+                "state": self.robot.state(qpos), "scene_objects": self.scene_objects,
+                "object_states": self._object_states(), "grasp": grasp,
             }
 
     def recording_copy(self) -> list[dict]:
-        with self.lock: return [{k: (v.copy() if isinstance(v, np.ndarray) else v) for k, v in row.items()} for row in self.recording]
+        with self.lock: return copy.deepcopy(self.recording)
 
     def close(self) -> None:
         with self.lock:
@@ -325,7 +525,8 @@ def _atomic_bytes(path: Path, content: bytes) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def save_recording_bundle(frames: list[dict], source_name: str, root: Path = ROOT / "motions") -> dict:
+def save_recording_bundle(frames: list[dict], source_name: str, root: Path = ROOT / "motions", *,
+                          scene_objects: list[dict] | None = None) -> dict:
     if not frames:
         raise ValueError("There is no recorded playback to save")
     identifier = uuid.uuid4().hex
@@ -338,10 +539,19 @@ def save_recording_bundle(frames: list[dict], source_name: str, root: Path = ROO
     height = np.asarray([row["height"] for row in frames])
     torso_rpy = np.stack([row["torso_rpy"] for row in frames])
     upper_time = np.asarray([row["upper_time"] for row in frames])
+    objects = copy.deepcopy(scene_objects or [])
+    archive = {"time": times, "qpos": qpos, "navigate_command": nav,
+               "base_height_command": height, "torso_rpy_command": torso_rpy,
+               "upper_motion_time": upper_time, "fps": np.array(25)}
+    if objects:
+        identifiers = [item["id"] for item in objects]
+        archive["object_ids"] = np.asarray(identifiers)
+        archive["object_position"] = np.asarray([[row["object_states"][key]["position"] for key in identifiers]
+                                                  for row in frames])
+        archive["object_quaternion_xyzw"] = np.asarray([
+            [row["object_states"][key]["quaternion_xyzw"] for key in identifiers] for row in frames])
     buffer = io.BytesIO()
-    np.savez_compressed(buffer, time=times, qpos=qpos, navigate_command=nav,
-                        base_height_command=height, torso_rpy_command=torso_rpy,
-                        upper_motion_time=upper_time, fps=np.array(25))
+    np.savez_compressed(buffer, **archive)
     _atomic_bytes(folder / "motion.npz", buffer.getvalue())
     qbuffer = io.StringIO(); np.savetxt(qbuffer, qpos, delimiter=",")
     _atomic_bytes(folder / "motion.csv", qbuffer.getvalue().encode())
@@ -350,15 +560,22 @@ def save_recording_bundle(frames: list[dict], source_name: str, root: Path = ROO
     writer.writerow(["time", "vx", "vy", "yaw_rate", "height", "torso_roll", "torso_pitch", "torso_yaw", "upper_motion_time"])
     writer.writerows(np.column_stack([times, nav, height, torso_rpy, upper_time]))
     _atomic_bytes(folder / "commands.csv", cbuffer.getvalue().encode())
+    environment = {
+        "format": "motioncreator.environment.v1", "coordinate_system": "right-handed, +X forward, +Y left, +Z up",
+        "physics": {"gravity_m_s2": [0., 0., -9.81]}, "scene_objects": objects,
+    }
+    _atomic_bytes(folder / "environment.json", json.dumps(environment, ensure_ascii=False, indent=2).encode())
     metadata = {
         "format": "motioncreator.decoupled-wbc.recording.v1", "recording_id": identifier,
         "created_at": datetime.now(timezone.utc).isoformat(), "source_project": source_name,
         "fps": 25, "samples": len(frames), "joint_order": "G1 29-DoF; root qpos wxyz",
         "upper_body": "authored motion arm targets", "lower_body": "GR00T decoupled-WBC policy",
+        "environment_file": "environment.json", "object_count": len(objects),
         "policy_revision": json.loads(ASSET_MANIFEST.read_text())["source"]["revision"],
     }
     _atomic_bytes(folder / "metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2).encode())
-    return {"folder": folder.name, "files": [f"{folder.name}/{name}" for name in ("motion.npz", "motion.csv", "commands.csv", "metadata.json")]}
+    return {"folder": folder.name, "files": [f"{folder.name}/{name}" for name in
+                                               ("motion.npz", "motion.csv", "commands.csv", "environment.json", "metadata.json")]}
 
 
 class DecoupledSessions:

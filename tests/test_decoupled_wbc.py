@@ -10,6 +10,7 @@ from motioncreator.decoupled_wbc import (
     CommandState,
     DecoupledSimulation,
     authored_waist_to_torso_rpy,
+    build_environment_model,
     build_observation,
     save_recording_bundle,
     verify_assets,
@@ -58,18 +59,51 @@ def test_authored_waist_is_converted_to_policy_rpy_and_limited():
 
 
 def test_recording_bundle_is_reimportable(tmp_path):
+    objects = [{"id": "box", "name": "Box", "shape": "box", "position": [.4, 0., .1],
+                "quaternion_xyzw": [0., 0., 0., 1.], "size": [.2, .2, .2], "mass_kg": 1.,
+                "friction": .7, "color": "#ffffff", "opacity": 1., "visible": True}]
     frames = [{"time": i / 25, "qpos": np.r_[0., 0., .74, 1., 0., 0., 0., np.zeros(29)],
                "nav": np.array([.1, 0., 0.]), "height": .74,
-               "torso_rpy": np.zeros(3), "upper_time": i / 25} for i in range(3)]
-    result = save_recording_bundle(frames, "wave", tmp_path)
+               "torso_rpy": np.zeros(3), "upper_time": i / 25,
+               "object_states": {"box": {"position": [.4, 0., .1 + i / 100],
+                                            "quaternion_xyzw": [0., 0., 0., 1.]}}} for i in range(3)]
+    result = save_recording_bundle(frames, "wave", tmp_path, scene_objects=objects)
     folder = tmp_path / result["folder"]
     with np.load(folder / "motion.npz") as motion:
         assert motion["qpos"].shape == (3, 36)
         assert motion["navigate_command"].shape == (3, 3)
+        assert motion["object_position"].shape == (3, 1, 3)
+        assert motion["object_quaternion_xyzw"].shape == (3, 1, 4)
+        assert motion["object_ids"].tolist() == ["box"]
         assert motion["fps"] == 25
     assert (folder / "commands.csv").read_text().startswith("time,vx,vy,yaw_rate")
     metadata = json.loads((folder / "metadata.json").read_text())
+    environment = json.loads((folder / "environment.json").read_text())
     assert metadata["source_project"] == "wave" and metadata["samples"] == 3
+    assert metadata["object_count"] == 1 and environment["scene_objects"] == objects
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_environment_uses_a_free_body_for_grasp_target_and_fixed_support():
+    robot = Robot()
+    project = new_project(robot)
+    project["scene_objects"] = [{
+        "id": "crate", "name": "Crate", "shape": "box", "position": [.4, 0., .1],
+        "quaternion_xyzw": [0., 0., 0., 1.], "size": [.2, .3, .2], "mass_kg": .5,
+        "friction": .9, "color": "#aa7744", "opacity": 1., "visible": True,
+    }, {
+        "id": "support", "name": "Support", "shape": "box", "position": [.4, 0., .025],
+        "quaternion_xyzw": [0., 0., 0., 1.], "size": [.4, .5, .05], "mass_kg": 1.,
+        "friction": .9, "color": "#777777", "opacity": 1., "visible": True,
+    }]
+    project["keyframes"][0]["grasp"] = {"object_id": "crate"}
+    model = build_environment_model(project)
+    assert model.nq == 43 and model.nv == 41 and model.nu == 29
+    assert model.joint("wbc_object_joint_0").type == mujoco.mjtJoint.mjJNT_FREE
+    assert model.body("wbc_object_0").id > 0
+    assert model.body("wbc_object_1").jntnum == 0
+    assert model.geom("left_wbc_grip").contype == 1
+    assert model.geom("right_wbc_grip").contype == 1
 
 
 def test_http_command_fallback_dispatches_without_websocket(monkeypatch):

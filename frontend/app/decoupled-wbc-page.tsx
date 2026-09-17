@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, ArrowLeft, Download, FolderOpen, Play, RotateCcw, Save, Square } from 'lucide-react';
 import { RobotScene, type PoseState } from '../lib/robot-scene';
+import type { SceneObject, SceneObjectPose } from '../lib/scene-objects';
 
 type Runtime = { available: boolean; missing: string[]; invalid: string[]; source_revision: string; setup_command: string };
 type Snapshot = {
   revision: number; phase: string; playing: boolean; error: string; policy: 'balance' | 'walk';
   nav: number[]; height: number; torso_rpy: number[]; upper_time: number; upper_duration: number;
-  recording_frames: number; state: PoseState;
+  recording_frames: number; state: PoseState; scene_objects: SceneObject[];
+  object_states: Record<string, SceneObjectPose>;
+  grasp: null | { object_id: string; active: boolean; closure: number; target_force_n: number; attached: boolean };
 };
 type SaveResult = { folder: string; files: string[] };
 
@@ -38,6 +41,13 @@ export default function DecoupledWbcPage() {
   const [error, setError] = useState('');
   const [result, setResult] = useState<SaveResult | null>(null);
 
+  const renderSnapshot = useCallback((next: Snapshot) => {
+    setSnapshot(next);
+    scene.current?.setSceneObjects(next.scene_objects);
+    scene.current?.setObjectPoses(next.object_states);
+    scene.current?.update(next.state);
+  }, []);
+
   const sendCommand = useCallback(async (action: 'play' | 'stop' | 'reset' | 'key', key = '') => {
     if (!sessionId.current) { setError('먼저 모션을 불러오세요.'); return; }
     if (action === 'reset') { setResult(null); setError(''); }
@@ -45,10 +55,10 @@ export default function DecoupledWbcPage() {
       const next = await fetch(`/api/decoupled-wbc/sessions/${sessionId.current}/command`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, key }),
       }).then(responseJson<Snapshot>);
-      setSnapshot(next); scene.current?.update(next.state);
+      renderSnapshot(next);
       if (next.error) setError(next.error);
     } catch (failure) { setError((failure as Error).message); }
-  }, []);
+  }, [renderSnapshot]);
 
   useEffect(() => {
     if (!host.current) return;
@@ -97,7 +107,7 @@ export default function DecoupledWbcPage() {
       polling.current = true;
       try {
         const next = await fetch(`/api/decoupled-wbc/sessions/${identifier}`).then(responseJson<Snapshot>);
-        setSnapshot(next); scene.current?.update(next.state);
+        renderSnapshot(next);
         if (next.error) setError(next.error);
       } catch (failure) {
         setError((failure as Error).message);
@@ -117,7 +127,7 @@ export default function DecoupledWbcPage() {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ project }),
       });
       const initial = await responseJson<Snapshot & { id: string }>(response);
-      sessionId.current = initial.id; setSnapshot(initial); setSourceName(name); scene.current?.update(initial.state);
+      sessionId.current = initial.id; renderSnapshot(initial); setSourceName(name);
       connect(initial.id); setMessage('준비 완료. Play를 누르면 2초 동안 상체를 준비한 뒤 모션 재생과 녹화를 시작합니다.');
     } catch (failure) { setError((failure as Error).message); }
     finally { setBusy(false); }
@@ -191,6 +201,8 @@ export default function DecoupledWbcPage() {
         <span>상태 <b>{phaseLabel[snapshot?.phase ?? 'ready'] || snapshot?.phase}</b></span>
         <span>정책 <b>{snapshot?.policy ?? 'balance'}</b></span>
         <span>상체 <b>{(snapshot?.upper_time ?? 0).toFixed(2)} / {(snapshot?.upper_duration ?? 0).toFixed(2)} s</b></span>
+        <span>환경 <b>{snapshot?.scene_objects.length ?? 0} objects</b></span>
+        {snapshot?.grasp && <span>파지 <b>{snapshot.grasp.attached ? '잡힘' : snapshot.grasp.active ? `닫힘 ${(snapshot.grasp.closure * 100).toFixed(0)}%` : '대기'}</b></span>}
         <span>녹화 <b>{snapshot?.recording_frames ?? 0} frames</b></span>
       </div>
       {busy && <div className="busy-overlay"><span className="spinner"/> 준비하는 중…</div>}

@@ -68,7 +68,8 @@ def session_command(identifier: str, payload: CommandInput):
 @router.post("/api/decoupled-wbc/sessions/{identifier}/save")
 def save_session(identifier: str):
     session = checked(lambda: sessions.get(identifier))
-    return checked(lambda: save_recording_bundle(session.recording_copy(), session.project.get("name", "motion")))
+    return checked(lambda: save_recording_bundle(session.recording_copy(), session.project.get("name", "motion"),
+                                                  scene_objects=session.scene_objects))
 
 
 @router.websocket("/api/decoupled-wbc/sessions/{identifier}/stream")
