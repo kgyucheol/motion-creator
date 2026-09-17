@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import httpx
 import numpy as np
@@ -9,7 +10,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from motioncreator.robot import Robot, FEET
 from motioncreator.demo import crouch_demo
-from motioncreator.motion import automatic_project_name, compile_motion, new_project, project_from_motion_bytes, save_bundle, validate_project
+from motioncreator.motion import automatic_project_name, compile_motion, new_project, prepare_saved_project, project_from_motion_bytes, save_bundle, validate_project
 from motioncreator.reference import load_reference
 from motioncreator import server
 from motioncreator.server import app
@@ -143,7 +144,8 @@ def test_repeated_save_updates_same_project_folder_and_save_as_creates_copy(robo
     project['keyframes'][0]['name'] = '상자 파지'
     second = save_bundle(robot, project, fps=15, directory=tmp_path)
 
-    assert first['directory'] == second['directory']
+    assert first['directory'] != second['directory']
+    assert not Path(first['directory']).exists()
     assert first['reused'] is False
     assert second['reused'] is True
     assert second['display_name'] == '상자 파지_20260917'
@@ -152,12 +154,44 @@ def test_repeated_save_updates_same_project_folder_and_save_as_creates_copy(robo
     assert updated['project_id'] == original_id
     assert updated['display_name'] == '상자 파지_20260917'
     assert updated['keyframes'][0]['name'] == '상자 파지'
+    third = save_bundle(robot, project, fps=15, directory=tmp_path)
+    assert third['directory'] == second['directory']
+    assert third['reused'] is True
 
     copied = save_bundle(robot, project, fps=15, directory=tmp_path, save_as=True)
     assert copied['directory'] != second['directory']
     assert copied['project']['project_id'] != original_id
     assert copied['reused'] is False
     assert len(list(tmp_path.glob('*/project.json'))) == 2
+
+
+def test_legacy_saved_project_reuses_and_renames_its_existing_folder(robot, tmp_path):
+    project = new_project(robot, 'G1 reference')
+    project.pop('name_mode')
+    project.pop('project_id')
+    project.pop('created_at')
+    source = project['keyframes'][0]
+    project['keyframes'] = [{**source, 'name': name} for name in ('서있기', '손 접근', '상자 파지', '상자 들기')]
+    legacy_folder = tmp_path / 'G1_reference_20260917T055155_ec81e3'
+    legacy_folder.mkdir()
+    legacy_file = legacy_folder / 'project.json'
+    legacy_file.write_text(json.dumps(project), encoding='utf-8')
+
+    reopened = json.loads(legacy_file.read_text(encoding='utf-8'))
+    prepare_saved_project(reopened, legacy_file.relative_to(tmp_path), legacy_file.stat().st_mtime)
+    result = save_bundle(robot, reopened, fps=15, directory=tmp_path)
+
+    assert reopened['name'] == ''
+    assert reopened['name_mode'] == 'auto'
+    assert datetime.fromisoformat(reopened['created_at']).astimezone(timezone.utc).isoformat().startswith('2026-09-17T05:51:55')
+    assert result['display_name'] == '손 접근-상자 파지-상자 들기_20260917'
+    assert result['reused'] is True
+    assert not legacy_folder.exists()
+    assert Path(result['directory']).name.startswith('손_접근-상자_파지-상자_들기_20260917_')
+    assert len(list(tmp_path.glob('*/project.json'))) == 1
+    unchanged = save_bundle(robot, reopened, fps=15, directory=tmp_path)
+    assert unchanged['directory'] == result['directory']
+    assert len(list(tmp_path.glob('*/project.json'))) == 1
 
 
 def test_legacy_project_receives_stable_identity_during_validation(robot):
@@ -232,6 +266,23 @@ def test_saved_projects_support_bundle_folders(tmp_path, monkeypatch):
     assert Path(response.path) == project
     with pytest.raises(HTTPException):
         server.download('../project.json')
+
+
+def test_open_saved_project_restores_legacy_folder_identity(robot, tmp_path, monkeypatch):
+    bundle = tmp_path / 'motions' / 'G1_reference_20260917T055155_ec81e3'
+    bundle.mkdir(parents=True)
+    project = new_project(robot, 'G1 reference')
+    for field in ('name_mode', 'project_id', 'created_at'):
+        project.pop(field)
+    (bundle / 'project.json').write_text(json.dumps(project), encoding='utf-8')
+    monkeypatch.setattr(server, 'ROOT', tmp_path)
+
+    opened = server.open_saved_project('G1_reference_20260917T055155_ec81e3/project.json')
+
+    assert opened['name'] == ''
+    assert opened['name_mode'] == 'auto'
+    assert datetime.fromisoformat(opened['created_at']).astimezone(timezone.utc).isoformat().startswith('2026-09-17T05:51:55')
+    assert len(opened['project_id']) == 32
 
 
 def test_invalid_projects_and_pin_conflicts(robot):

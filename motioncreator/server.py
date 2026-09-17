@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -6,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE
-from .motion import new_project, validate_project, compile_motion, project_from_motion_bytes, save_bundle
+from .motion import new_project, validate_project, compile_motion, project_from_motion_bytes, prepare_saved_project, save_bundle
 from .presets import GroupStore
 
 robot = Robot()
@@ -214,6 +215,21 @@ def download(name: str):
     if not path.is_file():
         raise HTTPException(404)
     return FileResponse(path, filename=path.name)
+
+
+@app.get('/api/project/{name:path}')
+def open_saved_project(name: str):
+    relative = Path(name)
+    if relative.is_absolute() or '..' in relative.parts or relative.suffix != '.json':
+        raise HTTPException(404)
+    path = ROOT / 'motions' / relative
+    if not path.is_file():
+        raise HTTPException(404)
+    def load():
+        project = json.loads(path.read_text(encoding='utf-8'))
+        prepare_saved_project(project, relative, path.stat().st_mtime)
+        return validate_project(robot, project)
+    return checked(load)
 
 
 @app.get('/api/saved')

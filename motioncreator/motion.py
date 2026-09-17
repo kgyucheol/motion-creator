@@ -6,7 +6,7 @@ import os
 import re
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
 import mujoco
@@ -20,9 +20,11 @@ MAX_KEYFRAMES = 100
 MAX_MOTION_SAMPLES = 3000
 SCENE_SHAPES = {'box', 'sphere', 'cylinder'}
 PROJECT_ID_PATTERN = re.compile(r'[0-9a-f]{32}')
+PROJECT_ID_NAMESPACE = uuid.UUID('e0ad0f86-1a30-4e2f-a20f-67ad84175df8')
+LEGACY_AUTO_PROJECT_NAMES = {'g1 reference', 'g1_reference'}
 GENERIC_KEYFRAME_NAMES = {
     'stand', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip',
-    '서기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세',
+    'standing', '서기', '서있기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세',
 }
 
 
@@ -30,8 +32,46 @@ def _created_now():
     return datetime.now().astimezone().isoformat(timespec='seconds')
 
 
+def _normalize_project_naming(project):
+    name = project.get('name')
+    if not isinstance(name, str):
+        return
+    mode = project.get('name_mode')
+    if mode is None:
+        legacy_default = name.strip().casefold() in LEGACY_AUTO_PROJECT_NAMES
+        legacy_display = project.get('display_name')
+        mode = 'auto' if not name.strip() or (legacy_default and legacy_display in (None, name)) else 'manual'
+    if mode not in ('auto', 'manual'):
+        raise ValueError('Project name mode must be auto or manual')
+    if mode == 'manual' and not name.strip():
+        mode = 'auto'
+    project['name_mode'] = mode
+    if mode == 'auto':
+        project['name'] = ''
+
+
+def saved_project_id(relative_project_path):
+    relative = Path(relative_project_path)
+    return uuid.uuid5(PROJECT_ID_NAMESPACE, relative.as_posix()).hex
+
+
+def prepare_saved_project(project, relative_project_path, modified_at=None):
+    """Restore stable identity for a project opened from the server's saved list."""
+    if project.get('project_id') is None:
+        project['project_id'] = saved_project_id(relative_project_path)
+    if project.get('created_at') is None:
+        match = re.search(r'_(\d{8})T(\d{6})(?:_|$)', Path(relative_project_path).parent.name)
+        if match:
+            created = datetime.strptime(''.join(match.groups()), '%Y%m%d%H%M%S').replace(tzinfo=timezone.utc).astimezone()
+        else:
+            created = datetime.fromtimestamp(modified_at or datetime.now().timestamp()).astimezone()
+        project['created_at'] = created.isoformat(timespec='seconds')
+    return ensure_project_identity(project)
+
+
 def ensure_project_identity(project):
     """Upgrade a legacy project with stable save identity fields."""
+    _normalize_project_naming(project)
     identifier = project.get('project_id')
     if identifier is None:
         identifier = uuid.uuid4().hex
@@ -71,8 +111,9 @@ def automatic_project_name(project):
 
 
 def project_display_name(project):
+    ensure_project_identity(project)
     manual = str(project.get('name', '')).strip()
-    return manual if manual else automatic_project_name(project)
+    return manual if project['name_mode'] == 'manual' and manual else automatic_project_name(project)
 
 
 def project_scene_objects(project):
@@ -219,7 +260,8 @@ def validate_project(robot: Robot, project):
 
 
 def new_project(robot, name=''):
-    return {'format': FORMAT, 'name': name, 'project_id': uuid.uuid4().hex, 'created_at': _created_now(),
+    return {'format': FORMAT, 'name': name, 'name_mode': 'manual' if name.strip() else 'auto',
+            'project_id': uuid.uuid4().hex, 'created_at': _created_now(),
             'model_sha256': robot.fingerprint,
             'joint_names': robot.names, 'coordinate_system': 'right-handed, +X forward, +Y left, +Z up',
             'units': {'position': 'm', 'angle': 'rad', 'time': 's'},
@@ -369,7 +411,8 @@ def _existing_project_folder(root_folder, project_id):
             stored = json.loads(project_file.read_text(encoding='utf-8'))
         except (OSError, UnicodeError, json.JSONDecodeError):
             continue
-        if stored.get('project_id') == project_id:
+        stored_id = stored.get('project_id') or saved_project_id(project_file.relative_to(root_folder))
+        if stored_id == project_id:
             matches.append(project_file.parent)
     if len(matches) > 1:
         raise ValueError('Multiple saved folders use this project ID; resolve the duplicate before saving')
@@ -404,9 +447,15 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     name = re.sub(r'[^\w-]', '_', display_name, flags=re.UNICODE).strip('_')[:72] or 'motion'
     folder = _existing_project_folder(root_folder, project['project_id'])
     reused = folder is not None
+    desired_folder = root_folder / f'{name}_{project["project_id"][:8]}'
     if folder is None:
-        folder = root_folder / f'{name}_{project["project_id"][:8]}'
+        folder = desired_folder
         folder.mkdir()
+    elif folder != desired_folder:
+        if desired_folder.exists():
+            raise ValueError('A different saved project already uses the requested project name')
+        folder.rename(desired_folder)
+        folder = desired_folder
     stem = folder.name
     floor = []
     for q in motion['qpos']:
