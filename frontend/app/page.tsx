@@ -10,7 +10,7 @@ import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRota
 import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectsFromProject, placeSceneObject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
-type Project = { format: string; name: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
+type Project = { format: string; name: string; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
@@ -18,6 +18,19 @@ type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: bool
 type GroupPreset = { id: string; name: string; members: string[] };
 type EditorSnapshot = { qpos: number[]; pins: string[]; objects: SceneObject[]; keyframes: Keyframe[]; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
+const genericFrameNames = new Set(['stand', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip', '서기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세']);
+function automaticProjectName(project: Project) {
+  const names: string[] = [];
+  for (const frame of project.keyframes) {
+    const name = frame.name.trim().replace(/\s+/g, ' ');
+    if (!name || genericFrameNames.has(name.toLocaleLowerCase()) || names.some(value => value.toLocaleLowerCase() === name.toLocaleLowerCase())) continue;
+    names.push(name);
+    if (names.length === 3) break;
+  }
+  const core = (names.join('-') || 'G1_모션').replace(/[\\/:*?"<>|]+/g, '_').replace(/^[ ._-]+|[ ._-]+$/g, '').slice(0, 60) || 'G1_모션';
+  const date = project.created_at?.slice(0, 10).replaceAll('-', '') || new Date().toISOString().slice(0, 10).replaceAll('-', '');
+  return `${core}_${date}`;
+}
 function selectionCenter(pose: PoseState, members: string[]) {
   const controls = controlSelection(members);
   return [0, 1, 2].map(i => controls.reduce((sum, key) => sum + pose.handles[key].position[i], 0) / controls.length);
@@ -570,14 +583,16 @@ export default function Editor() {
     if (!Number.isFinite(value) || !limits[index]) return;
     setJointDraft(draft => draft.map((v, i) => i === index ? Math.max(limits[i][0], Math.min(limits[i][1], value)) : v));
   }
-  function exportProject() {
+  function exportProject(saveAs = false) {
     if (!project || !state) return;
     void run(async () => {
-      const result = await api<{ files: string[]; directory: string; warnings?: string[]; metadata: { samples: number; validation: { max_pin_error_mm: number } } }>('save', {
+      const result = await api<{ files: string[]; directory: string; project: Project; display_name: string; reused: boolean; warnings?: string[]; metadata: { samples: number; validation: { max_pin_error_mm: number } } }>(saveAs ? 'save-as' : 'save', {
         project: { ...project, current_qpos: state.qpos, pins, scene_objects: objects }, fps, protomotions: exportProto,
       });
+      setProject(result.project); current.current.project = result.project;
       setFiles(result.files); setSaved(await api<string[]>('saved'));
-      setMessage(`${result.metadata.samples}프레임 저장 완료 · ${result.directory} · 고정 오차 최대 ${result.metadata.validation.max_pin_error_mm.toFixed(2)} mm`);
+      const action = result.reused ? '프로젝트 업데이트' : saveAs ? '새 프로젝트로 저장' : '프로젝트 생성';
+      setMessage(`${action} 완료 · ${result.display_name} · ${result.metadata.samples}프레임 · 고정 오차 최대 ${result.metadata.validation.max_pin_error_mm.toFixed(2)} mm`);
       if (result.warnings?.length) setError(result.warnings.join(' '));
     });
   }
@@ -681,8 +696,8 @@ export default function Editor() {
   return <div className="editor">
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><b>G1 / 29 DOF</b></div>
-      <div className="project-title"><span className="status-dot"/>{project ? <input aria-label="프로젝트 이름" value={project.name} onChange={e => setProject({ ...project, name: e.target.value })}/> : '연결 중'}</div>
-      <div className="top-actions"><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button className="primary" disabled={disabled} onClick={exportProject}><Save size={16}/> 모션 저장</button></div>
+      <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="비워 두면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onChange={e => setProject({ ...project, name: e.target.value })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
+      <div className="top-actions"><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button disabled={disabled} onClick={() => exportProject(true)}><Save size={16}/> 별도 저장</button><button className="primary" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">

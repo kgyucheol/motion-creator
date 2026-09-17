@@ -2,10 +2,11 @@
 import hashlib
 import io
 import json
+import os
 import re
 import uuid
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 import numpy as np
 import mujoco
@@ -18,6 +19,60 @@ ENVIRONMENT_FORMAT = 'motioncreator.environment.v1'
 MAX_KEYFRAMES = 100
 MAX_MOTION_SAMPLES = 3000
 SCENE_SHAPES = {'box', 'sphere', 'cylinder'}
+PROJECT_ID_PATTERN = re.compile(r'[0-9a-f]{32}')
+GENERIC_KEYFRAME_NAMES = {
+    'stand', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip',
+    '서기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세',
+}
+
+
+def _created_now():
+    return datetime.now().astimezone().isoformat(timespec='seconds')
+
+
+def ensure_project_identity(project):
+    """Upgrade a legacy project with stable save identity fields."""
+    identifier = project.get('project_id')
+    if identifier is None:
+        identifier = uuid.uuid4().hex
+        project['project_id'] = identifier
+    if not isinstance(identifier, str) or not PROJECT_ID_PATTERN.fullmatch(identifier):
+        raise ValueError('Project ID must be 32 lowercase hexadecimal characters')
+    created_at = project.get('created_at')
+    if created_at is None:
+        created_at = _created_now()
+        project['created_at'] = created_at
+    if not isinstance(created_at, str):
+        raise ValueError('Project creation time must be ISO 8601 text')
+    try:
+        parsed = datetime.fromisoformat(created_at)
+    except ValueError as exc:
+        raise ValueError('Project creation time must use ISO 8601') from exc
+    if parsed.tzinfo is None:
+        raise ValueError('Project creation time must include a timezone')
+    return project
+
+
+def automatic_project_name(project):
+    """Build a readable default name from keyframe intent and creation date."""
+    ensure_project_identity(project)
+    names = []
+    for frame in project.get('keyframes', []):
+        value = re.sub(r'\s+', ' ', str(frame.get('name', '')).strip())
+        if not value or value.casefold() in GENERIC_KEYFRAME_NAMES or value.casefold() in {name.casefold() for name in names}:
+            continue
+        names.append(value)
+        if len(names) == 3:
+            break
+    core = '-'.join(names) if names else 'G1_모션'
+    core = re.sub(r'[\\/:*?"<>|]+', '_', core).strip(' ._-')[:60] or 'G1_모션'
+    date = datetime.fromisoformat(project['created_at']).strftime('%Y%m%d')
+    return f'{core}_{date}'
+
+
+def project_display_name(project):
+    manual = str(project.get('name', '')).strip()
+    return manual if manual else automatic_project_name(project)
 
 
 def project_scene_objects(project):
@@ -52,12 +107,15 @@ def environment_snapshot(project):
 
 
 def validate_project(robot: Robot, project):
+    ensure_project_identity(project)
     if project.get('format') != FORMAT or project.get('model_sha256') != robot.fingerprint:
         raise ValueError('Project format or G1 model fingerprint does not match')
     if project.get('joint_names') != robot.names:
         raise ValueError('Joint order does not match this model')
     if not isinstance(project.get('name'), str) or not isinstance(project.get('coordinate_system'), str) or not isinstance(project.get('units'), dict):
         raise ValueError('Project name, coordinate system and units are required')
+    if len(project['name']) > 80:
+        raise ValueError('Project name must contain at most 80 characters')
     frames = project.get('keyframes', [])
     if not 1 <= len(frames) <= MAX_KEYFRAMES:
         raise ValueError(f'A project needs 1–{MAX_KEYFRAMES} keyframes')
@@ -160,8 +218,9 @@ def validate_project(robot: Robot, project):
     return project
 
 
-def new_project(robot, name='G1 reference'):
-    return {'format': FORMAT, 'name': name, 'model_sha256': robot.fingerprint,
+def new_project(robot, name=''):
+    return {'format': FORMAT, 'name': name, 'project_id': uuid.uuid4().hex, 'created_at': _created_now(),
+            'model_sha256': robot.fingerprint,
             'joint_names': robot.names, 'coordinate_system': 'right-handed, +X forward, +Y left, +Z up',
             'units': {'position': 'm', 'angle': 'rad', 'time': 's'},
             'keyframes': [{'name': 'Stand', 'duration': 2., 'qpos': robot.home.tolist(), 'pins': list(FEET)}]}
@@ -303,16 +362,52 @@ def compile_motion(robot: Robot, project, fps=30):
     return motion_result(robot, poses, times, contacts, fps, pin_errors)
 
 
-def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=False):
-    """Save NPZ, CSV, editable project and metadata in one self-contained folder."""
+def _existing_project_folder(root_folder, project_id):
+    matches = []
+    for project_file in root_folder.glob('*/project.json'):
+        try:
+            stored = json.loads(project_file.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        if stored.get('project_id') == project_id:
+            matches.append(project_file.parent)
+    if len(matches) > 1:
+        raise ValueError('Multiple saved folders use this project ID; resolve the duplicate before saving')
+    return matches[0] if matches else None
+
+
+def _atomic_bytes(path, content):
+    temporary = path.with_name(f'.{path.name}.{uuid.uuid4().hex}.tmp')
+    try:
+        temporary.write_bytes(content)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _atomic_text(path, content):
+    _atomic_bytes(path, content.encode('utf-8'))
+
+
+def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=False, save_as=False):
+    """Create or atomically update one self-contained project folder."""
+    if save_as:
+        project = json.loads(json.dumps(project))
+        project['project_id'] = uuid.uuid4().hex
+        project['created_at'] = _created_now()
+    ensure_project_identity(project)
     motion = compile_motion(robot, project, fps)
     root_folder = Path(directory or ROOT / 'motions')
     root_folder.mkdir(parents=True, exist_ok=True)
-    name = re.sub(r'[^\w-]', '_', str(project.get('name', 'motion')), flags=re.UNICODE).strip('_')[:60] or 'motion'
-    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S') + '_' + uuid.uuid4().hex[:6]
-    stem = f'{name}_{stamp}'
-    folder = root_folder / stem
-    folder.mkdir()
+    display_name = project_display_name(project)
+    project['display_name'] = display_name
+    name = re.sub(r'[^\w-]', '_', display_name, flags=re.UNICODE).strip('_')[:72] or 'motion'
+    folder = _existing_project_folder(root_folder, project['project_id'])
+    reused = folder is not None
+    if folder is None:
+        folder = root_folder / f'{name}_{project["project_id"][:8]}'
+        folder.mkdir()
+    stem = folder.name
     floor = []
     for q in motion['qpos']:
         state = robot.state(q)
@@ -321,6 +416,8 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     environment_text = json.dumps(environment, ensure_ascii=False, indent=2)
     environment_sha256 = hashlib.sha256(environment_text.encode('utf-8')).hexdigest()
     metadata = {'format': FORMAT, 'model_sha256': robot.fingerprint, 'joint_names': robot.names,
+                'project_id': project['project_id'], 'created_at': project['created_at'],
+                'display_name': display_name,
                 'reference_schema': 'motioncreator.reference.v2',
                 'npz_format': 'kimodo.g1.34',
                 'npz_coordinate_system': 'right-handed, +Z forward, +Y up',
@@ -348,15 +445,20 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     json_path = folder / 'project.json'
     environment_path = folder / 'environment.json'
     metadata_path = folder / 'metadata.json'
-    np.savez_compressed(npz_path, **export_kimodo_g1(robot, motion['qpos'], fps))
-    np.savetxt(csv_path, motion['qpos'], delimiter=',')
-    json_path.write_text(json.dumps(project, ensure_ascii=False, indent=2), encoding='utf-8')
-    environment_path.write_text(environment_text, encoding='utf-8')
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2), encoding='utf-8')
+    npz_buffer = io.BytesIO()
+    np.savez_compressed(npz_buffer, **export_kimodo_g1(robot, motion['qpos'], fps))
+    csv_buffer = io.StringIO()
+    np.savetxt(csv_buffer, motion['qpos'], delimiter=',')
+    _atomic_bytes(npz_path, npz_buffer.getvalue())
+    _atomic_text(csv_path, csv_buffer.getvalue())
+    _atomic_text(json_path, json.dumps(project, ensure_ascii=False, indent=2))
+    _atomic_text(environment_path, environment_text)
+    _atomic_text(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2))
     def relative(path):
         return str(path.relative_to(root_folder))
     exported = [npz_path, csv_path, json_path, environment_path, metadata_path]
     result = {'files': [relative(path) for path in exported], 'directory': str(folder), 'folder': stem,
+              'project': project, 'display_name': display_name, 'reused': reused,
               'metadata': metadata, 'project_file': relative(json_path), 'environment_file': relative(environment_path),
               'metadata_file': relative(metadata_path),
               'npz_file': relative(npz_path), 'csv_file': relative(csv_path)}

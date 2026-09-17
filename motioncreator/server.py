@@ -198,6 +198,12 @@ def save(payload: ProjectInput):
     return checked(lambda: save_bundle(robot, payload.project, payload.fps, protomotions=payload.protomotions))
 
 
+@app.post('/api/save-as')
+def save_as(payload: ProjectInput):
+    return checked(lambda: save_bundle(robot, payload.project, payload.fps,
+                                       protomotions=payload.protomotions, save_as=True))
+
+
 @app.get('/api/files/{name:path}')
 def download(name: str):
     relative = Path(name)

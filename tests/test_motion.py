@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from motioncreator.robot import Robot, FEET
 from motioncreator.demo import crouch_demo
-from motioncreator.motion import compile_motion, project_from_motion_bytes, save_bundle, validate_project
+from motioncreator.motion import automatic_project_name, compile_motion, new_project, project_from_motion_bytes, save_bundle, validate_project
 from motioncreator.reference import load_reference
 from motioncreator import server
 from motioncreator.server import app
@@ -117,6 +117,58 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
     assert data['joint_names'].tolist() == robot.names
     assert data['root_quat_wxyz'].shape == (61, 4)
     assert np.allclose(np.linalg.norm(data['root_quat_wxyz'], axis=1), 1)
+
+
+def test_automatic_project_name_uses_keyframe_intent_and_creation_date(robot):
+    project = new_project(robot)
+    project['created_at'] = '2026-09-17T09:30:00+09:00'
+    project['keyframes'] = [
+        {**project['keyframes'][0], 'name': '기본 서기 자세'},
+        {**project['keyframes'][0], 'name': '상자 접근'},
+        {**project['keyframes'][0], 'name': '양손 파지'},
+        {**project['keyframes'][0], 'name': '들어 올리기'},
+        {**project['keyframes'][0], 'name': '내려놓기'},
+    ]
+
+    assert automatic_project_name(project) == '상자 접근-양손 파지-들어 올리기_20260917'
+
+
+def test_repeated_save_updates_same_project_folder_and_save_as_creates_copy(robot, tmp_path):
+    project = new_project(robot)
+    project['created_at'] = '2026-09-17T09:30:00+09:00'
+    project['keyframes'][0]['name'] = '상자 접근'
+
+    first = save_bundle(robot, project, fps=15, directory=tmp_path)
+    original_id = project['project_id']
+    project['keyframes'][0]['name'] = '상자 파지'
+    second = save_bundle(robot, project, fps=15, directory=tmp_path)
+
+    assert first['directory'] == second['directory']
+    assert first['reused'] is False
+    assert second['reused'] is True
+    assert second['display_name'] == '상자 파지_20260917'
+    assert len(list(tmp_path.glob('*/project.json'))) == 1
+    updated = json.loads((tmp_path / second['project_file']).read_text())
+    assert updated['project_id'] == original_id
+    assert updated['display_name'] == '상자 파지_20260917'
+    assert updated['keyframes'][0]['name'] == '상자 파지'
+
+    copied = save_bundle(robot, project, fps=15, directory=tmp_path, save_as=True)
+    assert copied['directory'] != second['directory']
+    assert copied['project']['project_id'] != original_id
+    assert copied['reused'] is False
+    assert len(list(tmp_path.glob('*/project.json'))) == 2
+
+
+def test_legacy_project_receives_stable_identity_during_validation(robot):
+    project = new_project(robot)
+    del project['project_id']
+    del project['created_at']
+
+    validate_project(robot, project)
+
+    assert len(project['project_id']) == 32
+    assert project['created_at']
 
 def test_import_kimodo_npz_and_g1_csv_as_editable_keyframes(robot, tmp_path):
     source = crouch_demo(robot)
