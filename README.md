@@ -111,7 +111,7 @@ PYTHONPATH="$PWD" OPENBLAS_NUM_THREADS=1 .conda/bin/python -m motioncreator.cli 
 - **Physics ON / GEAR-SONIC OFF:** 기본 PD 제어로 참조 관절 각도를 추종합니다.
   모터는 작동하지만 균형을 잡는 학습 정책은 없으므로 넘어질 수 있습니다. SONIC 모델 없이 서버의 Python 환경으로 실행됩니다.
 - **Physics ON / GEAR-SONIC ON:** 설치된 original-release SONIC ONNX 정책으로 모션을 추종합니다.
-  별도 `.conda-policy` CPU 환경이 필요합니다. Physics가 꺼져 있어도 SONIC을 켜면 둘 다 켜집니다.
+  별도 `.conda-policy` CPU 환경이 필요합니다. Physics가 꺼져 있어도 SONIC을 켜면 둘 다 켜집니다. 최초 실행에서 encoder/decoder를 한 번 로드한 뒤 서버가 실행되는 동안 같은 ONNX 세션을 재사용하며, 각 재생 전에는 정책 히스토리만 초기화합니다.
 
 두 물리 모드 모두 MuJoCo 중력·바닥 접촉·관절 토크를 500 Hz로 계산하며,
 관절 목표 갱신 및 SONIC 정책 실행은 50 Hz입니다. 루트를 강제로 고정하거나 이동시키지 않습니다.

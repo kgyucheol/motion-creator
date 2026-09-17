@@ -1,5 +1,6 @@
 """Timeline physics contracts; actual ONNX integration is exercised separately."""
 import copy
+import io
 import json
 
 import mujoco
@@ -152,6 +153,46 @@ def test_worker_start_failure_is_actionable(monkeypatch):
     with pytest.raises(ValueError, match='물리 CPU 작업을 시작할 수 없습니다'):
         jobs.start(new_project(Robot()))
     assert not jobs.jobs
+
+
+def test_persistent_worker_loads_sonic_once_for_multiple_previews(tmp_path, monkeypatch):
+    folders = [tmp_path / name for name in ('first', 'second')]
+    for folder in folders:
+        folder.mkdir()
+        preview.atomic_json(folder / 'project.json', new_project(Robot()))
+    instances, calls = [], []
+    class ReusablePolicy:
+        def __init__(self):
+            instances.append(self)
+    def fake_simulate(project, progress, *, controller, start_frame_index, sonic_policy):
+        calls.append((sonic_policy, start_frame_index))
+        return {'controller': controller, 'reused': True}
+    monkeypatch.setattr(preview, 'SonicCPU', ReusablePolicy)
+    monkeypatch.setattr(preview, 'simulate', fake_simulate)
+    commands = ''.join(json.dumps({'folder': str(folder), 'start_frame_index': index}) + '\n'
+                       for index, folder in enumerate(folders))
+    preview.run_persistent_worker(io.StringIO(commands))
+    assert len(instances) == 1
+    assert [policy for policy, _ in calls] == [instances[0], instances[0]]
+    assert [index for _, index in calls] == [0, 1]
+    assert all(json.loads((folder / 'result.json').read_text())['reused'] for folder in folders)
+
+
+def test_reused_sonic_policy_resets_rollout_state_between_previews():
+    robot = Robot()
+    project = new_project(robot)
+    project['keyframes'][0]['duration'] = .1
+    class ReusablePolicy:
+        def __init__(self):
+            self.resets = 0
+        def reset(self):
+            self.resets += 1
+        def action(self, *args):
+            return robot.home[7:]
+    policy = ReusablePolicy()
+    preview.simulate(project, controller='gear-sonic', sonic_policy=policy)
+    preview.simulate(project, controller='gear-sonic', sonic_policy=policy)
+    assert policy.resets == 2
 
 
 def test_pd_preview_runs_real_physics_without_loading_sonic(monkeypatch):

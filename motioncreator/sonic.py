@@ -60,6 +60,9 @@ class SonicCPU:
             if len(session.get_inputs())!=1 or session.get_inputs()[0].shape[-1]!=size:
                 raise ValueError(f'Unexpected SONIC ONNX input shape: {session.get_inputs()[0].shape}; expected {size}')
         self.history=deque(maxlen=10); self.last_action=np.zeros(29)
+    def reset(self):
+        """Reset rollout state while retaining the loaded ONNX sessions."""
+        self.history.clear(); self.last_action.fill(0)
     def action(self,q,qvel,ref,time,stop_at=None):
         rot=Rotation.from_quat(q[[4,5,6,3]]).as_matrix()
         # Free-joint rotational qvel is body-local in MuJoCo, matching the pelvis gyro.

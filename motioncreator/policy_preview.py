@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 import xml.etree.ElementTree as ET
 
@@ -114,7 +115,7 @@ def build_model(robot, project=None):
     return model
 
 
-def simulate(project, progress=lambda value: None, *, controller='gear-sonic', start_frame_index=0):
+def simulate(project, progress=lambda value: None, *, controller='gear-sonic', start_frame_index=0, sonic_policy=None):
     if controller not in ('pd', 'gear-sonic'):
         raise ValueError('Unknown physics controller')
     robot = Robot()
@@ -133,7 +134,9 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
     model = build_model(robot, project)
     data = mujoco.MjData(model)
     ref = Reference(times, poses, robot.model)
-    policy = SonicCPU() if controller == 'gear-sonic' else None
+    policy = (sonic_policy or SonicCPU()) if controller == 'gear-sonic' else None
+    if policy is not None and hasattr(policy, 'reset'):
+        policy.reset()
     data.qpos[:36] = poses[0]
     # Preserve the reference start; do not silently shift/ground or teleport it.
     mujoco.mj_forward(model, data)
@@ -194,6 +197,22 @@ class PreviewJobs:
     def __init__(self):
         self.lock = threading.Lock()
         self.jobs = {}
+        self.sonic_process = None
+
+    @staticmethod
+    def _worker_environment():
+        return {**os.environ, 'PYTHONPATH': str(ROOT), 'PYTHONNOUSERSITE': '1',
+                'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '2', 'CUDA_VISIBLE_DEVICES': ''}
+
+    def _sonic_worker(self, env):
+        if self.sonic_process is not None and self.sonic_process.poll() is None:
+            return self.sonic_process
+        executable = str(ROOT / '.conda-policy/bin/python')
+        self.sonic_process = subprocess.Popen(
+            [executable, '-m', 'motioncreator.policy_preview', '--persistent-worker'],
+            cwd=ROOT, env=env, stdin=subprocess.PIPE, text=True, bufsize=1,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return self.sonic_process
 
     def start(self, project, controller='gear-sonic', start_frame_index=0):
         if controller not in ('pd', 'gear-sonic'):
@@ -216,24 +235,42 @@ class PreviewJobs:
             temporary = tempfile.TemporaryDirectory(prefix='motioncreator-sonic-')
             folder = Path(temporary.name)
             atomic_json(folder / 'project.json', project)
-            env = {**os.environ, 'PYTHONPATH': str(ROOT), 'PYTHONNOUSERSITE': '1',
-                   'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '2', 'CUDA_VISIBLE_DEVICES': ''}
+            env = self._worker_environment()
             try:
-                with (folder / 'worker.log').open('w') as log:
-                    executable = str(ROOT / '.conda-policy/bin/python') if controller == 'gear-sonic' else sys.executable
-                    process = subprocess.Popen([executable, '-m',
-                        'motioncreator.policy_preview', str(folder), controller, str(start_frame_index)], cwd=ROOT, env=env,
-                        stdout=log, stderr=subprocess.STDOUT)
-            except OSError as exc:
+                if controller == 'gear-sonic':
+                    process = self._sonic_worker(env)
+                    if process.stdin is None:
+                        raise OSError('GEAR-SONIC worker input is unavailable')
+                    process.stdin.write(json.dumps({'folder': str(folder), 'start_frame_index': start_frame_index}) + '\n')
+                    process.stdin.flush()
+                    persistent = True
+                else:
+                    with (folder / 'worker.log').open('w') as log:
+                        process = subprocess.Popen([sys.executable, '-m',
+                            'motioncreator.policy_preview', str(folder), controller, str(start_frame_index)], cwd=ROOT, env=env,
+                            stdout=log, stderr=subprocess.STDOUT)
+                    persistent = False
+            except (OSError, BrokenPipeError, ValueError) as exc:
+                if controller == 'gear-sonic':
+                    if 'process' in locals() and process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            process.kill(); process.wait()
+                    self.sonic_process = None
                 temporary.cleanup()
                 raise ValueError(f'물리 CPU 작업을 시작할 수 없습니다: {exc}') from exc
             identifier = uuid.uuid4().hex
-            job = {'status': 'running', 'process': process, 'folder': folder, 'temporary': temporary}
+            job = {'status': 'running', 'process': process, 'folder': folder, 'temporary': temporary,
+                   'persistent': persistent}
             self.jobs[identifier] = job
             threading.Thread(target=self._watch, args=(job,), daemon=True).start()
         return {'id': identifier, 'status': 'running', 'progress': 0., 'start_frame_index': start_frame_index}
 
     def _watch(self, job):
+        if job.get('persistent'):
+            return self._watch_persistent(job)
         try:
             code = job['process'].wait(timeout=600)
             message = ''
@@ -249,6 +286,38 @@ class PreviewJobs:
                 error_path = job['folder'] / 'error.json'
                 job['message'] = message or (json.loads(error_path.read_text())['message'] if error_path.is_file()
                                             else '물리 CPU 작업이 종료되었습니다. 실행 환경을 확인하세요.')
+
+    def _watch_persistent(self, job):
+        deadline = time.monotonic() + 600
+        result_path = job['folder'] / 'result.json'
+        error_path = job['folder'] / 'error.json'
+        message = ''
+        while time.monotonic() < deadline:
+            with self.lock:
+                if job['status'] != 'running':
+                    return
+            if result_path.is_file() or error_path.is_file():
+                break
+            if job['process'].poll() is not None:
+                message = 'GEAR-SONIC 상주 워커가 종료되었습니다. 다음 재생에서 다시 시작합니다.'
+                break
+            time.sleep(.1)
+        else:
+            message = 'CPU 계산이 10분을 초과했습니다. 짧은 모션으로 다시 실행하세요.'
+            job['process'].terminate()
+            try:
+                job['process'].wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                job['process'].kill(); job['process'].wait()
+        with self.lock:
+            if job['status'] != 'running':
+                return
+            job['status'] = 'completed' if result_path.is_file() else 'failed'
+            if job['status'] == 'failed':
+                job['message'] = message or (json.loads(error_path.read_text())['message'] if error_path.is_file()
+                                            else 'GEAR-SONIC 물리 작업이 종료되었습니다. 실행 환경을 확인하세요.')
+            if job['process'].poll() is not None and self.sonic_process is job['process']:
+                self.sonic_process = None
 
     def status(self, identifier):
         with self.lock:
@@ -281,12 +350,41 @@ class PreviewJobs:
                 except subprocess.TimeoutExpired:
                     job['process'].kill()
                     job['process'].wait()
+                if job.get('persistent') and self.sonic_process is job['process']:
+                    self.sonic_process = None
         return self.status(identifier)
 
     def close(self):
         for identifier in list(self.jobs):
             self.cancel(identifier)
             self.jobs[identifier]['temporary'].cleanup()
+        if self.sonic_process is not None and self.sonic_process.poll() is None:
+            self.sonic_process.terminate()
+            try:
+                self.sonic_process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                self.sonic_process.kill(); self.sonic_process.wait()
+        self.sonic_process = None
+
+
+def run_persistent_worker(stream=None):
+    """Serve multiple GEAR-SONIC previews with one pair of ONNX sessions."""
+    policy = None
+    for line in stream or sys.stdin:
+        if not line.strip():
+            continue
+        command = json.loads(line)
+        folder = Path(command['folder'])
+        try:
+            if policy is None:
+                policy = SonicCPU()
+            result = simulate(json.loads((folder / 'project.json').read_text()),
+                              lambda value: atomic_json(folder / 'progress.json', {'progress': value}),
+                              controller='gear-sonic', start_frame_index=int(command.get('start_frame_index', 0)),
+                              sonic_policy=policy)
+            atomic_json(folder / 'result.json', result)
+        except Exception as exc:
+            atomic_json(folder / 'error.json', {'message': str(exc)})
 
 
 jobs = PreviewJobs()
@@ -294,6 +392,9 @@ atexit.register(jobs.close)
 
 
 if __name__ == '__main__':
+    if len(sys.argv) > 1 and sys.argv[1] == '--persistent-worker':
+        run_persistent_worker()
+        raise SystemExit(0)
     folder = Path(sys.argv[1])
     try:
         result = simulate(json.loads((folder / 'project.json').read_text()),
