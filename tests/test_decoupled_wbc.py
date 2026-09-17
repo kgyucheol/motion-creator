@@ -4,6 +4,7 @@ import mujoco
 import numpy as np
 import pytest
 
+from motioncreator import decoupled_api
 from motioncreator.decoupled_wbc import (
     ASSET_ROOT,
     CommandState,
@@ -69,6 +70,22 @@ def test_recording_bundle_is_reimportable(tmp_path):
     assert (folder / "commands.csv").read_text().startswith("time,vx,vy,yaw_rate")
     metadata = json.loads((folder / "metadata.json").read_text())
     assert metadata["source_project"] == "wave" and metadata["samples"] == 3
+
+
+def test_http_command_fallback_dispatches_without_websocket(monkeypatch):
+    class FakeSession:
+        def __init__(self): self.calls = []
+        def play(self): self.calls.append(("play", ""))
+        def stop(self): self.calls.append(("stop", ""))
+        def reset(self): self.calls.append(("reset", ""))
+        def apply_key(self, key): self.calls.append(("key", key))
+        def snapshot(self): return {"calls": self.calls}
+
+    session = FakeSession()
+    monkeypatch.setattr(decoupled_api.sessions, "get", lambda identifier: session)
+    for action, key in (("play", ""), ("key", "w"), ("stop", ""), ("reset", "")):
+        result = decoupled_api.session_command("session", decoupled_api.CommandInput(action=action, key=key))
+        assert result["calls"][-1] == (action, key)
 
 
 @pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")

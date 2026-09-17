@@ -1,5 +1,6 @@
 """HTTP and WebSocket API for the decoupled-WBC workbench."""
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
@@ -13,6 +14,11 @@ router = APIRouter()
 
 class SessionInput(BaseModel):
     project: dict
+
+
+class CommandInput(BaseModel):
+    action: Literal["play", "stop", "reset", "key"]
+    key: str = ""
 
 
 def checked(call):
@@ -42,6 +48,21 @@ def create_session(payload: SessionInput):
 def delete_session(identifier: str):
     sessions.delete(identifier)
     return {"deleted": True}
+
+
+@router.get("/api/decoupled-wbc/sessions/{identifier}")
+def session_status(identifier: str):
+    return checked(lambda: sessions.get(identifier).snapshot())
+
+
+@router.post("/api/decoupled-wbc/sessions/{identifier}/command")
+def session_command(identifier: str, payload: CommandInput):
+    session = checked(lambda: sessions.get(identifier))
+    if payload.action == "play": session.play()
+    elif payload.action == "stop": session.stop()
+    elif payload.action == "reset": session.reset()
+    else: session.apply_key(payload.key)
+    return session.snapshot()
 
 
 @router.post("/api/decoupled-wbc/sessions/{identifier}/save")

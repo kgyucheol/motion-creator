@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, ArrowLeft, Download, FolderOpen, Play, RotateCcw, Save, Square } from 'lucide-react';
 import { RobotScene, type PoseState } from '../lib/robot-scene';
 
@@ -24,7 +24,8 @@ async function responseJson<T>(response: Response): Promise<T> {
 export default function DecoupledWbcPage() {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<RobotScene | null>(null);
-  const socket = useRef<WebSocket | null>(null);
+  const pollTimer = useRef<number | null>(null);
+  const polling = useRef(false);
   const file = useRef<HTMLInputElement>(null);
   const sessionId = useRef('');
   const [runtime, setRuntime] = useState<Runtime | null>(null);
@@ -36,6 +37,18 @@ export default function DecoupledWbcPage() {
   const [message, setMessage] = useState('런타임을 확인하는 중…');
   const [error, setError] = useState('');
   const [result, setResult] = useState<SaveResult | null>(null);
+
+  const sendCommand = useCallback(async (action: 'play' | 'stop' | 'reset' | 'key', key = '') => {
+    if (!sessionId.current) { setError('먼저 모션을 불러오세요.'); return; }
+    if (action === 'reset') { setResult(null); setError(''); }
+    try {
+      const next = await fetch(`/api/decoupled-wbc/sessions/${sessionId.current}/command`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, key }),
+      }).then(responseJson<Snapshot>);
+      setSnapshot(next); scene.current?.update(next.state);
+      if (next.error) setError(next.error);
+    } catch (failure) { setError((failure as Error).message); }
+  }, []);
 
   useEffect(() => {
     if (!host.current) return;
@@ -62,15 +75,15 @@ export default function DecoupledWbcPage() {
       const key = event.key.toLowerCase();
       if (!['w', 's', 'a', 'd', 'q', 'e', '1', '2', 'z'].includes(key)) return;
       event.preventDefault();
-      socket.current?.send(JSON.stringify({ action: 'key', key }));
+      void sendCommand('key', key);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [sendCommand]);
 
   useEffect(() => {
     const close = () => {
-      socket.current?.close();
+      if (pollTimer.current !== null) window.clearInterval(pollTimer.current);
       if (sessionId.current) void fetch(`/api/decoupled-wbc/sessions/${sessionId.current}`, { method: 'DELETE', keepalive: true });
     };
     window.addEventListener('beforeunload', close);
@@ -78,16 +91,22 @@ export default function DecoupledWbcPage() {
   }, []);
 
   function connect(identifier: string) {
-    socket.current?.close();
-    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${location.host}/api/decoupled-wbc/sessions/${identifier}/stream`);
-    ws.onmessage = event => {
-      const next = JSON.parse(event.data) as Snapshot;
-      setSnapshot(next); scene.current?.update(next.state);
-      if (next.error) setError(next.error);
+    if (pollTimer.current !== null) window.clearInterval(pollTimer.current);
+    const poll = async () => {
+      if (polling.current || sessionId.current !== identifier) return;
+      polling.current = true;
+      try {
+        const next = await fetch(`/api/decoupled-wbc/sessions/${identifier}`).then(responseJson<Snapshot>);
+        setSnapshot(next); scene.current?.update(next.state);
+        if (next.error) setError(next.error);
+      } catch (failure) {
+        setError((failure as Error).message);
+      } finally {
+        polling.current = false;
+      }
     };
-    ws.onerror = () => setError('시뮬레이션 스트림 연결이 끊어졌습니다.');
-    socket.current = ws;
+    void poll();
+    pollTimer.current = window.setInterval(() => void poll(), 50);
   }
 
   async function create(project: unknown, name: string) {
@@ -124,12 +143,6 @@ export default function DecoupledWbcPage() {
       }
       await create(project, source.name);
     } catch (failure) { setError((failure as Error).message); setBusy(false); }
-  }
-
-  function command(action: 'play' | 'stop' | 'reset') {
-    if (socket.current?.readyState !== WebSocket.OPEN) { setError('먼저 모션을 불러오세요.'); return; }
-    if (action === 'reset') { setResult(null); setError(''); }
-    socket.current.send(JSON.stringify({ action }));
   }
 
   async function saveRecording() {
@@ -184,9 +197,9 @@ export default function DecoupledWbcPage() {
     </section>
     <footer className="wbc-transport">
       <div className="wbc-controls">
-        <button className="primary" disabled={!ready || snapshot?.playing} onClick={() => command('play')}><Play size={17}/> Play · Record</button>
-        <button disabled={!ready || !snapshot?.playing} onClick={() => command('stop')}><Square size={15}/> Stop</button>
-        <button disabled={!ready} onClick={() => command('reset')}><RotateCcw size={15}/> Reset</button>
+        <button className="primary" disabled={!ready || snapshot?.playing} onClick={() => void sendCommand('play')}><Play size={17}/> Play · Record</button>
+        <button disabled={!ready || !snapshot?.playing} onClick={() => void sendCommand('stop')}><Square size={15}/> Stop</button>
+        <button disabled={!ready} onClick={() => void sendCommand('reset')}><RotateCcw size={15}/> Reset</button>
         <button disabled={!ready || !snapshot?.recording_frames || busy} onClick={() => void saveRecording()}><Save size={15}/> 녹화 저장</button>
       </div>
       <div className="wbc-status"><span className={error ? 'error' : ''}>{error || message}</span>{result && <span className="wbc-downloads">{result.files.map(name => <a key={name} href={`/api/files/${filePath(name)}`}><Download size={13}/>{name.split('/').at(-1)}</a>)}</span>}</div>
