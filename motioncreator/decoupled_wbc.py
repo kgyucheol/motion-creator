@@ -21,7 +21,7 @@ import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .grasp import fit_two_hand_grasp, object_signature
+from .grasp import object_signature
 from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_quaternion_wxyz
 from .hand_collision import physical_hand_geom_names
 from .motion import compile_motion, project_scene_objects, validate_project
@@ -138,34 +138,57 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
     return model
 
 
-def prepare_grasp_control(robot: Robot, project: dict) -> dict | None:
-    """Resolve the first authored grasp into an arm closure offset and timeline time."""
-    objects = project_scene_objects(project)
+def _grasp_activation(project: dict) -> tuple[float, dict, list[float]] | None:
+    """Choose the first grasp transition after an ungrasped authored frame.
+
+    A grasp may remain copied on later hold/lift frames.  Some older projects also
+    contain stale grasp metadata on the initial stand frame; if the next frame is
+    ungrasped, that initial metadata must not make the arms jump at time zero.
+    """
     elapsed = 0.
+    initial = None
+    previous = None
     for index, frame in enumerate(project["keyframes"]):
         if index:
             elapsed += float(frame["duration"])
         event = frame.get("grasp")
-        if event is None:
-            continue
-        item = next(value for value in objects if value["id"] == event["object_id"])
-        authored = robot.validate_q(frame["qpos"])
-        contact = authored
-        closure = event.get("closure_qpos")
-        if closure is None or event.get("object_signature") != object_signature(item):
-            fitted = fit_two_hand_grasp(robot, frame["qpos"], frame.get("pins", []), item, event)
-            contact = robot.validate_q(fitted["state"]["qpos"])
-            closure = fitted["grasp"]["closure_qpos"]
+        if event is not None and initial is None:
+            initial = (elapsed, event, frame["qpos"])
+        if index and event is not None and previous is None:
+            return elapsed, event, frame["qpos"]
+        previous = event
+    return initial
+
+
+def prepare_grasp_control(robot: Robot, project: dict) -> dict | None:
+    """Use only an explicitly fitted editor grasp as an optional closure target.
+
+    Decoupled WBC consumes authored upper-body joint positions directly.  It must
+    not silently run a second IK fit because that changes the motion the user
+    reviewed in the editor.  A valid stored closure pose may still add the small,
+    intentional squeeze needed to generate physical contact force.
+    """
+    objects = project_scene_objects(project)
+    activation = _grasp_activation(project)
+    if activation is None:
+        return None
+    elapsed, event, authored_qpos = activation
+    item = next(value for value in objects if value["id"] == event["object_id"])
+    closure = event.get("closure_qpos")
+    closure_ready = closure is not None and event.get("object_signature") == object_signature(item)
+    arm_offset = np.zeros(14)
+    if closure_ready:
+        authored = robot.validate_q(authored_qpos)
         closed = robot.validate_q(closure)
-        return {
-            "object_id": item["id"], "start_time": elapsed,
-            "closure_seconds": float(event["closure_seconds"]),
-            "contact_offset": contact[22:36] - authored[22:36],
-            "arm_offset": closed[22:36] - contact[22:36],
-            "target_force_n": float(event["target_force_n"]),
-            "max_force_n": float(event["max_force_n"]),
-        }
-    return None
+        arm_offset = closed[22:36] - authored[22:36]
+    return {
+        "object_id": item["id"], "start_time": elapsed,
+        "closure_seconds": float(event["closure_seconds"]),
+        "closure_ready": closure_ready,
+        "arm_offset": arm_offset,
+        "target_force_n": float(event["target_force_n"]),
+        "max_force_n": float(event["max_force_n"]),
+    }
 
 
 def quat_rotate_inverse(wxyz: np.ndarray, vector: np.ndarray) -> np.ndarray:
@@ -378,12 +401,11 @@ class DecoupledSimulation:
         settle = self.parameters["upper_body_settle_seconds"]
         if self.play_time < settle:
             return self._reference_at(0.)[22:36]
-        if self.grasp_control:
+        if self.grasp_control and self.grasp_control["closure_ready"]:
             start = self.grasp_control["start_time"]
-            contact_progress = np.clip((self.motion_time - (start - .5)) / .5, 0., 1.)
-            target = target + contact_progress * self.grasp_control["contact_offset"]
             if self.motion_time >= start:
                 progress = np.clip((self.motion_time - start) / self.grasp_control["closure_seconds"], 0., 1.)
+                progress = progress * progress * (3 - 2 * progress)
                 target = target + progress * self.grasp_control["arm_offset"]
         return target
 
@@ -401,8 +423,14 @@ class DecoupledSimulation:
             lower_target = np.asarray(p["default_angles"], dtype=np.float32) + self.policy.action * p["action_scale"]
             self.data.ctrl[:15] = self._pd(lower_target, self.data.qpos[7:22], np.asarray(p["lower_kp"]),
                                            self.data.qvel[6:21], np.asarray(p["lower_kd"]))
-            self.data.ctrl[15:29] = self._pd(self._arm_target(), self.data.qpos[22:36], np.asarray(p["arm_kp"]),
-                                             self.data.qvel[21:35], np.asarray(p["arm_kd"]))
+            # MuJoCo motors apply raw joint torque.  Cancel the arm's modeled
+            # gravity/Coriolis load so PD error is not required merely to hold
+            # the authored pose; the lower-body policy remains unchanged.
+            self.data.ctrl[15:29] = (
+                self._pd(self._arm_target(), self.data.qpos[22:36], np.asarray(p["arm_kp"]),
+                         self.data.qvel[21:35], np.asarray(p["arm_kd"]))
+                + self.data.qfrc_bias[21:35]
+            )
             mujoco.mj_step(self.model, self.data)
             self.step_count += 1
             self.play_time += p["simulation_dt"]

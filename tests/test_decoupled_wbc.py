@@ -1,3 +1,4 @@
+import copy
 import json
 
 import mujoco
@@ -12,9 +13,11 @@ from motioncreator.decoupled_wbc import (
     authored_waist_to_torso_rpy,
     build_environment_model,
     build_observation,
+    prepare_grasp_control,
     save_recording_bundle,
     verify_assets,
 )
+from motioncreator.grasp import object_signature
 from motioncreator.motion import new_project
 from motioncreator.robot import Robot
 
@@ -56,6 +59,38 @@ def test_authored_waist_is_converted_to_policy_rpy_and_limited():
     np.testing.assert_allclose(authored_waist_to_torso_rpy([.2, 0., 0.], limits), [0., 0., .2], atol=1e-6)
     converted = authored_waist_to_torso_rpy([3., 1., 1.], limits)
     assert np.all(np.abs(converted) <= limits + 1e-7)
+
+
+def test_grasp_control_ignores_stale_initial_event_and_never_refits_authored_pose():
+    robot = Robot()
+    project = new_project(robot)
+    item = {"id": "crate", "name": "Crate", "shape": "box", "position": [.4, 0., .2],
+            "quaternion_xyzw": [0., 0., 0., 1.], "size": [.2, .3, .4], "mass_kg": .5,
+            "friction": .9, "color": "#aa7744", "opacity": 1., "visible": True}
+    project["scene_objects"] = [item]
+    event = {"format": "motioncreator.two-hand-grasp.v1", "object_id": "crate",
+             "left_surface_uv": [0., 0.], "right_surface_uv": [0., 0.],
+             "inward_offset_m": .01, "closure_seconds": .4,
+             "target_force_n": 8., "max_force_n": 60.}
+    project["keyframes"][0]["grasp"] = copy.deepcopy(event)
+    approach = copy.deepcopy(project["keyframes"][0])
+    approach.update(name="approach", duration=1.)
+    approach.pop("grasp")
+    contact = copy.deepcopy(approach)
+    contact.update(name="contact", duration=1., grasp=copy.deepcopy(event))
+    project["keyframes"].extend([approach, contact])
+
+    control = prepare_grasp_control(robot, project)
+    assert control["start_time"] == pytest.approx(2.)
+    assert control["closure_ready"] is False
+    np.testing.assert_allclose(control["arm_offset"], 0.)
+
+    closure = np.asarray(contact["qpos"], dtype=float)
+    closure[22] += .1
+    contact["grasp"].update(object_signature=object_signature(item), closure_qpos=closure.tolist())
+    control = prepare_grasp_control(robot, project)
+    assert control["closure_ready"] is True
+    np.testing.assert_allclose(control["arm_offset"], np.r_[.1, np.zeros(13)])
 
 
 def test_recording_bundle_is_reimportable(tmp_path):
