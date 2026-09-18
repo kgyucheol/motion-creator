@@ -444,6 +444,10 @@ class DecoupledSimulation:
     def snapshot(self) -> dict:
         with self.lock:
             qpos = self.data.qpos[:36].copy()
+            reference_qpos = self._reference_at(self.motion_time).copy()
+            joint_error = qpos[7:36] - reference_qpos[7:36]
+            lower_error = joint_error[:15]
+            upper_error = joint_error[15:]
             grasp = None
             if self.grasp_control:
                 start = self.grasp_control["start_time"]
@@ -460,7 +464,14 @@ class DecoupledSimulation:
                 "nav": self.command.nav.tolist(), "height": self.command.height,
                 "torso_rpy": self.torso_rpy.tolist(), "upper_time": self.motion_time,
                 "upper_duration": self.duration, "recording_frames": len(self.recording),
-                "state": self.robot.state(qpos), "scene_objects": self.scene_objects,
+                "state": self.robot.state(qpos),
+                "reference_state": self.robot.state(reference_qpos),
+                "tracking": {
+                    "lower_rmse_deg": float(np.sqrt(np.mean(lower_error ** 2)) * 180 / np.pi),
+                    "upper_rmse_deg": float(np.sqrt(np.mean(upper_error ** 2)) * 180 / np.pi),
+                    "upper_max_deg": float(np.max(np.abs(upper_error)) * 180 / np.pi),
+                },
+                "scene_objects": self.scene_objects,
                 "object_states": self._object_states(), "grasp": grasp,
             }
 

@@ -69,6 +69,10 @@ export class RobotScene {
   markers: Record<string, THREE.Mesh> = {};
   labels: Record<string, HTMLDivElement> = {};
   geoms: Record<string, THREE.Object3D> = {};
+  referenceGeoms: Record<string, THREE.Object3D> = {};
+  referenceRoot: THREE.Object3D | null = null;
+  referenceState?: PoseState;
+  referenceVisible = false;
   selected = 'pelvis';
   members = ['pelvis'];
   selectionLocked = false;
@@ -229,6 +233,37 @@ export class RobotScene {
         }
       });
       this.scene.add(gltf.scene);
+      const reference = gltf.scene.clone(true);
+      reference.traverse(node => {
+        if (node.name.startsWith('geom_')) this.referenceGeoms[node.name.slice(5)] = node;
+        if (node instanceof THREE.Mesh) {
+          const ghostMaterial = (material: THREE.Material) => {
+            const clone = material.clone();
+            clone.transparent = true;
+            clone.opacity = .23;
+            clone.depthWrite = false;
+            clone.polygonOffset = true;
+            clone.polygonOffsetFactor = -1;
+            clone.polygonOffsetUnits = -1;
+            if (clone instanceof THREE.MeshStandardMaterial) {
+              clone.color.set('#77cfff');
+              clone.emissive.set('#255b76');
+              clone.emissiveIntensity = .35;
+              clone.roughness = .75;
+              clone.metalness = 0;
+            }
+            return clone;
+          };
+          node.material = Array.isArray(node.material)
+            ? node.material.map(ghostMaterial)
+            : ghostMaterial(node.material);
+          node.renderOrder = 3;
+        }
+      });
+      reference.visible = this.referenceVisible;
+      this.referenceRoot = reference;
+      this.scene.add(reference);
+      if (this.referenceState) this.updateReference(this.referenceState);
       if (this.state) this.update(this.state);
     }, undefined, () => callbacks.error('G1 모델을 불러오지 못했습니다. 서버 연결을 확인하세요.'));
   }
@@ -410,6 +445,21 @@ export class RobotScene {
     }
     this.com.position.set(state.com[0], state.com[1], .002);
     this.select(this.selected, this.pins, this.members);
+    this.dirty = true;
+  }
+
+  updateReference(state: PoseState) {
+    this.referenceState = state;
+    for (const [id, pose] of Object.entries(state.geoms)) {
+      const object = this.referenceGeoms[id];
+      if (object) { object.position.fromArray(pose.position); object.quaternion.fromArray(pose.quaternion); }
+    }
+    this.dirty = true;
+  }
+
+  setReferenceVisible(visible: boolean) {
+    this.referenceVisible = visible;
+    if (this.referenceRoot) this.referenceRoot.visible = visible;
     this.dirty = true;
   }
 

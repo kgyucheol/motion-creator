@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, ArrowLeft, Download, FolderOpen, Play, RotateCcw, Save, Square } from 'lucide-react';
+import { Activity, ArrowLeft, Download, Eye, EyeOff, FolderOpen, Play, RotateCcw, Save, Square } from 'lucide-react';
 import { RobotScene, type PoseState } from '../lib/robot-scene';
 import type { SceneObject, SceneObjectPose } from '../lib/scene-objects';
 
@@ -8,6 +8,8 @@ type Snapshot = {
   revision: number; phase: string; playing: boolean; error: string; policy: 'balance' | 'walk';
   nav: number[]; height: number; torso_rpy: number[]; upper_time: number; upper_duration: number;
   recording_frames: number; state: PoseState; scene_objects: SceneObject[];
+  reference_state: PoseState;
+  tracking: { lower_rmse_deg: number; upper_rmse_deg: number; upper_max_deg: number };
   object_states: Record<string, SceneObjectPose>;
   grasp: null | { object_id: string; active: boolean; closure: number; target_force_n: number;
     bilateral_contact: boolean; normal_force_n: Record<'left' | 'right', number> };
@@ -41,12 +43,14 @@ export default function DecoupledWbcPage() {
   const [message, setMessage] = useState('런타임을 확인하는 중…');
   const [error, setError] = useState('');
   const [result, setResult] = useState<SaveResult | null>(null);
+  const [showReference, setShowReference] = useState(true);
 
   const renderSnapshot = useCallback((next: Snapshot) => {
     setSnapshot(next);
     scene.current?.setSceneObjects(next.scene_objects);
     scene.current?.setObjectPoses(next.object_states);
     scene.current?.update(next.state);
+    scene.current?.updateReference(next.reference_state);
   }, []);
 
   const sendCommand = useCallback(async (action: 'play' | 'stop' | 'reset' | 'key', key = '') => {
@@ -67,7 +71,7 @@ export default function DecoupledWbcPage() {
       select: () => {}, begin: () => {}, move: () => {}, rotate: () => {}, jointAngle: () => {},
       transformMode: () => {}, end: () => {}, error: value => setError(value),
     });
-    viewer.setEditable(false); viewer.showHandles(false); viewer.keyboardEnabled = false;
+    viewer.setEditable(false); viewer.showHandles(false); viewer.setReferenceVisible(true); viewer.keyboardEnabled = false;
     scene.current = viewer;
     Promise.all([
       fetch('/api/decoupled-wbc/runtime').then(responseJson<Runtime>),
@@ -78,6 +82,8 @@ export default function DecoupledWbcPage() {
     }).catch(failure => setError((failure as Error).message));
     return () => { viewer.dispose(); scene.current = null; };
   }, []);
+
+  useEffect(() => { scene.current?.setReferenceVisible(showReference); }, [showReference]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -197,11 +203,19 @@ export default function DecoupledWbcPage() {
     </aside>
     <section className="wbc-stage">
       <div ref={host} className="wbc-canvas"/>
-      <div className="wbc-stage-label"><span>UPPER</span> authored arms <i/> <span>LOWER</span> GR00T WBC</div>
+      <div className="wbc-stage-label">
+        <span>UPPER</span> authored arms <i/> <span>LOWER</span> GR00T WBC
+        <button type="button" className="wbc-reference-toggle" aria-pressed={showReference}
+          onClick={() => setShowReference(value => !value)} title="편집기에서 컴파일된 원본 모션을 반투명하게 겹쳐 표시합니다.">
+          {showReference ? <Eye size={13}/> : <EyeOff size={13}/>} 편집기 기준
+        </button>
+      </div>
       <div className="wbc-hud">
         <span>상태 <b>{phaseLabel[snapshot?.phase ?? 'ready'] || snapshot?.phase}</b></span>
         <span>정책 <b>{snapshot?.policy ?? 'balance'}</b></span>
         <span>상체 <b>{(snapshot?.upper_time ?? 0).toFixed(2)} / {(snapshot?.upper_duration ?? 0).toFixed(2)} s</b></span>
+        <span>상체 추종 오차 <b>{(snapshot?.tracking.upper_rmse_deg ?? 0).toFixed(1)}° RMS</b></span>
+        <span>하체 정책 차이 <b>{(snapshot?.tracking.lower_rmse_deg ?? 0).toFixed(1)}° RMS</b></span>
         <span>환경 <b>{snapshot?.scene_objects.length ?? 0} objects</b></span>
         {snapshot?.grasp && <span>파지 <b>{snapshot.grasp.bilateral_contact
           ? `물리 접촉 L ${snapshot.grasp.normal_force_n.left.toFixed(1)} · R ${snapshot.grasp.normal_force_n.right.toFixed(1)} N`

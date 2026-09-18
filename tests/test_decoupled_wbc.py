@@ -189,6 +189,9 @@ def test_policy_drives_lower_body_while_authored_arm_tracks():
         assert snapshot["phase"] == "playing" and snapshot["policy"] == "walk"
         assert snapshot["upper_time"] == pytest.approx(1., abs=.01)
         assert snapshot["recording_frames"] == 87
+        np.testing.assert_allclose(snapshot["reference_state"]["qpos"], simulation._reference_at(1.))
+        assert set(snapshot["tracking"]) == {"lower_rmse_deg", "upper_rmse_deg", "upper_max_deg"}
+        assert all(np.isfinite(value) for value in snapshot["tracking"].values())
         assert simulation.data.qpos[22] == pytest.approx(.35, abs=.08)
         assert simulation.data.qpos[0] > .01
     finally:
