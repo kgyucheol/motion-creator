@@ -1,6 +1,6 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { eulerDegrees, quaternionFromDegrees } from '../lib/pose-transforms';
-import { normalizedObjectSize, objectVerticalHalfExtent, type ObjectTransformMode, type SceneObject, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { normalizedObjectSize, type ObjectTransformMode, type SceneObject, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 
 type Props = {
   objects: SceneObject[];
@@ -40,12 +40,9 @@ export default function SceneObjectControls(props: Props) {
       {props.objects.map(object => <option key={object.id} value={object.id}>{object.name} · {shapeLabels[object.shape]}</option>)}
     </select>}
     <div className="object-placement-options">
-      <label className="checkbox"><input type="checkbox" checked={props.preventOverlap} disabled={props.disabled} onChange={event => props.onPlacementChange({ preventOverlap: event.target.checked })}/>겹침 방지</label>
-      <label className="checkbox"><input type="checkbox" checked={props.surfaceSnap} disabled={props.disabled} onChange={event => props.onPlacementChange({ surfaceSnap: event.target.checked })}/>표면 스냅</label>
-      <label className="checkbox"><input type="checkbox" checked={props.groundLock} disabled={props.disabled} onChange={event => {
-        props.onPlacementChange({ groundLock: event.target.checked });
-        if (event.target.checked && selected) props.onChange(selected.id, { position: [selected.position[0], selected.position[1], objectVerticalHalfExtent(selected)] });
-      }}/>지면 고정</label>
+      <label className="checkbox"><input type="checkbox" checked={props.preventOverlap} disabled={props.disabled || !selected} onChange={event => props.onPlacementChange({ preventOverlap: event.target.checked })}/>겹침 방지</label>
+      <label className="checkbox"><input type="checkbox" checked={props.surfaceSnap} disabled={props.disabled || !selected} onChange={event => props.onPlacementChange({ surfaceSnap: event.target.checked })}/>표면 스냅</label>
+      <label className="checkbox"><input type="checkbox" checked={props.groundLock} disabled={props.disabled || !selected} onChange={event => props.onPlacementChange({ groundLock: event.target.checked })}/>지면 고정</label>
     </div>
     {selected && <div className="object-editor">
       <div className="object-title-row"><input aria-label="물체 이름" value={selected.name} maxLength={80} disabled={props.disabled} onChange={event => props.onChange(selected.id, { name: event.target.value || selected.name })}/><button title="물체 삭제" disabled={props.disabled} onClick={() => props.onRemove(selected.id)}><Trash2 size={14}/></button></div>

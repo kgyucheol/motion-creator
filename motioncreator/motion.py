@@ -249,6 +249,13 @@ def validate_project(robot: Robot, project):
             raise ValueError('Scene object color must use #RRGGBB')
         if not isinstance(item.get('visible'), bool):
             raise ValueError('Scene object visibility must be a boolean')
+        placement = item.get('placement')
+        if placement is not None:
+            if not isinstance(placement, dict):
+                raise ValueError('Scene object placement settings must be an object')
+            for key in ('prevent_overlap', 'surface_snap', 'ground_lock'):
+                if not isinstance(placement.get(key), bool):
+                    raise ValueError(f'Scene object placement {key} must be a boolean')
     from .grasp import validate_grasp_event
     for frame in frames:
         grasp = frame.get('grasp')

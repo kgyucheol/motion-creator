@@ -1,5 +1,6 @@
 export type SceneObjectShape = 'box' | 'sphere' | 'cylinder';
 export type ObjectTransformMode = 'translate' | 'rotate' | 'scale';
+export type SceneObjectPlacement = { prevent_overlap: boolean; surface_snap: boolean; ground_lock: boolean };
 
 export type SceneObject = {
   id: string;
@@ -13,10 +14,30 @@ export type SceneObject = {
   color: string;
   opacity: number;
   visible: boolean;
+  placement?: SceneObjectPlacement;
 };
 
 export type SceneObjectPose = { position: number[]; quaternion_xyzw: number[] };
 export type ScenePlacementOptions = { preventOverlap: boolean; surfaceSnap: boolean; groundLock: boolean; snapDistance?: number };
+
+const DEFAULT_PLACEMENT: SceneObjectPlacement = { prevent_overlap: true, surface_snap: false, ground_lock: true };
+
+export function scenePlacementOptions(object?: SceneObject): ScenePlacementOptions {
+  const placement = object?.placement ?? DEFAULT_PLACEMENT;
+  return {
+    preventOverlap: placement.prevent_overlap,
+    surfaceSnap: placement.surface_snap,
+    groundLock: placement.ground_lock,
+  };
+}
+
+export function withScenePlacement<T extends SceneObject>(object: T, options: ScenePlacementOptions): T {
+  return { ...object, placement: {
+    prevent_overlap: options.preventOverlap,
+    surface_snap: options.surfaceSnap,
+    ground_lock: options.groundLock,
+  } };
+}
 
 export function normalizedObjectSize(shape: SceneObjectShape, size: number[], axis = '') {
   const safe = size.map(value => Math.max(.01, Number.isFinite(value) ? value : .01));
@@ -137,11 +158,13 @@ export function createSceneObject(index = 1, shape: SceneObjectShape = 'box'): S
     color: '#b98853',
     opacity: .62,
     visible: true,
+    placement: { ...DEFAULT_PLACEMENT },
   };
 }
 
 export function objectsFromProject(project: { scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } }) {
-  if (Array.isArray(project.scene_objects)) return structuredClone(project.scene_objects).map(groundedSceneObject);
+  if (Array.isArray(project.scene_objects)) return structuredClone(project.scene_objects)
+    .map(object => groundedSceneObject(withScenePlacement(object, scenePlacementOptions(object))));
   if (project.box) {
     const object = createSceneObject(1);
     return [groundedSceneObject({ ...object, id: 'legacy-box', position: [...project.box.position], size: [...project.box.size], visible: project.box.visible })];

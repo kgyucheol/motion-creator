@@ -84,6 +84,7 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
         'id': 'crate', 'name': 'Crate', 'shape': 'box', 'position': [.6, 0., .2],
         'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.4, .3, .4], 'mass_kg': 2.,
         'friction': .7, 'color': '#336699', 'opacity': .8, 'visible': True,
+        'placement': {'prevent_overlap': False, 'surface_snap': True, 'ground_lock': False},
     }]
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
     for filename in bundle['files']:
@@ -98,6 +99,9 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
     assert environment['physics']['gravity_m_s2'] == [0., 0., -9.81]
     assert environment['physics']['floor']['friction'] == [1., .005, .0001]
     assert environment['scene_objects'] == project['scene_objects']
+    assert editable['scene_objects'][0]['placement'] == {
+        'prevent_overlap': False, 'surface_snap': True, 'ground_lock': False,
+    }
     assert bundle['metadata']['environment_sha256'] == hashlib.sha256(environment_path.read_bytes()).hexdigest()
     with np.load(tmp_path / bundle['npz_file'], allow_pickle=False) as data:
         assert set(data.files) == {'posed_joints', 'global_rot_mats', 'local_rot_mats', 'root_positions', 'foot_contacts'}

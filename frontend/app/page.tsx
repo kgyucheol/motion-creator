@@ -7,7 +7,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
-import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectsFromProject, placeSceneObject, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, withScenePlacement, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
@@ -167,15 +167,18 @@ export default function Editor() {
       const next = { ...object, ...patch };
       const normalized = { ...next, size: normalizedObjectSize(next.shape, next.size) };
       if (!Object.keys(patch).some(key => ['position', 'quaternion_xyzw', 'size', 'shape'].includes(key))) return normalized;
-      return placeSceneObject(normalized, current.current.objects.filter(other => other.id !== id), {
-        preventOverlap: current.current.preventObjectOverlap,
-        surfaceSnap: current.current.objectSurfaceSnap,
-        groundLock: current.current.objectGroundLock,
-      }, object);
+      return placeSceneObject(normalized, current.current.objects.filter(other => other.id !== id), scenePlacementOptions(object), object);
     }));
   }
   function selectObject(id: string | null) {
     setSelectedObjectId(id); current.current.selectedObjectId = id;
+    const selectedObject = current.current.objects.find(object => object.id === id);
+    if (selectedObject) {
+      const placement = scenePlacementOptions(selectedObject);
+      current.current.preventObjectOverlap = placement.preventOverlap; setPreventObjectOverlap(placement.preventOverlap);
+      current.current.objectSurfaceSnap = placement.surfaceSnap; setObjectSurfaceSnap(placement.surfaceSnap);
+      current.current.objectGroundLock = placement.groundLock; setObjectGroundLock(placement.groundLock);
+    }
     scene.current?.selectSceneObject(id, current.current.objectTransformMode);
   }
   function changeObjectMode(mode: ObjectTransformMode) {
@@ -185,11 +188,7 @@ export default function Editor() {
   function addObject(shape: SceneObjectShape) {
     checkpoint();
     const created = createSceneObject(current.current.objects.length + 1, shape);
-    const object = placeSceneObject(created, current.current.objects, {
-      preventOverlap: current.current.preventObjectOverlap,
-      surfaceSnap: current.current.objectSurfaceSnap,
-      groundLock: current.current.objectGroundLock,
-    });
+    const object = placeSceneObject(created, current.current.objects, scenePlacementOptions(created));
     commitObjects([...current.current.objects, object]);
     selectObject(object.id);
   }
@@ -199,9 +198,19 @@ export default function Editor() {
     selectObject(null);
   }
   function changeObjectPlacement(patch: Partial<ScenePlacementOptions>) {
-    if (patch.preventOverlap !== undefined) { current.current.preventObjectOverlap = patch.preventOverlap; setPreventObjectOverlap(patch.preventOverlap); }
-    if (patch.surfaceSnap !== undefined) { current.current.objectSurfaceSnap = patch.surfaceSnap; setObjectSurfaceSnap(patch.surfaceSnap); }
-    if (patch.groundLock !== undefined) { current.current.objectGroundLock = patch.groundLock; setObjectGroundLock(patch.groundLock); }
+    const id = current.current.selectedObjectId;
+    const selectedObject = current.current.objects.find(object => object.id === id);
+    if (!selectedObject) return;
+    checkpoint();
+    const placement = { ...scenePlacementOptions(selectedObject), ...patch };
+    current.current.preventObjectOverlap = placement.preventOverlap; setPreventObjectOverlap(placement.preventOverlap);
+    current.current.objectSurfaceSnap = placement.surfaceSnap; setObjectSurfaceSnap(placement.surfaceSnap);
+    current.current.objectGroundLock = placement.groundLock; setObjectGroundLock(placement.groundLock);
+    let updated = withScenePlacement(selectedObject, placement);
+    if (placement.groundLock) {
+      updated = { ...updated, position: [updated.position[0], updated.position[1], objectVerticalHalfExtent(updated)] };
+    }
+    commitObjects(current.current.objects.map(object => object.id === id ? updated : object));
   }
   function changeGraspPickMode(mode: GraspPickMode) {
     graspPickModeRef.current = mode; setGraspPickMode(mode); scene.current?.setSurfacePickMode(!!mode);
@@ -554,7 +563,10 @@ export default function Editor() {
       applyState(restored); current.current.pins = [...value.pins]; setPins([...value.pins]); setInfo(null);
       current.current.objects = restoredObjects; setObjects(restoredObjects);
       setProject(projectValue => projectValue ? { ...projectValue, scene_objects: restoredObjects, keyframes: structuredClone(value.keyframes) } : projectValue);
-      if (current.current.selectedObjectId && !restoredObjects.some(object => object.id === current.current.selectedObjectId)) selectObject(null);
+      if (current.current.selectedObjectId) {
+        selectObject(restoredObjects.some(object => object.id === current.current.selectedObjectId)
+          ? current.current.selectedObjectId : null);
+      }
       current.current.poseDirty = value.poseDirty; setPoseDirty(value.poseDirty);
       setHistoryCount(history.current.length); setFutureCount(future.current.length); invalidate();
       setMessage(redo ? '되돌리기를 취소해 마지막 편집을 다시 적용했습니다.' : '마지막 편집을 되돌렸습니다.');
