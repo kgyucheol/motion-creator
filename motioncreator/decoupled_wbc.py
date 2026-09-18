@@ -88,17 +88,11 @@ def _grounded_position(item: dict) -> np.ndarray:
     return position
 
 
-def _grasp_object_ids(project: dict) -> set[str]:
-    return {event["object_id"] for frame in project.get("keyframes", [])
-            if (event := frame.get("grasp")) and event.get("object_id")}
-
-
 def build_environment_model(project: dict) -> mujoco.MjModel:
-    """Load the WBC MJCF and add authored primitive environment objects."""
+    """Load the WBC MJCF and add fully dynamic authored scene objects."""
     root = ET.parse(ASSET_ROOT / "g1_gear_wbc.xml").getroot()
     root.find("compiler").set("meshdir", str(ASSET_ROOT / "meshes"))
     objects = project_scene_objects(project)
-    dynamic_ids = _grasp_object_ids(project)
     if objects:
         contact = root.find("contact")
         if contact is None:
@@ -117,15 +111,15 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
             body = ET.SubElement(world, "body", name=f"wbc_object_{index}",
                                  pos=_numbers(_grounded_position(item)),
                                  quat=_numbers(np.asarray(item["quaternion_xyzw"])[[3, 0, 1, 2]]))
-            if item["id"] in dynamic_ids:
-                ET.SubElement(body, "freejoint", name=f"wbc_object_joint_{index}")
+            ET.SubElement(body, "freejoint", name=f"wbc_object_joint_{index}")
             size = np.asarray(item["size"], dtype=float)
             mj_size = (size / 2 if item["shape"] == "box" else [size[0] / 2]
                        if item["shape"] == "sphere" else [size[0] / 2, size[2] / 2])
             geom_name = f"wbc_object_geom_{index}"
             ET.SubElement(body, "geom", name=geom_name, type=item["shape"], size=_numbers(mj_size),
                           mass=str(float(item["mass_kg"])),
-                          friction=_numbers([item["friction"], .005, .0001]), contype="0", conaffinity="0")
+                          friction=_numbers([item["friction"], .005, .0001]),
+                          contype="1", conaffinity="1")
             object_geoms.append(geom_name)
             for side in ("left", "right"):
                 for hand_index in range(6):
@@ -139,8 +133,7 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
             for geom2 in object_geoms[first + 1:]:
                 ET.SubElement(contact, "pair", geom1=geom1, geom2=geom2, condim="3")
     model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
-    dynamic_count = sum(item["id"] in dynamic_ids for item in objects)
-    if model.nq != 36 + 7 * dynamic_count or model.nv != 35 + 6 * dynamic_count or model.nu != 29:
+    if model.nq != 36 + 7 * len(objects) or model.nv != 35 + 6 * len(objects) or model.nu != 29:
         raise ValueError("Unexpected decoupled-WBC environment model")
     return model
 

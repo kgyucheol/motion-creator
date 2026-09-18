@@ -84,7 +84,7 @@ def test_recording_bundle_is_reimportable(tmp_path):
 
 
 @pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
-def test_environment_uses_a_free_body_for_grasp_target_and_fixed_support():
+def test_environment_applies_physics_and_robot_collision_to_every_object():
     robot = Robot()
     project = new_project(robot)
     project["scene_objects"] = [{
@@ -98,18 +98,60 @@ def test_environment_uses_a_free_body_for_grasp_target_and_fixed_support():
     }]
     project["keyframes"][0]["grasp"] = {"object_id": "crate"}
     model = build_environment_model(project)
-    assert model.nq == 43 and model.nv == 41 and model.nu == 29
+    assert model.nq == 50 and model.nv == 47 and model.nu == 29
     assert model.joint("wbc_object_joint_0").type == mujoco.mjtJoint.mjJNT_FREE
+    assert model.joint("wbc_object_joint_1").type == mujoco.mjtJoint.mjJNT_FREE
     assert model.body("wbc_object_0").id > 0
-    assert model.body("wbc_object_1").jntnum == 0
+    assert model.body("wbc_object_1").jntnum == 1
     assert model.geom("left_wbc_grip").type == mujoco.mjtGeom.mjGEOM_BOX
     assert model.geom("right_wbc_grip").type == mujoco.mjtGeom.mjGEOM_BOX
     assert model.geom("left_wbc_grip").contype == 0
     assert model.geom("right_wbc_grip").contype == 0
     for side in ("left", "right"):
         assert all(model.geom(f"{side}_physical_hand_{index}").id >= 0 for index in range(6))
-    assert model.geom("wbc_object_geom_0").contype == 0
+    assert model.geom("wbc_object_geom_0").contype == 1
+    assert model.geom("wbc_object_geom_1").conaffinity == 1
     assert model.npair == 27
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_ungrasped_object_falls_and_collides_with_floor():
+    robot = Robot()
+    project = new_project(robot)
+    project["scene_objects"] = [{
+        "id": "falling", "name": "Falling box", "shape": "box", "position": [1.5, 0., 1.],
+        "quaternion_xyzw": [0., 0., 0., 1.], "size": [.2, .2, .2], "mass_kg": .5,
+        "friction": .8, "color": "#ffffff", "opacity": 1., "visible": True,
+    }]
+    model = build_environment_model(project)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    body = model.body("wbc_object_0").id
+    initial_z = float(data.xpos[body, 2])
+    for _ in range(500):
+        mujoco.mj_step(model, data)
+    assert data.xpos[body, 2] < initial_z - .5
+    assert data.xpos[body, 2] == pytest.approx(.1, abs=.01)
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_scene_object_contacts_robot_links_instead_of_passing_through():
+    robot = Robot()
+    project = new_project(robot)
+    project["scene_objects"] = [{
+        "id": "overlap", "name": "Overlap probe", "shape": "box", "position": [0., 0., .75],
+        "quaternion_xyzw": [0., 0., 0., 1.], "size": [.3, .3, .3], "mass_kg": .5,
+        "friction": .8, "color": "#ffffff", "opacity": 1., "visible": True,
+    }]
+    model = build_environment_model(project)
+    data = mujoco.MjData(model)
+    mujoco.mj_forward(model, data)
+    object_geom = model.geom("wbc_object_geom_0").id
+    object_body = model.body("wbc_object_0").id
+    assert any(object_geom in (contact.geom1, contact.geom2)
+               and model.geom_bodyid[contact.geom2 if contact.geom1 == object_geom else contact.geom1]
+               not in (0, object_body)
+               for contact in data.contact)
 
 
 def test_http_command_fallback_dispatches_without_websocket(monkeypatch):
