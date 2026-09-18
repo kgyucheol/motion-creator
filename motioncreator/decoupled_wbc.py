@@ -119,7 +119,12 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
             ET.SubElement(body, "geom", name=geom_name, type=item["shape"], size=_numbers(mj_size),
                           mass=str(float(item["mass_kg"])),
                           friction=_numbers([item["friction"], .005, .0001]),
-                          contype="1", conaffinity="1")
+                          # Keep scene objects out of MuJoCo's broad robot collision
+                          # mask.  The explicit pairs below are the complete contact
+                          # allow-list: authored hand links, floor and other objects.
+                          # Without this, unlisted links (notably the thumb tips) can
+                          # push an object before the visible grasp reaches it.
+                          contype="0", conaffinity="0")
             object_geoms.append(geom_name)
             for side in ("left", "right"):
                 for hand_index in range(6):

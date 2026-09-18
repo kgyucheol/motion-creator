@@ -144,8 +144,10 @@ def test_environment_applies_physics_and_robot_collision_to_every_object():
     assert model.geom("right_wbc_grip").contype == 0
     for side in ("left", "right"):
         assert all(model.geom(f"{side}_physical_hand_{index}").id >= 0 for index in range(6))
-    assert model.geom("wbc_object_geom_0").contype == 1
-    assert model.geom("wbc_object_geom_1").conaffinity == 1
+    assert model.geom("wbc_object_geom_0").contype == 0
+    assert model.geom("wbc_object_geom_0").conaffinity == 0
+    assert model.geom("wbc_object_geom_1").contype == 0
+    assert model.geom("wbc_object_geom_1").conaffinity == 0
     assert model.npair == 27
 
 
@@ -170,7 +172,7 @@ def test_ungrasped_object_falls_and_collides_with_floor():
 
 
 @pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
-def test_scene_object_contacts_robot_links_instead_of_passing_through():
+def test_scene_object_does_not_contact_unlisted_robot_links():
     robot = Robot()
     project = new_project(robot)
     project["scene_objects"] = [{
@@ -183,10 +185,10 @@ def test_scene_object_contacts_robot_links_instead_of_passing_through():
     mujoco.mj_forward(model, data)
     object_geom = model.geom("wbc_object_geom_0").id
     object_body = model.body("wbc_object_0").id
-    assert any(object_geom in (contact.geom1, contact.geom2)
-               and model.geom_bodyid[contact.geom2 if contact.geom1 == object_geom else contact.geom1]
-               not in (0, object_body)
-               for contact in data.contact)
+    assert not any(object_geom in (contact.geom1, contact.geom2)
+                   and model.geom_bodyid[contact.geom2 if contact.geom1 == object_geom else contact.geom1]
+                   not in (0, object_body)
+                   for contact in data.contact)
 
 
 def test_http_command_fallback_dispatches_without_websocket(monkeypatch):
