@@ -17,8 +17,9 @@ class SessionInput(BaseModel):
 
 
 class CommandInput(BaseModel):
-    action: Literal["play", "stop", "reset", "key"]
+    action: Literal["play", "stop", "reset", "key", "mode"]
     key: str = ""
+    mode: Literal["auto", "manual"] | None = None
 
 
 def checked(call):
@@ -61,6 +62,7 @@ def session_command(identifier: str, payload: CommandInput):
     if payload.action == "play": session.play()
     elif payload.action == "stop": session.stop()
     elif payload.action == "reset": session.reset()
+    elif payload.action == "mode": session.set_control_mode(payload.mode or "auto")
     else: session.apply_key(payload.key)
     return session.snapshot()
 
@@ -89,6 +91,7 @@ async def stream(websocket: WebSocket, identifier: str):
                 if action == "play": session.play()
                 elif action == "stop": session.stop()
                 elif action == "reset": session.reset()
+                elif action == "mode": session.set_control_mode(str(message.get("mode", "auto")))
                 elif action == "key": session.apply_key(str(message.get("key", "")))
             except asyncio.TimeoutError:
                 pass

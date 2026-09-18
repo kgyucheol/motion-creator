@@ -13,6 +13,7 @@ from motioncreator.decoupled_wbc import (
     authored_waist_to_torso_rpy,
     build_environment_model,
     build_observation,
+    ghost_tracking_command,
     prepare_grasp_control,
     save_recording_bundle,
     verify_assets,
@@ -32,12 +33,16 @@ def test_keyboard_commands_are_clamped_and_reset():
     for _ in range(20): command.apply_key("w", values)
     for _ in range(20): command.apply_key("q", values)
     for _ in range(20): command.apply_key("2", values)
+    for _ in range(20): command.apply_key("3", values)
+    for _ in range(20): command.apply_key("8", values)
     np.testing.assert_allclose(command.nav, [.5, 0., 1.])
     assert command.height == pytest.approx(.2)
+    np.testing.assert_allclose(command.torso_offset_rpy, [.52, 0., -2.], atol=1e-6)
     assert command.apply_key("x", values) is False
     command.apply_key("z", values)
     np.testing.assert_allclose(command.nav, 0.)
     assert command.height == pytest.approx(.74)
+    np.testing.assert_allclose(command.torso_offset_rpy, 0.)
 
 
 def test_policy_observation_has_exact_training_layout():
@@ -59,6 +64,20 @@ def test_authored_waist_is_converted_to_policy_rpy_and_limited():
     np.testing.assert_allclose(authored_waist_to_torso_rpy([.2, 0., 0.], limits), [0., 0., .2], atol=1e-6)
     converted = authored_waist_to_torso_rpy([3., 1., 1.], limits)
     assert np.all(np.abs(converted) <= limits + 1e-7)
+
+
+def test_ghost_root_is_converted_to_bounded_policy_inputs():
+    values = parameters()
+    origin = np.array([0., 0., .74, 1., 0., 0., 0.])
+    reference = origin.copy(); reference[:3] = [.1, 0., .69]
+    following = reference.copy(); following[0] += .02
+    current = reference.copy(); current[0] -= .04
+    nav, height, tracking = ghost_tracking_command(
+        current, reference, following, origin, origin, .02, values)
+    assert nav[0] == pytest.approx(.5)  # feed-forward + feedback is safely clamped
+    assert nav[1] == pytest.approx(0.) and nav[2] == pytest.approx(0.)
+    assert height == pytest.approx(.69)
+    assert tracking["root_error_m"] == pytest.approx(.04)
 
 
 def test_grasp_control_ignores_stale_initial_event_and_never_refits_authored_pose():
@@ -195,6 +214,7 @@ def test_http_command_fallback_dispatches_without_websocket(monkeypatch):
         def play(self): self.calls.append(("play", ""))
         def stop(self): self.calls.append(("stop", ""))
         def reset(self): self.calls.append(("reset", ""))
+        def set_control_mode(self, mode): self.calls.append(("mode", mode))
         def apply_key(self, key): self.calls.append(("key", key))
         def snapshot(self): return {"calls": self.calls}
 
@@ -203,6 +223,34 @@ def test_http_command_fallback_dispatches_without_websocket(monkeypatch):
     for action, key in (("play", ""), ("key", "w"), ("stop", ""), ("reset", "")):
         result = decoupled_api.session_command("session", decoupled_api.CommandInput(action=action, key=key))
         assert result["calls"][-1] == (action, key)
+    result = decoupled_api.session_command(
+        "session", decoupled_api.CommandInput(action="mode", mode="manual"))
+    assert result["calls"][-1] == ("mode", "manual")
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_auto_mode_drives_policy_toward_moving_ghost_root():
+    robot = Robot()
+    project = new_project(robot)
+    project["keyframes"][0]["pins"] = []
+    target = copy.deepcopy(project["keyframes"][0])
+    target.update(name="forward", duration=1., pins=[])
+    target["qpos"][0] += .2
+    project["keyframes"].append(target)
+    simulation = DecoupledSimulation(robot, project, autostart=False)
+    try:
+        simulation.play()
+        peak_forward_command = 0.
+        for _ in range(700):
+            simulation.step()
+            peak_forward_command = max(peak_forward_command, float(simulation.command.nav[0]))
+        snapshot = simulation.snapshot()
+        assert snapshot["control_mode"] == "auto"
+        assert peak_forward_command > .1
+        assert snapshot["state"]["qpos"][0] > .05
+        assert snapshot["tracking"]["root_error_m"] < .15
+    finally:
+        simulation.close()
 
 
 @pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
@@ -216,6 +264,7 @@ def test_policy_drives_lower_body_while_authored_arm_tracks():
     project["keyframes"].append(target)
     simulation = DecoupledSimulation(robot, project, autostart=False)
     try:
+        simulation.set_control_mode("manual")
         simulation.play()
         for index in range(700):
             if index == 450: simulation.apply_key("w")
@@ -225,7 +274,8 @@ def test_policy_drives_lower_body_while_authored_arm_tracks():
         assert snapshot["upper_time"] == pytest.approx(1., abs=.01)
         assert snapshot["recording_frames"] == 87
         np.testing.assert_allclose(snapshot["reference_state"]["qpos"], simulation._reference_at(1.))
-        assert set(snapshot["tracking"]) == {"lower_rmse_deg", "upper_rmse_deg", "upper_max_deg"}
+        assert set(snapshot["tracking"]) == {"lower_rmse_deg", "upper_rmse_deg", "upper_max_deg",
+                                              "root_error_m", "yaw_error_deg"}
         assert all(np.isfinite(value) for value in snapshot["tracking"].values())
         assert simulation.data.qpos[22] == pytest.approx(.35, abs=.08)
         assert simulation.data.qpos[0] > .01

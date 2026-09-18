@@ -6,10 +6,12 @@ import type { SceneObject, SceneObjectPose } from '../lib/scene-objects';
 type Runtime = { available: boolean; missing: string[]; invalid: string[]; source_revision: string; setup_command: string };
 type Snapshot = {
   revision: number; phase: string; playing: boolean; error: string; policy: 'balance' | 'walk';
+  control_mode: 'auto' | 'manual';
   nav: number[]; height: number; torso_rpy: number[]; upper_time: number; upper_duration: number;
   recording_frames: number; state: PoseState; scene_objects: SceneObject[];
   reference_state: PoseState;
-  tracking: { lower_rmse_deg: number; upper_rmse_deg: number; upper_max_deg: number };
+  tracking: { lower_rmse_deg: number; upper_rmse_deg: number; upper_max_deg: number;
+    root_error_m: number; yaw_error_deg: number };
   object_states: Record<string, SceneObjectPose>;
   grasp: null | { object_id: string; active: boolean; target_force_n: number;
     bilateral_contact: boolean; normal_force_n: Record<'left' | 'right', number> };
@@ -32,6 +34,7 @@ export default function DecoupledWbcPage() {
   const scene = useRef<RobotScene | null>(null);
   const pollTimer = useRef<number | null>(null);
   const polling = useRef(false);
+  const controlMode = useRef<'auto' | 'manual'>('auto');
   const file = useRef<HTMLInputElement>(null);
   const sessionId = useRef('');
   const [runtime, setRuntime] = useState<Runtime | null>(null);
@@ -46,6 +49,7 @@ export default function DecoupledWbcPage() {
   const [showReference, setShowReference] = useState(true);
 
   const renderSnapshot = useCallback((next: Snapshot) => {
+    controlMode.current = next.control_mode;
     setSnapshot(next);
     scene.current?.setSceneObjects(next.scene_objects);
     scene.current?.setObjectPoses(next.object_states);
@@ -53,12 +57,12 @@ export default function DecoupledWbcPage() {
     scene.current?.updateReference(next.reference_state);
   }, []);
 
-  const sendCommand = useCallback(async (action: 'play' | 'stop' | 'reset' | 'key', key = '') => {
+  const sendCommand = useCallback(async (action: 'play' | 'stop' | 'reset' | 'key' | 'mode', key = '', mode?: 'auto' | 'manual') => {
     if (!sessionId.current) { setError('먼저 모션을 불러오세요.'); return; }
     if (action === 'reset') { setResult(null); setError(''); }
     try {
       const next = await fetch(`/api/decoupled-wbc/sessions/${sessionId.current}/command`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, key }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, key, mode }),
       }).then(responseJson<Snapshot>);
       renderSnapshot(next);
       if (next.error) setError(next.error);
@@ -90,7 +94,8 @@ export default function DecoupledWbcPage() {
       if (event.repeat || event.isComposing || event.altKey || event.ctrlKey || event.metaKey) return;
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
       const key = event.key.toLowerCase();
-      if (!['w', 's', 'a', 'd', 'q', 'e', '1', '2', 'z'].includes(key)) return;
+      if (!['w', 's', 'a', 'd', 'q', 'e', '1', '2', '3', '4', '5', '6', '7', '8', 'z'].includes(key)) return;
+      if (controlMode.current !== 'manual') return;
       event.preventDefault();
       void sendCommand('key', key);
     };
@@ -135,7 +140,7 @@ export default function DecoupledWbcPage() {
       });
       const initial = await responseJson<Snapshot & { id: string }>(response);
       sessionId.current = initial.id; renderSnapshot(initial); setSourceName(name);
-      connect(initial.id); setMessage('준비 완료. Play를 누르면 2초 동안 상체를 준비한 뒤 모션 재생과 녹화를 시작합니다.');
+      connect(initial.id); setMessage('준비 완료. Auto는 고스트 루트 궤적을 WBC 입력 명령으로 추종합니다.');
     } catch (failure) { setError((failure as Error).message); }
     finally { setBusy(false); }
   }
@@ -177,7 +182,7 @@ export default function DecoupledWbcPage() {
   return <main className="wbc-page">
     <header className="wbc-header">
       <button className="wbc-back" onClick={() => location.assign('/')}><ArrowLeft size={16}/> 모션 편집기</button>
-      <div><strong>DECOUPLED WBC</strong><span>작성 모션 상체 · 키보드 텔레옵 하체</span></div>
+      <div><strong>DECOUPLED WBC</strong><span>작성 모션 상체 · 입력 기반 하체·허리 제어</span></div>
       <span className={`wbc-runtime ${runtime?.available ? 'ok' : ''}`}><Activity size={14}/>{runtime?.available ? 'Policy ready' : 'Setup required'}</span>
     </header>
     <aside className="wbc-sidebar">
@@ -192,19 +197,22 @@ export default function DecoupledWbcPage() {
         {sourceName && <p className="wbc-source">SOURCE<br/><b>{sourceName}</b></p>}
       </section>
       <section>
-        <h2>2. 하체 키보드 제어</h2>
-        <div className="wbc-keys"><kbd>W</kbd><span>전진</span><kbd>S</kbd><span>후진</span><kbd>A / D</kbd><span>좌 / 우</span><kbd>Q / E</kbd><span>좌 / 우 회전</span><kbd>1 / 2</kbd><span>높이 ±</span><kbd>Z</kbd><span>명령 초기화</span></div>
-        <p>키를 누를 때마다 속도가 단계적으로 변합니다. Stop을 누르면 이동 속도는 즉시 0이 됩니다.</p>
+        <h2>2. 제어 모드</h2>
+        <div className="group-actions"><button className={snapshot?.control_mode === 'auto' ? 'chosen' : ''} disabled={!ready} onClick={() => void sendCommand('mode', '', 'auto')}>Auto · 고스트 추종</button><button className={snapshot?.control_mode === 'manual' ? 'chosen' : ''} disabled={!ready} onClick={() => void sendCommand('mode', '', 'manual')}>키보드</button></div>
+        {snapshot?.control_mode === 'auto' ? <p>고스트의 이동·회전·높이를 WBC의 속도/높이 입력으로 변환합니다. 허리 자세도 몸통 RPY 입력으로 전달하며 관절 상태를 직접 덮어쓰지 않습니다. 다리의 정확한 프레임 자세보다 이동 궤적을 추종하며 보행 형태는 정책이 결정합니다.</p> : <>
+          <div className="wbc-keys"><kbd>W / S</kbd><span>전진 / 후진</span><kbd>A / D</kbd><span>좌 / 우</span><kbd>Q / E</kbd><span>좌 / 우 회전</span><kbd>1 / 2</kbd><span>높이 ±</span><kbd>3 / 4</kbd><span>허리 롤 ±</span><kbd>5 / 6</kbd><span>허리 피치 ±</span><kbd>7 / 8</kbd><span>허리 요 ±</span><kbd>Z</kbd><span>명령 초기화</span></div>
+          <p>허리 키는 작성 모션의 허리 자세에 정책 입력 오프셋을 더합니다.</p>
+        </>}
       </section>
       <section className="wbc-command-card">
         <h2>현재 명령</h2>
-        <dl><dt>전후</dt><dd>{nav[0].toFixed(2)} m/s</dd><dt>좌우</dt><dd>{nav[1].toFixed(2)} m/s</dd><dt>회전</dt><dd>{nav[2].toFixed(2)} rad/s</dd><dt>높이</dt><dd>{(snapshot?.height ?? .74).toFixed(2)} m</dd></dl>
+        <dl><dt>전후</dt><dd>{nav[0].toFixed(2)} m/s</dd><dt>좌우</dt><dd>{nav[1].toFixed(2)} m/s</dd><dt>회전</dt><dd>{nav[2].toFixed(2)} rad/s</dd><dt>높이</dt><dd>{(snapshot?.height ?? .74).toFixed(2)} m</dd><dt>허리 R/P/Y</dt><dd>{(snapshot?.torso_rpy ?? [0, 0, 0]).map(value => `${(value * 180 / Math.PI).toFixed(0)}°`).join(' / ')}</dd></dl>
       </section>
     </aside>
     <section className="wbc-stage">
       <div ref={host} className="wbc-canvas"/>
       <div className="wbc-stage-label">
-        <span>UPPER</span> authored arms <i/> <span>LOWER</span> GR00T WBC
+        <span>UPPER</span> authored arms <i/> <span>LOWER</span> GR00T WBC · {snapshot?.control_mode === 'auto' ? 'auto ghost input' : 'keyboard input'}
         <button type="button" className="wbc-reference-toggle" aria-pressed={showReference}
           onClick={() => setShowReference(value => !value)} title="편집기에서 컴파일된 원본 모션을 반투명하게 겹쳐 표시합니다.">
           {showReference ? <Eye size={13}/> : <EyeOff size={13}/>} 편집기 기준
@@ -216,6 +224,7 @@ export default function DecoupledWbcPage() {
         <span>상체 <b>{(snapshot?.upper_time ?? 0).toFixed(2)} / {(snapshot?.upper_duration ?? 0).toFixed(2)} s</b></span>
         <span>상체 추종 오차 <b>{(snapshot?.tracking.upper_rmse_deg ?? 0).toFixed(1)}° RMS</b></span>
         <span>하체 정책 차이 <b>{(snapshot?.tracking.lower_rmse_deg ?? 0).toFixed(1)}° RMS</b></span>
+        {snapshot?.control_mode === 'auto' && <span>루트 추종 <b>{((snapshot?.tracking.root_error_m ?? 0) * 100).toFixed(1)} cm · {(snapshot?.tracking.yaw_error_deg ?? 0).toFixed(1)}°</b></span>}
         <span>환경 <b>{snapshot?.scene_objects.length ?? 0} objects</b></span>
         {snapshot?.grasp && <span>파지 <b>{snapshot.grasp.bilateral_contact
           ? `물리 접촉 L ${snapshot.grasp.normal_force_n.left.toFixed(1)} · R ${snapshot.grasp.normal_force_n.right.toFixed(1)} N`

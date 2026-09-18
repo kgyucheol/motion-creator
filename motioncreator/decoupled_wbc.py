@@ -190,10 +190,48 @@ def authored_waist_to_torso_rpy(waist_yaw_roll_pitch: np.ndarray, limits: np.nda
     return np.clip(rpy, -limits, limits).astype(np.float32)
 
 
+def _yaw(wxyz: np.ndarray) -> float:
+    return float(Rotation.from_quat(np.asarray(wxyz)[[1, 2, 3, 0]]).as_euler("xyz")[2])
+
+
+def _wrap_angle(value: float) -> float:
+    return float((value + np.pi) % (2 * np.pi) - np.pi)
+
+
+def ghost_tracking_command(current: np.ndarray, reference: np.ndarray, following: np.ndarray,
+                           current_origin: np.ndarray, reference_origin: np.ndarray,
+                           dt: float, parameters: dict) -> tuple[np.ndarray, float, dict]:
+    """Convert a ghost root trajectory into policy inputs without writing robot state."""
+    ref0_yaw, world0_yaw = _yaw(reference_origin[3:7]), _yaw(current_origin[3:7])
+    alignment = world0_yaw - ref0_yaw
+    c, s = np.cos(alignment), np.sin(alignment)
+    align_rotation = np.array([[c, -s], [s, c]])
+    target_xy = current_origin[:2] + align_rotation @ (reference[:2] - reference_origin[:2])
+    desired_world_velocity = align_rotation @ ((following[:2] - reference[:2]) / dt)
+    current_yaw = _yaw(current[3:7])
+    target_yaw = world0_yaw + _wrap_angle(_yaw(reference[3:7]) - ref0_yaw)
+    controlled_world_velocity = (desired_world_velocity
+                                 + float(parameters["auto_position_gain"]) * (target_xy - current[:2]))
+    cb, sb = np.cos(current_yaw), np.sin(current_yaw)
+    local_velocity = np.array([[cb, sb], [-sb, cb]]) @ controlled_world_velocity
+    yaw_rate = (_wrap_angle(_yaw(following[3:7]) - _yaw(reference[3:7])) / dt
+                + float(parameters["auto_yaw_gain"]) * _wrap_angle(target_yaw - current_yaw))
+    limits = parameters["command_limits"]
+    nav = np.array([local_velocity[0], local_velocity[1], yaw_rate], dtype=np.float32)
+    nav[:2] = np.clip(nav[:2], -limits["linear_velocity"], limits["linear_velocity"])
+    nav[2] = np.clip(nav[2], -limits["angular_velocity"], limits["angular_velocity"])
+    height = float(np.clip(parameters["initial_height"] + reference[2] - reference_origin[2],
+                           limits["minimum_height"], limits["maximum_height"]))
+    tracking = {"root_error_m": float(np.linalg.norm(target_xy - current[:2])),
+                "yaw_error_deg": abs(float(np.rad2deg(_wrap_angle(target_yaw - current_yaw))))}
+    return nav, height, tracking
+
+
 @dataclass
 class CommandState:
     nav: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float32))
     height: float = 0.74
+    torso_offset_rpy: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=np.float32))
 
     def apply_key(self, key: str, parameters: dict) -> bool:
         key = key.lower()
@@ -206,15 +244,25 @@ class CommandState:
         elif key == "e": self.nav[2] -= .1
         elif key == "1": self.height += .05
         elif key == "2": self.height -= .05
+        elif key == "3": self.torso_offset_rpy[0] += .05
+        elif key == "4": self.torso_offset_rpy[0] -= .05
+        elif key == "5": self.torso_offset_rpy[1] += .05
+        elif key == "6": self.torso_offset_rpy[1] -= .05
+        elif key == "7": self.torso_offset_rpy[2] += .1
+        elif key == "8": self.torso_offset_rpy[2] -= .1
         elif key == "z":
             self.nav[:] = 0
             self.height = float(parameters["initial_height"])
+            self.torso_offset_rpy[:] = 0
         else:
             changed = False
         limits = parameters["command_limits"]
         self.nav[:2] = np.clip(self.nav[:2], -limits["linear_velocity"], limits["linear_velocity"])
         self.nav[2] = np.clip(self.nav[2], -limits["angular_velocity"], limits["angular_velocity"])
         self.height = float(np.clip(self.height, limits["minimum_height"], limits["maximum_height"]))
+        self.torso_offset_rpy[:] = np.clip(self.torso_offset_rpy,
+                                            -np.asarray(limits["torso_rpy"]),
+                                            np.asarray(limits["torso_rpy"]))
         return changed
 
 
@@ -292,6 +340,7 @@ class DecoupledSimulation:
         } if self.grasp_control else {}
         self.policy = LowerBodyPolicy(self.parameters)
         self.command = CommandState(height=self.parameters["initial_height"])
+        self.control_mode = "auto"
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.running = False
@@ -303,6 +352,8 @@ class DecoupledSimulation:
         self.motion_time = 0.
         self.play_time = 0.
         self.torso_rpy = np.zeros(3, dtype=np.float32)
+        self.auto_tracking = {"root_error_m": 0., "yaw_error_deg": 0.}
+        self.auto_world_origin = np.zeros(7)
         self.recording: list[dict] = []
         self._last_record_step = -1
         self.reset()
@@ -355,6 +406,8 @@ class DecoupledSimulation:
             self.motion_time = 0.
             self.play_time = 0.
             self.torso_rpy[:] = 0
+            self.auto_tracking = {"root_error_m": 0., "yaw_error_deg": 0.}
+            self.auto_world_origin = self.data.qpos[:7].copy()
             self.recording.clear()
             self._last_record_step = -1
             self._changed()
@@ -378,7 +431,18 @@ class DecoupledSimulation:
 
     def apply_key(self, key: str) -> None:
         with self.lock:
-            if self.command.apply_key(key, self.parameters): self._changed()
+            if self.control_mode == "manual" and self.command.apply_key(key, self.parameters): self._changed()
+
+    def set_control_mode(self, mode: str) -> None:
+        if mode not in ("auto", "manual"):
+            raise ValueError("Control mode must be auto or manual")
+        with self.lock:
+            self.control_mode = mode
+            self.command.nav[:] = 0
+            self.command.height = float(self.parameters["initial_height"])
+            self.command.torso_offset_rpy[:] = 0
+            self.policy.reset()
+            self._changed()
 
     def _changed(self) -> None:
         self.revision += 1
@@ -391,6 +455,26 @@ class DecoupledSimulation:
             return self._reference_at(0.)[22:36]
         return target
 
+    def _update_auto_command(self, reference: np.ndarray) -> None:
+        if self.play_time < self.parameters["upper_body_settle_seconds"]:
+            self.command.nav[:] = 0
+            limits = self.parameters["command_limits"]
+            self.command.height = float(np.clip(self.parameters["initial_height"] + reference[2]
+                                                - self._reference_at(0.)[2],
+                                                limits["minimum_height"], limits["maximum_height"]))
+            return
+        control_dt = self.parameters["simulation_dt"] * self.parameters["control_decimation"]
+        following = self._reference_at(min(self.duration, self.motion_time + control_dt))
+        nav, height, tracking = ghost_tracking_command(
+            self.data.qpos[:7], reference[:7], following[:7], self.auto_world_origin,
+            self._reference_at(0.)[:7], control_dt, self.parameters)
+        alpha = float(self.parameters["auto_command_smoothing"])
+        self.command.nav[:] = (1 - alpha) * self.command.nav + alpha * nav
+        self.command.height = height
+        self.auto_tracking = tracking
+        if self.motion_time >= self.duration and tracking["root_error_m"] < .01 and tracking["yaw_error_deg"] < 1.:
+            self.command.nav[:] = 0
+
     @staticmethod
     def _pd(target: np.ndarray, q: np.ndarray, kp: np.ndarray, dq: np.ndarray, kd: np.ndarray) -> np.ndarray:
         return (target - q) * kp - dq * kd
@@ -401,7 +485,8 @@ class DecoupledSimulation:
             p = self.parameters
             reference = self._reference_at(self.motion_time)
             limits = np.asarray(p["command_limits"]["torso_rpy"], dtype=np.float32)
-            self.torso_rpy = authored_waist_to_torso_rpy(reference[19:22], limits)
+            self.torso_rpy = np.clip(authored_waist_to_torso_rpy(reference[19:22], limits)
+                                     + self.command.torso_offset_rpy, -limits, limits).astype(np.float32)
             lower_target = np.asarray(p["default_angles"], dtype=np.float32) + self.policy.action * p["action_scale"]
             self.data.ctrl[:15] = self._pd(lower_target, self.data.qpos[7:22], np.asarray(p["lower_kp"]),
                                            self.data.qvel[6:21], np.asarray(p["lower_kd"]))
@@ -420,6 +505,7 @@ class DecoupledSimulation:
                 self.phase = "playing"
                 self.motion_time = min(self.duration, self.motion_time + p["simulation_dt"])
             if self.step_count % p["control_decimation"] == 0:
+                if self.control_mode == "auto": self._update_auto_command(reference)
                 observation = build_observation(self.data, self.policy.action, self.command, self.torso_rpy, p)
                 self.policy.infer(observation, np.linalg.norm(self.command.nav) > .05)
             # Record at 25 Hz (every eight 200 Hz physics steps).
@@ -469,6 +555,7 @@ class DecoupledSimulation:
             return {
                 "revision": self.revision, "phase": self.phase, "playing": self.running,
                 "error": self.error, "policy": "walk" if np.linalg.norm(self.command.nav) > .05 else "balance",
+                "control_mode": self.control_mode,
                 "nav": self.command.nav.tolist(), "height": self.command.height,
                 "torso_rpy": self.torso_rpy.tolist(), "upper_time": self.motion_time,
                 "upper_duration": self.duration, "recording_frames": len(self.recording),
@@ -478,6 +565,7 @@ class DecoupledSimulation:
                     "lower_rmse_deg": float(np.sqrt(np.mean(lower_error ** 2)) * 180 / np.pi),
                     "upper_rmse_deg": float(np.sqrt(np.mean(upper_error ** 2)) * 180 / np.pi),
                     "upper_max_deg": float(np.max(np.abs(upper_error)) * 180 / np.pi),
+                    **self.auto_tracking,
                 },
                 "scene_objects": self.scene_objects,
                 "object_states": self._object_states(), "grasp": grasp,

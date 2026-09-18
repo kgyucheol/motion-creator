@@ -14,6 +14,9 @@
   "dof_velocity_scale": 0.05,
   "action_scale": 0.25,
   "command_scale": [2.0, 2.0, 0.5],
+  "auto_position_gain": 1.5,
+  "auto_yaw_gain": 2.0,
+  "auto_command_smoothing": 0.25,
   "command_limits": {
     "linear_velocity": 0.5,
     "angular_velocity": 1.0,
