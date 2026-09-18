@@ -1,10 +1,11 @@
-import { ChevronDown, ChevronRight, LockKeyhole } from 'lucide-react';
+import { ChevronDown, ChevronRight, LockKeyhole, Rotate3D } from 'lucide-react';
 import { BODY_GROUPS, nodeMembers, selectionState, type BodyNode } from '../lib/body-groups';
 import type { PoseState } from '../lib/robot-scene';
 
 type Props = {
-  pose: PoseState | null; selected: string[]; pins: string[]; expanded: string[]; disabled: boolean;
-  onExpand: (id: string) => void; onSelect: (members: string[], additive: boolean) => void; onPin: (key: string) => void;
+  pose: PoseState | null; selected: string[]; pins: string[]; anglePins: string[]; expanded: string[]; disabled: boolean;
+  onExpand: (id: string) => void; onSelect: (members: string[], additive: boolean) => void;
+  onPin: (key: string) => void; onAnglePin: (key: string) => void;
 };
 export default function BodyControls(props: Props) {
   function row(node: BodyNode) {
@@ -20,6 +21,7 @@ export default function BodyControls(props: Props) {
           <span>{node.label}</span><small>{group ? `${status.count}/${status.total}` : joint ? `${(joint.angle*180/Math.PI).toFixed(1)}°` : ''}</small>
         </button>
         {node.handle && <button className={`pin-button ${props.pins.includes(node.handle) ? 'is-pinned' : ''}`} disabled={props.disabled} onClick={() => props.onPin(node.handle!)} aria-label={`${props.pose?.handles[node.handle]?.label ?? node.label} ${props.pins.includes(node.handle) ? '고정 해제' : '고정'}`} title="공간상 위치 고정"><LockKeyhole size={12}/></button>}
+        {node.handle && <button className={`pin-button angle-pin-button ${props.anglePins.includes(node.handle) ? 'is-angle-pinned' : ''}`} disabled={props.disabled} onClick={() => props.onAnglePin(node.handle!)} aria-label={`${props.pose?.handles[node.handle]?.label ?? node.label} ${props.anglePins.includes(node.handle) ? '각도 고정 해제' : '각도 고정'}`} title="방향 또는 실제 관절각만 고정"><Rotate3D size={12}/></button>}
       </div>
       {group && <ul id={`body-${node.id}`} hidden={!open}>{node.children!.map(row)}</ul>}
     </li>;

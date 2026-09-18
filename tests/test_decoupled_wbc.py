@@ -82,15 +82,13 @@ def test_grasp_control_ignores_stale_initial_event_and_never_refits_authored_pos
 
     control = prepare_grasp_control(robot, project)
     assert control["start_time"] == pytest.approx(2.)
-    assert control["closure_ready"] is False
-    np.testing.assert_allclose(control["arm_offset"], 0.)
+    assert "closure_ready" not in control and "arm_offset" not in control
 
     closure = np.asarray(contact["qpos"], dtype=float)
     closure[22] += .1
     contact["grasp"].update(object_signature=object_signature(item), closure_qpos=closure.tolist())
     control = prepare_grasp_control(robot, project)
-    assert control["closure_ready"] is True
-    np.testing.assert_allclose(control["arm_offset"], np.r_[.1, np.zeros(13)])
+    assert "closure_ready" not in control and "arm_offset" not in control
 
 
 def test_recording_bundle_is_reimportable(tmp_path):

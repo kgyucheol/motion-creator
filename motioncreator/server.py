@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE
+from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE, ANGLE_LOCKABLE
 from .motion import new_project, validate_project, compile_motion, project_from_motion_bytes, prepare_saved_project, save_bundle
 from .presets import GroupStore
 
@@ -52,6 +52,7 @@ class GroupSolveInput(PoseInput):
     orientations: dict[str, list[float]] = Field(default_factory=dict, max_length=len(ROTATABLE))
     joints: dict[str, float] = Field(default_factory=dict, max_length=29)
     pins: list[str] = Field(default_factory=lambda: list(FEET))
+    angle_pins: list[str] = Field(default_factory=list, max_length=len(ANGLE_LOCKABLE))
     resistance: float = Field(1., ge=0, le=5)
     mode: Literal['elastic', 'free'] = 'elastic'
 
@@ -65,6 +66,7 @@ class GroupPresetInput(BaseModel):
 class GraspFitInput(PoseInput):
     model_config = {'extra': 'forbid'}
     pins: list[str] = Field(default_factory=lambda: list(FEET))
+    angle_pins: list[str] = Field(default_factory=list, max_length=len(ANGLE_LOCKABLE))
     object: dict
     grasp: dict
 
@@ -146,7 +148,8 @@ def solve_group(payload: GroupSolveInput):
             raise ValueError('At least one position, rotation or joint target is required')
         q, info = robot.solve(payload.qpos, payload.anchor, pins=payload.pins,
                              resistance=payload.resistance, mode=payload.mode, selected_targets=payload.targets,
-                             orientation_targets=payload.orientations, joint_targets=payload.joints)
+                             orientation_targets=payload.orientations, joint_targets=payload.joints,
+                             angle_pins=payload.angle_pins)
         return {'state': robot.state(q), 'solver': info}
     return checked(run)
 
@@ -154,7 +157,8 @@ def solve_group(payload: GroupSolveInput):
 @app.post('/api/grasp-fit')
 def grasp_fit(payload: GraspFitInput):
     from .grasp import fit_two_hand_grasp
-    return checked(lambda: fit_two_hand_grasp(robot, payload.qpos, payload.pins, payload.object, payload.grasp))
+    return checked(lambda: fit_two_hand_grasp(robot, payload.qpos, payload.pins, payload.object,
+                                              payload.grasp, payload.angle_pins))
 
 
 @app.post('/api/preview')

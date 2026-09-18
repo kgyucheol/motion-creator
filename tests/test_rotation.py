@@ -69,6 +69,41 @@ def test_motor_angle_precision_respects_pins(robot):
     assert_feet(robot, robot.home, q)
 
 
+def test_angle_only_pins_allow_translation_but_hold_hand_orientation_and_joint_angle(robot):
+    data = robot.data(robot.home)
+    hand_position, hand_rotation = robot.point(data, 'left_hand')
+    target = hand_position + np.array([.025, 0., .015])
+    q, info = robot.solve(robot.home, robot.home, selected_targets={'left_hand': target},
+                          angle_pins=['left_hand', 'right_elbow_joint'])
+    assert info['converged'], info
+    moved_position, moved_rotation = robot.point(robot.data(q), 'left_hand')
+    assert np.linalg.norm(moved_position - hand_position) > .01
+    assert Rotation.from_matrix(moved_rotation @ hand_rotation.T).magnitude() < np.deg2rad(.5)
+    elbow = robot.model.joint('right_elbow_joint').qposadr[0]
+    assert abs(q[elbow] - robot.home[elbow]) < np.deg2rad(.5)
+    assert info['angle_pin_error_deg'] < .5
+
+
+def test_angle_only_pin_is_preserved_through_keyframe_interpolation(robot):
+    start_position, start_rotation = robot.point(robot.data(robot.home), 'left_hand')
+    q, info = robot.solve(robot.home, robot.home,
+                          selected_targets={'left_hand': start_position + [.025, 0., .015]},
+                          angle_pins=['left_hand'])
+    assert info['converged'], info
+    project = new_project(robot)
+    project['keyframes'][0]['angle_pins'] = ['left_hand']
+    project['keyframes'].append({'name': 'Offset with fixed hand angle', 'duration': .5,
+                                 'qpos': q.tolist(), 'pins': list(FEET),
+                                 'angle_pins': ['left_hand']})
+    motion = compile_motion(robot, project, fps=20)
+    positions = []
+    for pose in motion['qpos']:
+        position, rotation = robot.point(robot.data(pose), 'left_hand')
+        positions.append(position)
+        assert Rotation.from_matrix(rotation @ start_rotation.T).magnitude() < np.deg2rad(.5)
+    assert np.linalg.norm(positions[-1] - positions[0]) > .01
+
+
 def test_rotation_validation(robot):
     for goals, match in [
         ({'orientation_targets': {'left_foot': [0, 0, 0, 1]}}, '고정'),

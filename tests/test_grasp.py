@@ -37,14 +37,12 @@ def fitted_project():
     return robot, project, result
 
 
-def test_grasp_fit_uses_imported_pose_and_stores_physics_closure(tmp_path):
+def test_grasp_fit_applies_offset_to_authored_pose_without_hidden_closure(tmp_path):
     robot, project, result = fitted_project()
     validate_project(robot, project)
     assert result['solver']['contact']['target_error_mm'] < 1
-    assert result['solver']['closure']['target_error_mm'] < 1
     assert result['grasp']['contact_anchor'] == 'finger_wrist_pad'
-    assert len(result['grasp']['closure_qpos']) == robot.model.nq
-    assert not np.allclose(result['state']['qpos'][7:], result['grasp']['closure_qpos'][7:])
+    assert 'closure_qpos' not in result['grasp']
     json.dumps(project, allow_nan=False)
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
     reopened = json.loads((tmp_path / bundle['project_file']).read_text())
@@ -111,14 +109,14 @@ def test_grip_pad_spans_four_fingers_but_excludes_thumb():
         assert np.max(np.abs(local[:, 2])) <= half[2]
 
 
-def test_physics_preview_prepends_grasp_closure_and_reports_contact():
+def test_physics_preview_uses_authored_grasp_pose_and_reports_contact():
     robot, project, _ = fitted_project()
     times, poses, grasp = compile_preview_motion(robot, project, fps=50)
     assert grasp is not None
     assert times[0] == 0
-    assert times[-1] == pytest.approx(.2)
+    assert times[-1] == 0
     np.testing.assert_allclose(poses[0], project['keyframes'][0]['qpos'])
-    np.testing.assert_allclose(poses[5], project['keyframes'][0]['grasp']['closure_qpos'])
+    assert len(poses) == 1
     result = simulate(project, controller='pd')
     assert result['summary']['grasp']['object_id'] == 'grasp-box'
     assert result['summary']['grasp']['bilateral_contact']

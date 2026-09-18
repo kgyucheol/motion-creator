@@ -50,44 +50,25 @@ def project_from_keyframe(project, start_frame_index=0):
     selected['keyframes'] = copy.deepcopy(frames[start_frame_index:])
     selected['current_qpos'] = copy.deepcopy(selected['keyframes'][0]['qpos'])
     selected['pins'] = copy.deepcopy(selected['keyframes'][0].get('pins', []))
+    selected['angle_pins'] = copy.deepcopy(selected['keyframes'][0].get('angle_pins', []))
     return selected
 
 
 def preview_duration(project):
     frames = project['keyframes']
-    base = float(frames[0]['duration']) if len(frames) == 1 else sum(float(frame['duration']) for frame in frames[1:])
-    grasp = frames[0].get('grasp')
-    return base + (float(grasp['closure_seconds']) if grasp and grasp.get('closure_qpos') is not None else 0.)
+    return float(frames[0]['duration']) if len(frames) == 1 else sum(float(frame['duration']) for frame in frames[1:])
 
 
 def compile_preview_motion(robot, project, fps=50):
-    """Prepend a physics-only closing ramp when the first keyframe has a fitted grasp."""
+    """Compile the authored pose directly; grasp fitting no longer adds a hidden ramp."""
     grasp = project['keyframes'][0].get('grasp')
-    if not grasp or grasp.get('closure_qpos') is None:
-        motion = compile_motion(robot, project, fps=fps)
-        return motion['time'], motion['qpos'], None
-    objects = project_scene_objects(project)
-    item = next((value for value in objects if value['id'] == grasp['object_id']), None)
-    if item is None or object_signature(item) != grasp.get('object_signature'):
-        raise ValueError('파지 설정 후 대상 상자가 변경되었습니다. 양손 파지 자세를 다시 맞춰주세요.')
-    closed = copy.deepcopy(project)
-    contact_qpos = np.asarray(closed['keyframes'][0]['qpos'], dtype=float)
-    closure_qpos = robot.validate_q(grasp['closure_qpos'])
-    closed['keyframes'][0]['qpos'] = closure_qpos.tolist()
-    closed_motion = compile_motion(robot, closed, fps=fps)
-    base_times, base_poses = closed_motion['time'], closed_motion['qpos']
-    if len(base_times) == 1:
-        hold = float(closed['keyframes'][0]['duration'])
-        base_times = np.array([0., hold])
-        base_poses = np.stack([closure_qpos, closure_qpos])
-    duration = float(grasp['closure_seconds'])
-    count = max(1, round(duration * fps))
-    close_times = np.arange(count + 1, dtype=float) / fps
-    progress = (close_times / close_times[-1])[:, None]
-    close_poses = np.repeat(contact_qpos[None], len(close_times), axis=0)
-    close_poses[:, 7:] = contact_qpos[7:] + progress * (closure_qpos[7:] - contact_qpos[7:])
-    return (np.r_[close_times, duration + base_times[1:]],
-            np.concatenate([close_poses, base_poses[1:]], axis=0), grasp)
+    if grasp:
+        objects = project_scene_objects(project)
+        item = next((value for value in objects if value['id'] == grasp['object_id']), None)
+        if item is None or object_signature(item) != grasp.get('object_signature'):
+            raise ValueError('파지 설정 후 대상 상자가 변경되었습니다. 양손 파지 자세를 다시 맞춰주세요.')
+    motion = compile_motion(robot, project, fps=fps)
+    return motion['time'], motion['qpos'], grasp
 
 
 def _grounded_position(item):

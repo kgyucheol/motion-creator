@@ -19,6 +19,7 @@ export type Keyframe = {
   duration: number;
   qpos: number[];
   pins: string[];
+  angle_pins?: string[];
   samples?: number[][];
   grasp?: TwoHandGrasp;
 };

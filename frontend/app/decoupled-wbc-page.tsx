@@ -11,7 +11,7 @@ type Snapshot = {
   reference_state: PoseState;
   tracking: { lower_rmse_deg: number; upper_rmse_deg: number; upper_max_deg: number };
   object_states: Record<string, SceneObjectPose>;
-  grasp: null | { object_id: string; active: boolean; closure: number; closure_ready: boolean; target_force_n: number;
+  grasp: null | { object_id: string; active: boolean; target_force_n: number;
     bilateral_contact: boolean; normal_force_n: Record<'left' | 'right', number> };
 };
 type SaveResult = { folder: string; files: string[] };
@@ -219,8 +219,7 @@ export default function DecoupledWbcPage() {
         <span>환경 <b>{snapshot?.scene_objects.length ?? 0} objects</b></span>
         {snapshot?.grasp && <span>파지 <b>{snapshot.grasp.bilateral_contact
           ? `물리 접촉 L ${snapshot.grasp.normal_force_n.left.toFixed(1)} · R ${snapshot.grasp.normal_force_n.right.toFixed(1)} N`
-          : snapshot.grasp.active && !snapshot.grasp.closure_ready ? '편집기 자세 · 닫힘 보정 없음'
-          : snapshot.grasp.active ? `닫힘 ${(snapshot.grasp.closure * 100).toFixed(0)}%` : '대기'}</b></span>}
+          : snapshot.grasp.active ? '편집기 파지 자세 · 접촉 대기' : '대기'}</b></span>}
         <span>녹화 <b>{snapshot?.recording_frames ?? 0} frames</b></span>
       </div>
       {busy && <div className="busy-overlay"><span className="spinner"/> 준비하는 중…</div>}

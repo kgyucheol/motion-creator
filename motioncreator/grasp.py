@@ -90,24 +90,26 @@ def _targets(item, left_uv, right_uv, inward_offset, twist_degrees):
     return targets, orientations, contacts
 
 
-def fit_two_hand_grasp(robot: Robot, qpos, pins, item, event):
-    """Fit the actual fake-hand contact anchors to opposite box faces.
+def fit_two_hand_grasp(robot: Robot, qpos, pins, item, event, angle_pins=()):
+    """Fit parallel hand-pad poses to opposite box faces with an authored offset.
 
-    The authored keyframe becomes the zero-penetration contact pose. A second pose,
-    stored on the interaction, provides the bounded inward reference used by the
-    physics-only closure ramp.
+    The inward offset is part of the keyframe pose itself.  No hidden physics-only
+    closure pose is generated, so editor, preview and WBC playback share one pose.
     """
     source = robot.validate_q(qpos)
     target = validate_grasp_event(robot, event, [item])
     left_uv = _validate_uv(event['left_surface_uv'], 'Left hand')
     right_uv = _validate_uv(event['right_surface_uv'], 'Right hand')
     solve_pins = [key for key in pins if key not in HAND_KEYS]
+    solve_angle_pins = [key for key in angle_pins if key not in HAND_KEYS]
+    inward_offset = float(event['inward_offset_m'])
     candidates = []
     for twist in (-30., -20., -10., 0., 10., 20., 30.):
-        targets, orientations, contacts = _targets(target, left_uv, right_uv, 0., twist)
+        targets, orientations, contacts = _targets(target, left_uv, right_uv, inward_offset, twist)
         pose, info = robot.solve(source, source, pins=solve_pins, resistance=1.5, mode='elastic',
                                 selected_targets=targets, orientation_targets=orientations,
-                                max_nfev=90, posture_reference=source, posture_weight=.08)
+                                angle_pins=solve_angle_pins, max_nfev=90,
+                                posture_reference=source, posture_weight=.08)
         delta = float(np.sqrt(np.mean((pose[7:] - source[7:]) ** 2)))
         score = info['target_error_mm'] + .2 * info.get('angle_error_deg', 0.) + 25 * delta
         if not info['rejected']:
@@ -118,18 +120,9 @@ def fit_two_hand_grasp(robot: Robot, qpos, pins, item, event):
     if contact_info['target_error_mm'] > 15 or contact_info.get('angle_error_deg', 0.) > 12:
         raise ValueError('양손 파지 오차가 너무 큽니다. 로봇이나 상자를 더 가까이 배치하세요.')
 
-    closed_targets, _, _ = _targets(target, left_uv, right_uv, float(event['inward_offset_m']), twist)
-    closure_pose, closure_info = robot.solve(contact_pose, contact_pose, pins=solve_pins,
-                                             resistance=1.5, mode='elastic',
-                                             selected_targets=closed_targets, orientation_targets=orientations,
-                                             max_nfev=90, posture_reference=contact_pose, posture_weight=.08)
-    # Physics can command only the 29 joints. Keep the authored floating base fixed
-    # and use the closure pose strictly as an actuated-joint target.
-    closure_pose[:7] = contact_pose[:7]
-    if closure_info['rejected'] or closure_info['target_error_mm'] > 15:
-        raise ValueError('설정한 안쪽 오프셋까지 안전하게 닫을 수 없습니다. 값을 줄여주세요.')
-    fitted = {**event, 'object_signature': object_signature(item),
+    fitted = {key: value for key, value in event.items() if key != 'closure_qpos'}
+    fitted.update({'object_signature': object_signature(item),
               'contact_anchor': 'finger_wrist_pad', 'hand_twist_deg': twist,
-              'contact_points_world': contacts, 'closure_qpos': closure_pose.tolist()}
+              'contact_points_world': contacts})
     return {'state': robot.state(contact_pose), 'grasp': fitted,
-            'solver': {'contact': contact_info, 'closure': closure_info}}
+            'solver': {'contact': contact_info}}

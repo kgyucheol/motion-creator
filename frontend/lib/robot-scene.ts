@@ -77,6 +77,7 @@ export class RobotScene {
   members = ['pelvis'];
   selectionLocked = false;
   pins: string[] = [];
+  anglePins: string[] = [];
   state?: PoseState;
   editable = true;
   keyboardEnabled = true;
@@ -383,19 +384,21 @@ export class RobotScene {
     this.dirty = true;
   }
 
-  select(key: string, pins: string[], members = [key]) {
+  select(key: string, pins: string[], members = [key], anglePins = this.anglePins ?? []) {
     this.selected = key;
     this.members = members;
     this.pins = pins;
+    this.anglePins = anglePins;
     const controls = controlSelection(members);
     const activeControl = controlKey(members, key);
     Object.entries(this.markers).forEach(([k, mesh]) => {
       mesh.visible = this.markerVisible && ((this.visibleHandles ? this.visibleHandles.includes(k) : isJointHandle(k) === (this.handleLayer === 'joints') && !isCombinedAxis(k)) || members.includes(k) || controls.includes(k));
       const mat = mesh.material as THREE.MeshBasicMaterial;
-      mat.color.set(members.includes(k) || controls.includes(k) ? '#80f2c7' : pins.includes(k) ? '#f1bc65' : '#56bdec');
+      mat.color.set(members.includes(k) || controls.includes(k) ? '#80f2c7' : pins.includes(k) ? '#f1bc65' : anglePins.includes(k) ? '#ba9cff' : '#56bdec');
       mat.opacity = members.includes(k) || controls.includes(k) ? .64 : .28;
       this.labels[k]?.classList.toggle('chosen', members.includes(k));
       this.labels[k]?.classList.toggle('pinned', pins.includes(k));
+      this.labels[k]?.classList.toggle('angle-pinned', anglePins.includes(k));
     });
     const hinge = this.transformMode === 'rotate' && controls.length === 1 ? this.state?.hinges?.[activeControl] : undefined;
     const ankle = this.transformMode === 'rotate' && controls.length === 1 && ANKLE_HANDLES.includes(activeControl);
@@ -410,7 +413,7 @@ export class RobotScene {
       else this.pivot.quaternion.fromArray(this.state.handles[activeControl].quaternion);
     }
     const blocked = this.transformMode === 'rotate'
-      ? !canRotateSelection(controls) || controls.some(k => pins.includes(k) && (controls.length > 1 || k.endsWith('_foot')))
+      ? !canRotateSelection(controls) || controls.some(k => anglePins.includes(k) || pins.includes(k) && (controls.length > 1 || k.endsWith('_foot')))
       : members.some(k => pins.includes(k));
     if (this.editable && !blocked && this.markerVisible && !this.selectedSceneObject) this.gizmo.attach(this.pivot); else if (!this.selectedSceneObject) this.gizmo.detach();
     this.dirty = true;
@@ -468,7 +471,7 @@ export class RobotScene {
     Object.entries(this.markers).forEach(([k, mesh]) => {
       const p = mesh.position.clone().project(this.camera);
       const label = this.labels[k];
-      label.style.display = mesh.visible && p.z < 1 && (this.members.includes(k) || this.pins.includes(k)) ? 'block' : 'none';
+      label.style.display = mesh.visible && p.z < 1 && (this.members.includes(k) || this.pins.includes(k) || this.anglePins.includes(k)) ? 'block' : 'none';
       label.style.transform = `translate(${(p.x + 1) * rect.width / 2 + 15}px,${(1 - p.y) * rect.height / 2 - 12}px)`;
     });
   }

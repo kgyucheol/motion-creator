@@ -142,6 +142,23 @@ test('a new wrist axis uses a single ring at its physical anchor', () => {
   assert.ok(new THREE.Vector3(0, 0, 1).applyQuaternion(viewer.pivot.quaternion).distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-10);
 });
 
+test('an angle-only pin blocks rotation while keeping the handle selectable for translation', () => {
+  const viewer = fixture();
+  viewer.state.handles.left_hand.quaternion = [0, 0, 0, 1];
+  viewer.markers = { left_hand: new THREE.Mesh(new THREE.SphereGeometry(.02), new THREE.MeshBasicMaterial()) };
+  viewer.labels = {}; viewer.pivot = new THREE.Object3D(); viewer.markerVisible = true;
+  viewer.transformMode = 'rotate'; viewer.space = 'world';
+  viewer.gizmo.setSpace = () => {};
+  viewer.gizmo.attach = object => { viewer.gizmo.object = object; };
+  viewer.gizmo.detach = () => { viewer.gizmo.object = null; };
+  viewer.select('left_hand', [], ['left_hand'], ['left_hand']);
+  assert.equal(viewer.gizmo.object, null);
+  viewer.transformMode = 'translate';
+  viewer.select('left_hand', [], ['left_hand'], ['left_hand']);
+  assert.equal(viewer.gizmo.object, viewer.pivot);
+  viewer.markers.left_hand.geometry.dispose(); viewer.markers.left_hand.material.dispose();
+});
+
 test('Alt picking cycles through coincident joint markers and ignores hidden handles', () => {
   const viewer = fixture();
   viewer.renderer = { domElement: { getBoundingClientRect: () => ({ left: 0, top: 0, width: 100, height: 100 }) } };

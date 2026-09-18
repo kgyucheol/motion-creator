@@ -10,13 +10,13 @@ import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRota
 import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, withScenePlacement, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
-type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
+type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
-type EditorSnapshot = { qpos: number[]; pins: string[]; objects: SceneObject[]; keyframes: Keyframe[]; poseDirty: boolean };
+type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; keyframes: Keyframe[]; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
 const genericFrameNames = new Set(['stand', 'standing', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip', '서기', '서있기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세']);
 function automaticProjectName(project: Project) {
@@ -64,6 +64,7 @@ export default function Editor() {
   const [groupName, setGroupName] = useState('');
   const [groupId, setGroupId] = useState('');
   const [pins, setPins] = useState<string[]>(feet);
+  const [anglePins, setAnglePins] = useState<string[]>([]);
   const [mode, setMode] = useState('elastic');
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [mirror, setMirror] = useState(false);
@@ -89,7 +90,7 @@ export default function Editor() {
   const [policyAvailable, setPolicyAvailable] = useState(false);
   const [policyJob, setPolicyJob] = useState<PolicyJob | null>(null);
   const policyRequest = useRef<{ id?: string; cancelled: boolean } | null>(null);
-  const policySource = useRef<{ state: PoseState; pins: string[]; frameIndex: number; dirty: boolean } | null>(null);
+  const policySource = useRef<{ state: PoseState; pins: string[]; anglePins: string[]; frameIndex: number; dirty: boolean } | null>(null);
   const [fps, setFps] = useState(30);
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
@@ -107,8 +108,8 @@ export default function Editor() {
   const [saveMenuOpen, setSaveMenuOpen] = useState(false);
   const [historyCount, setHistoryCount] = useState(0);
   const [futureCount, setFutureCount] = useState(0);
-  const current = useRef({ state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty });
-  current.current = { state, project, pins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty };
+  const current = useRef({ state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty });
+  current.current = { state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty };
   const history = useRef<EditorSnapshot[]>([]);
   const future = useRef<EditorSnapshot[]>([]);
   const objectDragCheckpointed = useRef(false);
@@ -142,7 +143,7 @@ export default function Editor() {
   }
   function editorSnapshot(): EditorSnapshot | null {
     const value = current.current;
-    return value.state && value.project ? { qpos: [...value.state.qpos], pins: [...value.pins], objects: structuredClone(value.objects), keyframes: structuredClone(value.project.keyframes), poseDirty: value.poseDirty } : null;
+    return value.state && value.project ? { qpos: [...value.state.qpos], pins: [...value.pins], anglePins: [...value.anglePins], objects: structuredClone(value.objects), keyframes: structuredClone(value.project.keyframes), poseDirty: value.poseDirty } : null;
   }
   function checkpoint() {
     const snapshot = editorSnapshot();
@@ -252,7 +253,7 @@ export default function Editor() {
     const controls = controlSelection(next);
     const nextMode = controls.length === 1 && isJointHandle(controls[0]) && !hover ? 'rotate' : previousMode === 'rotate' && !canRotateSelection(controls) ? 'translate' : previousMode;
     current.current.transformMode = nextMode; setTransformMode(nextMode);
-    scene.current?.select(active, current.current.pins, next);
+    scene.current?.select(active, current.current.pins, next, current.current.anglePins);
     scene.current?.setTransformMode(nextMode, space);
     const pose = current.current.state;
     if (pose) {
@@ -305,7 +306,7 @@ export default function Editor() {
         }
         const result = await api<{ state: PoseState; solver: SolveInfo }>('solve-group', {
           qpos: c.state!.qpos, anchor: anchor.current, ...goals,
-          pins: c.pins, mode: c.mode, resistance: c.resistance,
+          pins: c.pins, angle_pins: c.anglePins, mode: c.mode, resistance: c.resistance,
         });
         if (!alive.current) return;
         applyState(result.state); setInfo(result.solver); setPoseDirty(true);
@@ -384,12 +385,14 @@ export default function Editor() {
       let nextProject = init.project;
       let initialState = init.state;
       let initialPins = feet;
+      let initialAnglePins: string[] = [];
       try {
         const draft = localStorage.getItem('g1-motion-draft-v1');
         if (draft) {
           nextProject = await api<Project>('validate', { project: JSON.parse(draft) });
           initialState = await api<PoseState>('pose', { qpos: nextProject.current_qpos ?? nextProject.keyframes[0].qpos });
           initialPins = nextProject.pins ?? feet;
+          initialAnglePins = nextProject.angle_pins ?? nextProject.keyframes[0].angle_pins ?? [];
         }
       } catch { setMessage('이전 자동 저장을 복원하지 못해 기본 자세로 시작했습니다.'); nextProject = init.project; }
       if (!alive.current) return;
@@ -398,6 +401,7 @@ export default function Editor() {
       setObjects(nextObjects); current.current.objects = nextObjects;
       setProject(nextProject); current.current.project = nextProject;
       setPins(initialPins); current.current.pins = initialPins;
+      setAnglePins(initialAnglePins); current.current.anglePins = initialAnglePins;
       applyState(initialState); setTarget(initialState.handles.pelvis.position);
       setMessage('부위에 마우스를 올리고 축을 드래그하세요. 양발은 고정되어 있습니다.');
     }).catch(e => setError(`계산 서버에 연결할 수 없습니다: ${e.message}`));
@@ -415,7 +419,7 @@ export default function Editor() {
       }
     };
   }, []);
-  useEffect(() => { scene.current?.select(selected, pins, members); }, [selected, pins, members]);
+  useEffect(() => { scene.current?.select(selected, pins, members, anglePins); }, [selected, pins, anglePins, members]);
   useEffect(() => {
     scene.current?.setTransformMode(transformMode, space);
     const pose = current.current.state;
@@ -434,11 +438,11 @@ export default function Editor() {
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
-      try { localStorage.setItem('g1-motion-draft-v1', JSON.stringify({ ...project, current_qpos: state.qpos, pins, scene_objects: objects })); }
+      try { localStorage.setItem('g1-motion-draft-v1', JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects })); }
       catch { setMessage('브라우저 자동 저장 공간이 부족합니다. 파일 저장을 사용하세요.'); }
     }, 500);
     return () => clearTimeout(timer);
-  }, [project, state, pins, objects, playing, preview]);
+  }, [project, state, pins, anglePins, objects, playing, preview]);
   useEffect(() => {
     if (!playing || !preview) return;
     const start = performance.now() - preview.time[sample] * 1000;
@@ -465,6 +469,12 @@ export default function Editor() {
     setPins(p => p.includes(key) ? p.filter(k => k !== key) : [...p, key]);
     invalidate(); setPoseDirty(true);
   }
+  function toggleAnglePin(key: string) {
+    if (busy || solving || playing) return;
+    checkpoint();
+    setAnglePins(values => values.includes(key) ? values.filter(value => value !== key) : [...values, key]);
+    invalidate(); setPoseDirty(true);
+  }
   async function loadProject(next: Project) {
     const valid = await api<Project>('validate', { project: next });
     const pose = await api<PoseState>('pose', { qpos: valid.current_qpos ?? valid.keyframes[0].qpos });
@@ -473,6 +483,7 @@ export default function Editor() {
     setProject(normalized); current.current.project = normalized; setFrameIndex(0);
     setObjects(nextObjects); current.current.objects = nextObjects; selectObject(null);
     setPins(valid.pins ?? valid.keyframes[0].pins);
+    setAnglePins(valid.angle_pins ?? valid.keyframes[0].angle_pins ?? []);
     applyState(pose); invalidate(); setPoseDirty(false); setInfo(null);
     history.current = []; future.current = []; setHistoryCount(0); setFutureCount(0);
     changeGraspPickMode(null);
@@ -515,10 +526,10 @@ export default function Editor() {
     const object = objects.find(value => value.id === grasp?.object_id);
     if (!frame || !grasp || !object) return;
     await run(async () => {
-      const result = await api<{ state: PoseState; grasp: TwoHandGrasp; solver: { contact: SolveInfo; closure: SolveInfo } }>('grasp-fit', {
-        qpos: frame.qpos, pins: frame.pins, object, grasp,
+      const result = await api<{ state: PoseState; grasp: TwoHandGrasp; solver: { contact: SolveInfo } }>('grasp-fit', {
+        qpos: frame.qpos, pins: frame.pins, angle_pins: frame.angle_pins ?? [], object, grasp,
       });
-      checkpoint(); applyState(result.state); setPins([...frame.pins]); setPoseDirty(false); setInfo(result.solver.contact);
+      checkpoint(); applyState(result.state); setPins([...frame.pins]); setAnglePins([...(frame.angle_pins ?? [])]); setPoseDirty(false); setInfo(result.solver.contact);
       setProject(value => value ? { ...value, keyframes: value.keyframes.map((item, index) => index === frameIndex
         ? { ...item, qpos: [...result.state.qpos], grasp: result.grasp } : item) } : value);
       invalidate(); changeGraspPickMode(null);
@@ -532,11 +543,12 @@ export default function Editor() {
     const finish = (restored?: PoseState) => {
       setProject({ ...project, keyframes: duplicated.keyframes }); setFrameIndex(duplicated.index);
       if (restored) applyState(restored);
-      setPins([...source.pins]); setPoseDirty(false); setInfo(null); invalidate();
+      setPins([...source.pins]); setAnglePins([...(source.angle_pins ?? [])]); setPoseDirty(false); setInfo(null); invalidate();
       setMessage('선택한 키프레임을 바로 다음 순번에 복제했습니다.');
     };
     const displayedPoseDiffers = source.qpos.some((value, index) => Math.abs(value - state.qpos[index]) > 1e-10)
-      || source.pins.length !== pins.length || source.pins.some(pin => !pins.includes(pin));
+      || source.pins.length !== pins.length || source.pins.some(pin => !pins.includes(pin))
+      || (source.angle_pins?.length ?? 0) !== anglePins.length || (source.angle_pins ?? []).some(pin => !anglePins.includes(pin));
     if (poseDirty || displayedPoseDiffers) {
       void run(async () => { const restored = await api<PoseState>('pose', { qpos: source.qpos }); checkpoint(); finish(restored); });
     } else finish();
@@ -544,7 +556,7 @@ export default function Editor() {
   async function chooseFrame(index: number) {
     if (!project) return;
     const f = project.keyframes[index];
-    await run(async () => { checkpoint(); changeGraspPickMode(null); applyState(await api<PoseState>('pose', { qpos: f.qpos })); setPins(f.pins); setFrameIndex(index); setPoseDirty(false); setInfo(null); });
+    await run(async () => { checkpoint(); changeGraspPickMode(null); applyState(await api<PoseState>('pose', { qpos: f.qpos })); setPins(f.pins); setAnglePins(f.angle_pins ?? []); setFrameIndex(index); setPoseDirty(false); setInfo(null); });
   }
   function changeHistory(redo: boolean) {
     if (current.current.busy || current.current.playing || inFlight.current || dragActive.current) return;
@@ -560,7 +572,8 @@ export default function Editor() {
       from.pop();
       to.push(currentSnapshot);
       const restoredObjects = structuredClone(value.objects);
-      applyState(restored); current.current.pins = [...value.pins]; setPins([...value.pins]); setInfo(null);
+      applyState(restored); current.current.pins = [...value.pins]; setPins([...value.pins]);
+      current.current.anglePins = [...value.anglePins]; setAnglePins([...value.anglePins]); setInfo(null);
       current.current.objects = restoredObjects; setObjects(restoredObjects);
       setProject(projectValue => projectValue ? { ...projectValue, scene_objects: restoredObjects, keyframes: structuredClone(value.keyframes) } : projectValue);
       if (current.current.selectedObjectId) {
@@ -600,7 +613,7 @@ export default function Editor() {
     if (!project || !state) return;
     void run(async () => {
       const result = await api<{ files: string[]; directory: string; project: Project; display_name: string; reused: boolean; warnings?: string[]; metadata: { samples: number; validation: { max_pin_error_mm: number } } }>(saveAs ? 'save-as' : 'save', {
-        project: { ...project, current_qpos: state.qpos, pins, scene_objects: objects }, fps, protomotions: exportProto,
+        project: { ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects }, fps, protomotions: exportProto,
       });
       setProject(result.project); current.current.project = result.project;
       setFiles(result.files); setSaved(await api<string[]>('saved'));
@@ -622,7 +635,7 @@ export default function Editor() {
         return;
       }
       const request: { id?: string; cancelled: boolean } = { cancelled: false };
-      policySource.current = state ? { state, pins: [...pins], frameIndex, dirty: poseDirty } : null;
+      policySource.current = state ? { state, pins: [...pins], anglePins: [...anglePins], frameIndex, dirty: poseDirty } : null;
       policyRequest.current = request;
       try {
         const startFrame = project?.keyframes[frameIndex];
@@ -662,7 +675,8 @@ export default function Editor() {
     });
   }
   async function validateGraspPhysics() {
-    if (!project?.keyframes[frameIndex]?.grasp?.closure_qpos) return;
+    const grasp = project?.keyframes[frameIndex]?.grasp;
+    if (!grasp?.object_signature || grasp.closure_qpos) return;
     if (!physicsEnabled) { setPhysicsEnabled(true); setMessage('양손 파지 물리 검증을 준비합니다.'); }
     await play(true);
   }
@@ -678,7 +692,7 @@ export default function Editor() {
   function changeSimulation(physics: boolean, policy: boolean) {
     const source = policySource.current;
     if (preview?.physics && source) {
-      applyState(source.state); setFrameIndex(source.frameIndex); setPins(source.pins); setPoseDirty(source.dirty);
+      applyState(source.state); setFrameIndex(source.frameIndex); setPins(source.pins); setAnglePins(source.anglePins); setPoseDirty(source.dirty);
     }
     policySource.current = null;
     scene.current?.setSceneObjects(current.current.objects);
@@ -694,7 +708,8 @@ export default function Editor() {
   const mirrorActive = mirror && mirrorAvailable && transformMode === 'translate';
   const activeControl = controlKey(members, selected);
   const rotationAllowed = canRotateSelection(controls);
-  const rotationBlocked = !rotationAllowed || controls.some(k => pins.includes(k) && (controls.length > 1 || feet.includes(k)));
+  const selectionAnglePinned = members.some(k => anglePins.includes(k)) || controls.some(k => anglePins.includes(k));
+  const rotationBlocked = !rotationAllowed || selectionAnglePinned || controls.some(k => pins.includes(k) && (controls.length > 1 || feet.includes(k)));
   const hinge = controls.length === 1 ? state?.hinges?.[activeControl] : undefined;
   const ankle = controls.length === 1 && ANKLE_HANDLES.includes(activeControl);
   const selectedJoints = members.filter(key => key.endsWith('_joint'));
@@ -716,7 +731,7 @@ export default function Editor() {
     <aside className="left-panel panel">
       <div className="panel-heading"><span>BODY GROUPS</span><small>29자유도</small></div>
       <p className="hint">그룹 이름: 전체 선택 · 화살표: 펼치기/접기 · 하위 관절: 하나만 선택 · Shift: 추가/해제</p>
-      <BodyControls pose={state} selected={members} pins={pins} expanded={expanded} disabled={disabled} onExpand={toggleExpanded} onSelect={selectBatch} onPin={togglePin}/>
+      <BodyControls pose={state} selected={members} pins={pins} anglePins={anglePins} expanded={expanded} disabled={disabled} onExpand={toggleExpanded} onSelect={selectBatch} onPin={togglePin} onAnglePin={toggleAnglePin}/>
       <div className="section-divider"/>
       <div className="panel-heading"><span>사용자 지정 프리셋</span><small>{members.length}개 선택</small></div>
       <select className="group-control" aria-label="그룹 프리셋 선택" value={groupId} disabled={disabled} onChange={e => {
@@ -744,9 +759,9 @@ export default function Editor() {
       <div className="segmented"><button disabled={disabled} className={mode === 'elastic' ? 'chosen' : ''} onClick={() => setMode('elastic')}>유연하게 따라오기</button><button disabled={disabled} className={mode === 'free' ? 'chosen' : ''} onClick={() => setMode('free')}>고정 부위만 유지</button></div>
       <label className="range-label">주변 부위 저항 <span>{resistance.toFixed(1)}</span><input aria-label="주변 부위 저항" type="range" min="0" max="5" step="0.1" value={resistance} disabled={disabled || mode === 'free'} onChange={e => setResistance(+e.target.value)}/></label>
       <p className="hint">먼 부위일수록 원래 위치를 더 유지합니다. 손의 위치를 정확히 유지하려면 손을 고정하세요.</p>
-      <div className="pin-summary"><LockKeyhole size={14}/><span>발: 위치 + 방향<br/>그 외: 위치 고정</span></div>
+      <div className="pin-summary"><LockKeyhole size={14}/><span>노란 자물쇠: 위치 고정<br/>보라 회전 아이콘: 방향·관절각만 고정</span></div>
       <div className="section-divider"/>
-      <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); const init = await api<{state: PoseState}>('init'); applyState(init.state); setPins(feet); setPoseDirty(true); invalidate(); })}><RotateCcw size={15}/> 기본 서기 자세</button>
+      <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); const init = await api<{state: PoseState}>('init'); applyState(init.state); setPins(feet); setAnglePins([]); setPoseDirty(true); invalidate(); })}><RotateCcw size={15}/> 기본 서기 자세</button>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => {
         const init = await api<{ project: Project }>('init');
         await loadProject(init.project);
@@ -772,7 +787,7 @@ export default function Editor() {
         <button type="button" onClick={() => void cancelPolicy()}>계산 취소</button>
       </div>}
       <div className="viewport-tools"><button title="되돌리기 (Ctrl+Z)" aria-label="되돌리기" aria-keyshortcuts="Control+Z Meta+Z" disabled={disabled || !historyCount} onClick={() => changeHistory(false)}><Undo2 size={17}/></button><button title="되돌리기 취소 (Ctrl+Shift+Z)" aria-label="되돌리기 취소" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled={disabled || !futureCount} onClick={() => changeHistory(true)}><Redo2 size={17}/></button><span/><button className={showHandles ? 'chosen' : ''} title="조작 표시 켜기/끄기" onClick={() => setShowHandles(!showHandles)}><MousePointer2 size={17}/></button></div>
-      <div className="scene-legend"><span><i className="cyan"/>이동 가능</span><span><i className="amber"/>고정</span><span><i className="mint"/>선택</span></div>
+      <div className="scene-legend"><span><i className="cyan"/>이동 가능</span><span><i className="amber"/>위치 고정</span><span><i className="violet"/>각도 고정</span><span><i className="mint"/>선택</span></div>
       <div className="viewport-bottom"><span>드래그: 회전 · 휠: 확대 · 우클릭: 이동 · 로봇 W/E · 물체 W/E/R · F: 선택 보기</span><span className="axes"><b>X</b> 전방 <b>Y</b> 왼쪽 <b>Z</b> 위</span></div>
       {busy && <div className="busy-overlay"><span className="spinner"/>모션을 계산하고 있습니다…</div>}
     </main>
@@ -782,7 +797,7 @@ export default function Editor() {
       <div className="segmented"><button className={space === 'world' ? 'chosen' : ''} disabled={disabled || transformMode === 'rotate' && (!!hinge || ankle)} onClick={() => setSpace('world')} title="장면에 고정된 XYZ 축으로 드래그">월드 축</button><button className={space === 'local' ? 'chosen' : ''} disabled={disabled || transformMode === 'rotate' && (!!hinge || ankle)} onClick={() => setSpace('local')} title="선택 부위의 방향을 따라가는 XYZ 축으로 드래그">로컬 축</button></div>
       <div className="segmented"><button className={!mirror ? 'chosen' : ''} disabled={disabled} onClick={() => setMirror(false)}>일반 이동</button><button className={mirror ? 'chosen' : ''} disabled={disabled} aria-pressed={mirror} onClick={() => setMirror(true)}>좌우 미러 이동</button></div>
       {mirror && <p className="hint">{mirrorActive ? `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 이쪽을 바깥/안쪽으로 드래그하면 반대쪽도 대칭 이동합니다. 골반의 좌우 평면을 기준으로 합니다.` : !mirrorAvailable ? '좌우 짝을 모두 선택하면 미러 이동이 활성화됩니다.' : 'W 이동 모드에서 미러 이동을 사용할 수 있습니다.'}</p>}
-      <h2>{selectedGroup?.label ?? (members.length > 1 ? `${members.length}개 부위` : state?.handles[selected].label ?? '골반')} <span>{selectionPinned ? '고정 포함' : '이동 가능'}</span></h2>
+      <h2>{selectedGroup?.label ?? (members.length > 1 ? `${members.length}개 부위` : state?.handles[selected].label ?? '골반')} <span>{selectionPinned ? '위치 고정 포함' : selectionAnglePinned ? '각도 고정 포함' : '이동 가능'}</span></h2>
       <p className="hint">{members.map(k => state?.handles[k].label ?? k).join(' · ')}</p>
       <button className="wide" disabled={!state} onClick={() => scene.current?.focusSelection()}>선택 부위 보기 <kbd>F</kbd></button>
       {partJoints && <div className="part-angle-editor">
@@ -842,7 +857,7 @@ export default function Editor() {
       </details>
     </aside>
     <section className="timeline">
-      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{motionClip ? `1 clip · ${motionClip.length} frames` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<button disabled={disabled || !activeFrame || !!motionClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세를 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || !!motionClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
+      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{motionClip ? `1 clip · ${motionClip.length} frames` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<button disabled={disabled || !activeFrame || !!motionClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || !!motionClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
       <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled ? `${controllerLabel} 물리 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label>
         <div className="simulation-toggles">
         <button className="policy-toggle" type="button" aria-pressed={physicsEnabled} disabled={!state || busy || solving || playing || !physicsAvailable} onClick={() => changeSimulation(!physicsEnabled, false)} title={!physicsAvailable ? '물리 재생을 사용하려면 서버를 업데이트하고 재시작하세요.' : 'ON: 중력·접촉·관절 토크 계산 · OFF: 정책도 끄고 원본 편집으로 돌아가기'}>
@@ -853,7 +868,7 @@ export default function Editor() {
         </button>
         </div>
       </div>
-        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · {f.pins.length} 고정</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
+        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
         <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>{motionClip ? '클립 재생 시간' : '이동 시간'} <input aria-label="키프레임 이동 시간" type="number" min={motionClip ? 1/120 : .1} max={motionClip ? 600 : 60} step=".01" disabled={disabled || (!motionClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = motionClip ? 1/120 : .1; const maximum = motionClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
       </div>
       <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) { applyState(preview.states[i]); if (preview.object_states?.[i]) scene.current?.setObjectPoses(preview.object_states[i]); } }}/>

@@ -11,7 +11,8 @@ from pathlib import Path
 import numpy as np
 import mujoco
 from scipy.spatial.transform import Rotation, Slerp
-from .robot import Robot, ROOT, FEET, HANDLES, BASIC_ROTATABLE as ROTATABLE, quat_matrix, matrix_quat
+from .robot import (Robot, ROOT, FEET, HANDLES, HINGES, ANGLE_LOCKABLE,
+                    BASIC_ROTATABLE as ROTATABLE, quat_matrix, matrix_quat)
 from .kimodo_format import KIMODO_KEYS, export_kimodo_g1, kimodo_g1_to_qpos
 
 FORMAT = 'motioncreator.g1.v1'
@@ -183,15 +184,21 @@ def validate_project(robot: Robot, project):
                 raise ValueError('Motion clip qpos must match its first sample')
             if frame.get('pins'):
                 raise ValueError('Motion clips cannot use pins until they are split into keyframes')
+            if frame.get('angle_pins'):
+                raise ValueError('Motion clips cannot use angle pins until they are split into keyframes')
         total += duration
         if any(k not in HANDLES for k in frame.get('pins', [])):
             raise ValueError('Unknown pinned handle')
+        if any(k not in ANGLE_LOCKABLE for k in frame.get('angle_pins', [])):
+            raise ValueError('Unknown angle-pinned handle')
     if total > 600:
         raise ValueError('Maximum project length is 600 seconds')
     if 'current_qpos' in project:
         robot.validate_q(project['current_qpos'])
     if any(k not in HANDLES for k in project.get('pins', [])):
         raise ValueError('Unknown pinned handle')
+    if any(k not in ANGLE_LOCKABLE for k in project.get('angle_pins', [])):
+        raise ValueError('Unknown angle-pinned handle')
     if 'box' in project:
         box = project['box']
         for field in ('position', 'size'):
@@ -272,7 +279,9 @@ def new_project(robot, name=''):
             'model_sha256': robot.fingerprint,
             'joint_names': robot.names, 'coordinate_system': 'right-handed, +X forward, +Y left, +Z up',
             'units': {'position': 'm', 'angle': 'rad', 'time': 's'},
-            'keyframes': [{'name': 'Stand', 'duration': 2., 'qpos': robot.home.tolist(), 'pins': list(FEET)}]}
+            'angle_pins': [],
+            'keyframes': [{'name': 'Stand', 'duration': 2., 'qpos': robot.home.tolist(),
+                           'pins': list(FEET), 'angle_pins': []}]}
 
 
 def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: int = 30):
@@ -315,6 +324,7 @@ def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: 
                              'qpos': validated[0].tolist(), 'pins': [], 'samples': validated.tolist()}]
     project['current_qpos'] = validated[0].tolist()
     project['pins'] = []
+    project['angle_pins'] = []
     return validate_project(robot, project)
 
 
@@ -372,11 +382,19 @@ def compile_motion(robot: Robot, project, fps=30):
         pa = {k: robot.point(da, k) for k in HANDLES}
         pb = {k: robot.point(db, k) for k in HANDLES}
         pins = sorted(set(a.get('pins', [])) & set(b.get('pins', [])))
+        angle_pins = sorted(set(a.get('angle_pins', [])) & set(b.get('angle_pins', [])))
         for k in pins:
             if np.linalg.norm(pa[k][0] - pb[k][0]) > .004:
                 raise ValueError(f'{HANDLES[k][2]} changes position while pinned. Unpin it in one endpoint before moving it.')
             if k in FEET and np.linalg.norm(pa[k][1] - pb[k][1]) > .02:
                 raise ValueError(f'{HANDLES[k][2]} changes orientation while pinned')
+        for k in angle_pins:
+            if k in HINGES:
+                address = robot.model.joint(HINGES[k]).qposadr[0]
+                if abs(qa[address] - qb[address]) > np.deg2rad(.5):
+                    raise ValueError(f'{HANDLES[k][2]} changes joint angle while angle-pinned')
+            elif np.linalg.norm(Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec()) > np.deg2rad(.5):
+                raise ValueError(f'{HANDLES[k][2]} changes orientation while angle-pinned')
         # Each destination frame's duration describes travel time from its predecessor.
         duration = float(b['duration'])
         count = max(1, round(duration * fps))
@@ -393,14 +411,16 @@ def compile_motion(robot: Robot, project, fps=30):
                 q[3:7] *= -1
             if i == count:
                 q = qb.copy()
-            if i != count and pins:
+            if i != count and (pins or angle_pins):
                 rotations = {k: pa[k][1] @ Rotation.from_rotvec(s*angular_deltas[k]).as_matrix() for k in ROTATABLE}
                 targets = {k: ((1-s)*pa[k][0] + s*pb[k][0], rotations.get(k, pa[k][1])) for k in HANDLES}
                 # Root orientation follows SLERP exactly; only end-effector rotations need projection.
                 orientations = {k: Rotation.from_matrix(rotations[k]).as_quat() for k in ROTATABLE
-                                if k != 'pelvis' and not (k in FEET and k in pins) and np.linalg.norm(angular_deltas[k]) > 1e-5}
+                                if k != 'pelvis' and k not in angle_pins and not (k in FEET and k in pins)
+                                and np.linalg.norm(angular_deltas[k]) > 1e-5}
                 q, info = robot.solve(q, qa, pins=pins, targets=targets, max_nfev=18,
-                                     posture_reference=q, posture_weight=.8, orientation_targets=orientations)
+                                     posture_reference=q, posture_weight=.8, orientation_targets=orientations,
+                                     angle_pins=angle_pins)
                 if info['rejected']:
                     raise ValueError('The transition cannot preserve its pins. Add intermediate keyframes or relax a pin.')
                 pin_errors.append(info['pin_error_mm'])

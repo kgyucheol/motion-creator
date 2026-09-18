@@ -59,6 +59,7 @@ for key, joint, label in [('waist', 'waist_roll_joint', '허리'),
     HANDLES[key] = (body, offset, label)
 # Ankles expose motor-angle targets, not an arbitrary 3-D orientation target.
 ROTATABLE = (*ROTATABLE, 'waist')
+ANGLE_LOCKABLE = tuple(dict.fromkeys((*ROTATABLE, *HINGES)))
 
 
 def skew(v):
@@ -147,11 +148,12 @@ class Robot:
 
     def solve(self, q, anchor, focus=None, target=None, pins=FEET, resistance=1., mode='elastic', targets=None, max_nfev=50,
               posture_reference=None, posture_weight=.055, selected_targets=None, orientation_targets=None,
-              joint_targets=None):
+              joint_targets=None, angle_pins=()):
         q, anchor = self.validate_q(q), self.validate_q(anchor)
         selected_targets = dict(selected_targets or {})
         orientation_targets = dict(orientation_targets or {})
         joint_targets = dict(joint_targets or {})
+        angle_pins = tuple(dict.fromkeys(angle_pins or ()))
         if focus is not None:
             selected_targets[focus] = target
         if any(k not in HANDLES for k in [*pins, *selected_targets, *orientation_targets]):
@@ -160,6 +162,10 @@ class Robot:
             raise ValueError('선택한 부위에 고정된 부위가 있습니다. 이동하려면 먼저 고정을 해제하세요.')
         if any(k not in ROTATABLE for k in orientation_targets):
             raise ValueError('방향 회전은 골반·손·발·통합 고관절·허리에서 지원합니다. 개별 관절과 통합 발목은 관절각 목표를 사용하세요.')
+        if any(k not in ANGLE_LOCKABLE for k in angle_pins):
+            raise ValueError('각도 고정을 지원하지 않는 부위입니다.')
+        if set(orientation_targets) & set(angle_pins):
+            raise ValueError('각도가 고정된 부위를 회전하려면 각도 고정을 해제하세요.')
         if set(orientation_targets) & set(pins) & set(FEET):
             raise ValueError('발 방향이 고정되어 있습니다. 회전하려면 발 고정을 해제하세요.')
         if any(k not in self.names for k in joint_targets):
@@ -170,6 +176,11 @@ class Robot:
                 raise ValueError('Joint target exceeds joint limits')
         ad = self.data(anchor)
         base_targets = {k: self.point(ad, k) for k in HANDLES}
+        orientation_locks = {key: base_targets[key][1] for key in angle_pins if key in ROTATABLE}
+        joint_locks = {HINGES[key]: float(anchor[self.model.joint(HINGES[key]).qposadr[0]])
+                       for key in angle_pins if key in HINGES}
+        if set(joint_targets) & set(joint_locks):
+            raise ValueError('각도가 고정된 관절을 조정하려면 각도 고정을 해제하세요.')
         desired = {k: (p.copy(), r.copy()) for k, (p, r) in base_targets.items()}
         if targets:
             desired.update(targets)
@@ -183,9 +194,12 @@ class Robot:
             if quat.shape != (4,) or not np.isfinite(quat).all() or abs(np.linalg.norm(quat)-1) > 1e-4:
                 raise ValueError('Orientation target must be a normalized xyzw quaternion')
             desired[key] = (desired[key][0], Rotation.from_quat(quat).as_matrix())
-        active = set(selected_targets) | set(orientation_targets) | set(joint_targets)
+        for key, rotation in orientation_locks.items():
+            desired[key] = (desired[key][0], rotation)
+        active = set(selected_targets) | set(orientation_targets) | set(joint_targets) | set(angle_pins)
         # Extra selectable anchors must not add passive resistance everywhere.
-        solve_handles = tuple(dict.fromkeys([*BASIC_HANDLES, *pins, *selected_targets, *orientation_targets]))
+        solve_handles = tuple(dict.fromkeys([*BASIC_HANDLES, *pins, *selected_targets,
+                                             *orientation_targets, *orientation_locks]))
         weights = {}
         for k in solve_handles:
             if k in pins:
@@ -193,6 +207,9 @@ class Robot:
                 desired[k] = (base_targets[k][0], desired[k][1] if k in orientation_targets else base_targets[k][1])
             elif k in selected_targets or k in orientation_targets:
                 weights[k] = 28.
+            elif k in orientation_locks:
+                # An angle-only lock must not resist translation of the handle.
+                weights[k] = 0.
             elif targets:
                 weights[k] = 4.
             elif mode == 'elastic':
@@ -235,15 +252,19 @@ class Robot:
             for k in solve_handles:
                 p, r = self.point(d, k)
                 tp, tr = desired[k]
-                residuals.append(weights[k] * (p-tp))
-                if jac:
-                    jpos, jrot = jacobian(p, self.ids[k], self.orientation_ids[k])
-                    matrices.append(weights[k] * jpos)
-                if k in orientation_targets or (k in pins and k in FEET):
-                    w = 90. if k in pins and k in FEET else 18.
+                jpos = jrot = None
+                if weights[k]:
+                    residuals.append(weights[k] * (p-tp))
+                    if jac:
+                        jpos, jrot = jacobian(p, self.ids[k], self.orientation_ids[k])
+                        matrices.append(weights[k] * jpos)
+                if k in orientation_targets or k in orientation_locks or (k in pins and k in FEET):
+                    w = 90. if k in orientation_locks or (k in pins and k in FEET) else 18.
                     err = Rotation.from_matrix(r @ tr.T).as_rotvec()
                     residuals.append(w * err)
                     if jac:
+                        if jrot is None:
+                            _, jrot = jacobian(p, self.ids[k], self.orientation_ids[k])
                         matrices.append(w * left_jacobian_inverse(err) @ jrot)
                 if k in FEET:
                     for offset in ((-.085, -.03, 0), (-.085, .03, 0), (.085, -.03, 0), (.085, .03, 0)):
@@ -257,6 +278,11 @@ class Robot:
                 residuals.append(np.array([24.*(x[index]-value)]))
                 if jac:
                     row = np.zeros((1, n)); row[0, index] = 24.; matrices.append(row)
+            for key, value in joint_locks.items():
+                index = 3 + self.names.index(key)
+                residuals.append(np.array([120.*(x[index]-value)]))
+                if jac:
+                    row = np.zeros((1, n)); row[0, index] = 120.; matrices.append(row)
             residuals.append(posture_weight*(x-posture_x))
             if jac:
                 matrices.append(posture_weight*np.eye(n))
@@ -278,7 +304,12 @@ class Robot:
         rd = self.data(answer)
         pin_error = max((np.linalg.norm(self.point(rd, k)[0]-base_targets[k][0]) for k in pins), default=0.)
         angle_error = max((np.linalg.norm(Rotation.from_matrix(self.point(rd, k)[1] @ base_targets[k][1].T).as_rotvec()) for k in pins if k in FEET), default=0.)
-        rejected = bool(pin_error > .003 or angle_error > .015)
+        orientation_pin_error = max((np.linalg.norm(Rotation.from_matrix(self.point(rd, k)[1] @ base_targets[k][1].T).as_rotvec())
+                                     for k in orientation_locks), default=0.)
+        joint_pin_error = max((abs(answer[self.model.joint(name).qposadr[0]] - value)
+                               for name, value in joint_locks.items()), default=0.)
+        angle_pin_error = max(orientation_pin_error, joint_pin_error)
+        rejected = bool(pin_error > .003 or angle_error > .015 or angle_pin_error > np.deg2rad(.5))
         if rejected:
             answer = q; rd = self.data(answer)
         errors = {key: float(np.linalg.norm(self.point(rd, key)[0]-desired[key][0]))*1000
@@ -291,7 +322,8 @@ class Robot:
                         'rejected': rejected, 'converged': error < 10 and angular_error < 2 and not rejected,
                         'evaluations': result.nfev, 'target_errors_mm': errors,
                         'angle_error_deg': angular_error, 'rotation_errors_deg': rotation_errors,
-                        'joint_errors_deg': joint_errors}
+                        'joint_errors_deg': joint_errors,
+                        'angle_pin_error_deg': float(np.rad2deg(angle_pin_error))}
 
     def state(self, q):
         d = self.data(q)

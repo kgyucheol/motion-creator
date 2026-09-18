@@ -21,7 +21,6 @@ import mujoco
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .grasp import object_signature
 from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_quaternion_wxyz
 from .hand_collision import physical_hand_geom_names
 from .motion import compile_motion, project_scene_objects, validate_project
@@ -166,31 +165,15 @@ def _grasp_activation(project: dict) -> tuple[float, dict, list[float]] | None:
 
 
 def prepare_grasp_control(robot: Robot, project: dict) -> dict | None:
-    """Use only an explicitly fitted editor grasp as an optional closure target.
-
-    Decoupled WBC consumes authored upper-body joint positions directly.  It must
-    not silently run a second IK fit because that changes the motion the user
-    reviewed in the editor.  A valid stored closure pose may still add the small,
-    intentional squeeze needed to generate physical contact force.
-    """
+    """Describe an editor-fitted grasp without adding a playback-only arm offset."""
     objects = project_scene_objects(project)
     activation = _grasp_activation(project)
     if activation is None:
         return None
-    elapsed, event, authored_qpos = activation
+    elapsed, event, _ = activation
     item = next(value for value in objects if value["id"] == event["object_id"])
-    closure = event.get("closure_qpos")
-    closure_ready = closure is not None and event.get("object_signature") == object_signature(item)
-    arm_offset = np.zeros(14)
-    if closure_ready:
-        authored = robot.validate_q(authored_qpos)
-        closed = robot.validate_q(closure)
-        arm_offset = closed[22:36] - authored[22:36]
     return {
         "object_id": item["id"], "start_time": elapsed,
-        "closure_seconds": float(event["closure_seconds"]),
-        "closure_ready": closure_ready,
-        "arm_offset": arm_offset,
         "target_force_n": float(event["target_force_n"]),
         "max_force_n": float(event["max_force_n"]),
     }
@@ -406,12 +389,6 @@ class DecoupledSimulation:
         settle = self.parameters["upper_body_settle_seconds"]
         if self.play_time < settle:
             return self._reference_at(0.)[22:36]
-        if self.grasp_control and self.grasp_control["closure_ready"]:
-            start = self.grasp_control["start_time"]
-            if self.motion_time >= start:
-                progress = np.clip((self.motion_time - start) / self.grasp_control["closure_seconds"], 0., 1.)
-                progress = progress * progress * (3 - 2 * progress)
-                target = target + progress * self.grasp_control["arm_offset"]
         return target
 
     @staticmethod
@@ -486,8 +463,6 @@ class DecoupledSimulation:
                 start = self.grasp_control["start_time"]
                 grasp = {key: value for key, value in self.grasp_control.items() if not key.endswith("_offset")}
                 grasp["active"] = self.motion_time >= start
-                grasp["closure"] = float(np.clip((self.motion_time - start)
-                                                  / self.grasp_control["closure_seconds"], 0., 1.))
                 forces = self._grasp_contact_forces()
                 grasp["normal_force_n"] = forces
                 grasp["bilateral_contact"] = all(force > 0 for force in forces.values())
