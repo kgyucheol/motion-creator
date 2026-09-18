@@ -23,7 +23,7 @@ def box_at_hands():
 def event():
     return {'format': GRASP_FORMAT, 'object_id': 'grasp-box',
             'left_surface_uv': [0., 0.], 'right_surface_uv': [0., 0.],
-            'inward_offset_m': .01, 'closure_seconds': .1,
+            'hand_gap_m': .19, 'closure_seconds': .1,
             'target_force_n': 2., 'max_force_n': 100.}
 
 
@@ -42,12 +42,35 @@ def test_grasp_fit_applies_offset_to_authored_pose_without_hidden_closure(tmp_pa
     validate_project(robot, project)
     assert result['solver']['contact']['target_error_mm'] < 1
     assert result['grasp']['contact_anchor'] == 'finger_wrist_pad'
+    assert result['grasp']['hand_gap_m'] == pytest.approx(.19)
+    assert 'inward_offset_m' not in result['grasp']
     assert 'closure_qpos' not in result['grasp']
     json.dumps(project, allow_nan=False)
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
     reopened = json.loads((tmp_path / bundle['project_file']).read_text())
     assert reopened['keyframes'][0]['grasp']['object_id'] == 'grasp-box'
     validate_project(robot, reopened)
+
+
+def test_legacy_inward_offset_migrates_to_absolute_hand_gap():
+    robot = Robot()
+    item = box_at_hands()
+    legacy = event()
+    legacy.pop('hand_gap_m')
+    legacy['inward_offset_m'] = .01
+    result = fit_two_hand_grasp(robot, robot.home, ['left_foot', 'right_foot'], item, legacy)
+    assert result['grasp']['hand_gap_m'] == pytest.approx(item['size'][1] - .01)
+    assert 'inward_offset_m' not in result['grasp']
+
+    project = new_project(robot)
+    project['scene_objects'] = [item]
+    legacy_project_event = event()
+    legacy_project_event.pop('hand_gap_m')
+    legacy_project_event['inward_offset_m'] = .01
+    project['keyframes'][0]['grasp'] = legacy_project_event
+    validate_project(robot, project)
+    assert legacy_project_event['hand_gap_m'] == pytest.approx(.19)
+    assert 'inward_offset_m' not in legacy_project_event
 
 
 def test_grasp_uses_visible_finger_to_wrist_box_pads():

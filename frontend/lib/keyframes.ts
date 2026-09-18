@@ -3,7 +3,9 @@ export type TwoHandGrasp = {
   object_id: string;
   left_surface_uv: number[];
   right_surface_uv: number[];
-  inward_offset_m: number;
+  hand_gap_m?: number;
+  /** Legacy: hand_gap_m = box width - inward_offset_m. */
+  inward_offset_m?: number;
   closure_seconds: number;
   target_force_n: number;
   max_force_n: number;

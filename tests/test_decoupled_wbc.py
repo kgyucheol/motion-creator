@@ -70,7 +70,7 @@ def test_grasp_control_ignores_stale_initial_event_and_never_refits_authored_pos
     project["scene_objects"] = [item]
     event = {"format": "motioncreator.two-hand-grasp.v1", "object_id": "crate",
              "left_surface_uv": [0., 0.], "right_surface_uv": [0., 0.],
-             "inward_offset_m": .01, "closure_seconds": .4,
+             "hand_gap_m": .29, "closure_seconds": .4,
              "target_force_n": 8., "max_force_n": 60.}
     project["keyframes"][0]["grasp"] = copy.deepcopy(event)
     approach = copy.deepcopy(project["keyframes"][0])

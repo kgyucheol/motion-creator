@@ -42,12 +42,22 @@ def validate_grasp_event(robot: Robot, event, objects):
         raise ValueError('Two-hand grasp interactions require an existing box object')
     _validate_uv(event.get('left_surface_uv'), 'Left hand')
     _validate_uv(event.get('right_surface_uv'), 'Right hand')
-    inset = float(event.get('inward_offset_m', 0.))
+    if 'hand_gap_m' in event:
+        gap = float(event['hand_gap_m'])
+    else:
+        # Compatibility with projects saved before hand gap became an absolute
+        # quantity.  The old value reduced the box-width spacing.
+        inset = float(event.get('inward_offset_m', 0.))
+        gap = float(target['size'][1]) - inset
     duration = float(event.get('closure_seconds', 0.))
     target_force = float(event.get('target_force_n', 0.))
     max_force = float(event.get('max_force_n', 0.))
-    if not np.isfinite(inset) or not 0 <= inset <= min(.06, float(target['size'][1]) - .03):
-        raise ValueError('Grasp inward offset must be 0–0.06 m and leave at least 0.03 m between targets')
+    if not np.isfinite(gap) or not 0 <= gap <= 1.2:
+        raise ValueError('Hand grasp-plane gap must be 0–1.2 m')
+    # Normalize legacy projects as they pass through load/save validation so
+    # subsequent saves contain only the absolute-gap representation.
+    event['hand_gap_m'] = gap
+    event.pop('inward_offset_m', None)
     if not np.isfinite(duration) or not .1 <= duration <= 2:
         raise ValueError('Grasp closure duration must be 0.1–2 seconds')
     if not np.isfinite(target_force) or not 1 <= target_force <= 200:
@@ -70,13 +80,16 @@ def _box_contact(item, uv, sign):
     return center + rotation @ local, rotation @ np.array([0., float(sign), 0.])
 
 
-def _targets(item, left_uv, right_uv, inward_offset, twist_degrees):
+def _targets(item, left_uv, right_uv, hand_gap, twist_degrees):
     box_rotation = Rotation.from_quat(item['quaternion_xyzw']).as_matrix()
     anchors = lower_palm_wrist_anchors()
     targets, orientations, contacts = {}, {}, {}
     for side, uv, sign in (('left', left_uv, 1), ('right', right_uv, -1)):
         surface, outward = _box_contact(item, uv, sign)
-        desired_contact = surface - outward * inward_offset / 2
+        # Absolute distance between the two auxiliary grasp planes.  Box width
+        # places them on the two faces; larger gaps form an approach pose and
+        # smaller gaps form an authored squeeze target.
+        desired_contact = surface + outward * (hand_gap - float(item['size'][1])) / 2
         twist = twist_degrees if side == 'left' else -twist_degrees
         pad_rotation = box_rotation @ Rotation.from_euler('y', twist, degrees=True).as_matrix()
         # The pad is angled in the wrist frame so its proximal edge intersects
@@ -102,10 +115,11 @@ def fit_two_hand_grasp(robot: Robot, qpos, pins, item, event, angle_pins=()):
     right_uv = _validate_uv(event['right_surface_uv'], 'Right hand')
     solve_pins = [key for key in pins if key not in HAND_KEYS]
     solve_angle_pins = [key for key in angle_pins if key not in HAND_KEYS]
-    inward_offset = float(event['inward_offset_m'])
+    hand_gap = (float(event['hand_gap_m']) if 'hand_gap_m' in event else
+                max(0., float(target['size'][1]) - float(event.get('inward_offset_m', 0.))))
     candidates = []
     for twist in (-30., -20., -10., 0., 10., 20., 30.):
-        targets, orientations, contacts = _targets(target, left_uv, right_uv, inward_offset, twist)
+        targets, orientations, contacts = _targets(target, left_uv, right_uv, hand_gap, twist)
         pose, info = robot.solve(source, source, pins=solve_pins, resistance=1.5, mode='elastic',
                                 selected_targets=targets, orientation_targets=orientations,
                                 angle_pins=solve_angle_pins, max_nfev=90,
@@ -120,8 +134,10 @@ def fit_two_hand_grasp(robot: Robot, qpos, pins, item, event, angle_pins=()):
     if contact_info['target_error_mm'] > 15 or contact_info.get('angle_error_deg', 0.) > 12:
         raise ValueError('양손 파지 오차가 너무 큽니다. 로봇이나 상자를 더 가까이 배치하세요.')
 
-    fitted = {key: value for key, value in event.items() if key != 'closure_qpos'}
+    fitted = {key: value for key, value in event.items()
+              if key not in ('closure_qpos', 'inward_offset_m')}
     fitted.update({'object_signature': object_signature(item),
+              'hand_gap_m': hand_gap,
               'contact_anchor': 'finger_wrist_pad', 'hand_twist_deg': twist,
               'contact_points_world': contacts})
     return {'state': robot.state(contact_pose), 'grasp': fitted,
