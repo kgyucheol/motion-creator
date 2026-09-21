@@ -10,7 +10,7 @@ from motioncreator.grip_geometry import (GRIP_PAD_FORMAT, grip_pad_contact_ancho
                                          grip_pad_contact_normal, grip_pad_half_size,
                                          grip_pad_rotation)
 from motioncreator.motion import new_project, save_bundle, validate_project
-from motioncreator.policy_preview import build_model, compile_preview_motion, simulate
+from motioncreator.policy_preview import build_model, compile_preview_motion, project_from_keyframe, simulate
 from motioncreator.robot import Robot
 
 
@@ -43,6 +43,10 @@ def test_grasp_fit_applies_offset_to_authored_pose_without_hidden_closure(tmp_pa
     assert result['solver']['contact']['target_error_mm'] < 1
     assert result['grasp']['contact_anchor'] == 'finger_wrist_pad'
     assert result['grasp']['hand_gap_m'] == pytest.approx(.19)
+    assert result['grasp']['object_pose'] == {
+        'position': box_at_hands()['position'],
+        'quaternion_xyzw': box_at_hands()['quaternion_xyzw'],
+    }
     assert 'inward_offset_m' not in result['grasp']
     assert 'closure_qpos' not in result['grasp']
     json.dumps(project, allow_nan=False)
@@ -147,10 +151,12 @@ def test_physics_preview_uses_authored_grasp_pose_and_reports_contact():
     json.dumps(result, allow_nan=False)
 
 
-def test_moved_box_requires_grasp_refit():
+def test_keyframe_ghost_pose_is_independent_from_global_box_pose():
     robot, project, _ = fitted_project()
     moved = copy.deepcopy(project)
     moved['scene_objects'][0]['position'][0] += .1
     validate_project(robot, moved)
-    with pytest.raises(ValueError, match='다시 맞춰'):
-        compile_preview_motion(robot, moved)
+    compile_preview_motion(robot, moved)
+    isolated = project_from_keyframe(moved)
+    assert isolated['scene_objects'][0]['position'] == project['keyframes'][0]['grasp']['object_pose']['position']
+    assert moved['scene_objects'][0]['position'] != isolated['scene_objects'][0]['position']

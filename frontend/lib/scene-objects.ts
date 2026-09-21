@@ -15,6 +15,8 @@ export type SceneObject = {
   opacity: number;
   visible: boolean;
   placement?: SceneObjectPlacement;
+  /** Editor-only visualization; never persisted as a physical scene object. */
+  ghost?: boolean;
 };
 
 export type SceneObjectPose = { position: number[]; quaternion_xyzw: number[] };

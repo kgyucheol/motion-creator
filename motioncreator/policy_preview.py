@@ -16,7 +16,7 @@ import mujoco
 import numpy as np
 
 from .motion import compile_motion, project_scene_objects, validate_project
-from .grasp import object_signature
+from .grasp import grasp_object, object_signature
 from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_quaternion_wxyz
 from .hand_collision import physical_hand_geom_names
 from .robot import MODEL_PATH, ROOT, Robot
@@ -51,6 +51,13 @@ def project_from_keyframe(project, start_frame_index=0):
     selected['current_qpos'] = copy.deepcopy(selected['keyframes'][0]['qpos'])
     selected['pins'] = copy.deepcopy(selected['keyframes'][0].get('pins', []))
     selected['angle_pins'] = copy.deepcopy(selected['keyframes'][0].get('angle_pins', []))
+    grasp = selected['keyframes'][0].get('grasp')
+    if grasp and grasp.get('object_pose'):
+        selected['scene_objects'] = copy.deepcopy(project_scene_objects(selected))
+        for item in selected['scene_objects']:
+            if item['id'] == grasp['object_id']:
+                item.update(copy.deepcopy(grasp['object_pose']))
+                break
     return selected
 
 
@@ -65,7 +72,7 @@ def compile_preview_motion(robot, project, fps=50):
     if grasp:
         objects = project_scene_objects(project)
         item = next((value for value in objects if value['id'] == grasp['object_id']), None)
-        if item is None or object_signature(item) != grasp.get('object_signature'):
+        if item is None or object_signature(grasp_object(item, grasp)) != grasp.get('object_signature'):
             raise ValueError('파지 설정 후 대상 상자가 변경되었습니다. 양손 파지 자세를 다시 맞춰주세요.')
     motion = compile_motion(robot, project, fps=fps)
     return motion['time'], motion['qpos'], grasp

@@ -296,7 +296,8 @@ export class RobotScene {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
     this.ray.setFromCamera(this.pointer, this.camera);
-    return this.ray.intersectObjects(Object.values(this.sceneObjects).filter(object => object.visible), false)[0];
+    return this.ray.intersectObjects(Object.values(this.sceneObjects)
+      .filter(object => object.visible && !object.userData.graspGhost), false)[0];
   }
   hover = (event: PointerEvent) => {
     if (!this.editable || event.buttons || event.shiftKey || event.altKey || this.selectionLocked || this.members.length > 1 || this.gizmo.dragging || this.gizmo.axis) return;
@@ -546,6 +547,7 @@ export class RobotScene {
         this.sceneObjects[object.id] = mesh;
         this.scene.add(mesh);
       }
+      mesh.userData.graspGhost = !!object.ghost;
       mesh.position.fromArray(object.position);
       mesh.quaternion.fromArray(object.quaternion_xyzw);
       mesh.scale.fromArray(normalizedObjectSize(object.shape, object.size));
@@ -553,9 +555,10 @@ export class RobotScene {
       const material = mesh.material as THREE.MeshStandardMaterial;
       material.color.set(object.color);
       material.opacity = object.opacity;
-      material.transparent = object.opacity < 1;
-      material.depthWrite = object.opacity >= .98;
-      material.emissive.set(this.selectedSceneObject === object.id ? '#254e43' : '#000000');
+      material.transparent = object.opacity < 1 || !!object.ghost;
+      material.depthWrite = object.opacity >= .98 && !object.ghost;
+      material.wireframe = !!object.ghost;
+      material.emissive.set(this.selectedSceneObject === object.id ? '#254e43' : object.ghost ? '#174c55' : '#000000');
     }
     if (this.selectedSceneObject && !incoming.has(this.selectedSceneObject)) this.selectedSceneObject = null;
     if (this.selectedSceneObject) this.selectSceneObject(this.selectedSceneObject, this.objectTransformMode);
@@ -590,7 +593,8 @@ export class RobotScene {
     this.selectionLocked = !!this.selectedSceneObject;
     this.objectTransformMode = mode;
     Object.entries(this.sceneObjects).forEach(([key, mesh]) => {
-      (mesh.material as THREE.MeshStandardMaterial).emissive.set(key === this.selectedSceneObject ? '#254e43' : '#000000');
+      (mesh.material as THREE.MeshStandardMaterial).emissive.set(key === this.selectedSceneObject
+        ? '#254e43' : mesh.userData.graspGhost ? '#174c55' : '#000000');
     });
     const object = this.selectedSceneObject ? this.sceneObjects[this.selectedSceneObject] : undefined;
     if (object && this.editable) {

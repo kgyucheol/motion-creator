@@ -1,5 +1,5 @@
 'use client';
-import { Crosshair, Hand, Play, RotateCcw } from 'lucide-react';
+import { Crosshair, Hand, Move3d, Play, RotateCcw } from 'lucide-react';
 import type { SceneObject } from '../lib/scene-objects';
 import type { TwoHandGrasp } from '../lib/keyframes';
 
@@ -14,6 +14,7 @@ type Props = {
   onChange: (grasp?: TwoHandGrasp) => void;
   onPickMode: (mode: GraspPickMode) => void;
   onFit: () => void;
+  onEditGhost: () => void;
   onValidate: () => void;
 };
 
@@ -24,7 +25,7 @@ const freshGrasp = (object: SceneObject): TwoHandGrasp => ({
   follow_object: true,
 });
 
-export default function GraspControls({ objects, selectedObjectId, grasp, disabled, pickMode, onChange, onPickMode, onFit, onValidate }: Props) {
+export default function GraspControls({ objects, selectedObjectId, grasp, disabled, pickMode, onChange, onPickMode, onFit, onEditGhost, onValidate }: Props) {
   const boxes = objects.filter(object => object.shape === 'box' && object.visible);
   const selectedBox = boxes.find(object => object.id === (grasp?.object_id ?? selectedObjectId));
   const boxWidth = selectedBox?.size[1] ?? .09;
@@ -64,9 +65,10 @@ export default function GraspControls({ objects, selectedObjectId, grasp, disabl
       <p className="hint">0 mm에서는 두 보조면이 맞닿고, 박스 너비에서는 양쪽 면과 일치합니다. {clearance > .0005 ? `현재는 면보다 ${Math.round(clearance * 1000)} mm 벌어진 접근 자세입니다.` : clearance < -.0005 ? `현재는 박스보다 ${Math.round(-clearance * 1000)} mm 작은, 접촉력을 만들기 위한 닫힘 목표입니다.` : '현재 보조면이 박스 양쪽 면에 맞춰집니다.'} 값을 바꾼 뒤 자세 맞추기를 누르세요.</p>
       <div className="grasp-force-row"><label>검증 최소 힘 <input type="number" min="1" max="200" value={grasp.target_force_n} disabled={disabled} onChange={event => { const value = +event.target.value; update({ target_force_n: value, max_force_n: Math.max(value, grasp.max_force_n) }); }}/>N</label><label>검증 안전 상한 <input type="number" min={grasp.target_force_n} max="400" value={grasp.max_force_n} disabled={disabled} onChange={event => update({ max_force_n: Math.max(grasp.target_force_n, +event.target.value) })}/>N</label></div>
       <button className="wide primary" disabled={disabled || !selectedBox} onClick={onFit}><Hand size={15}/>양손 파지 자세 맞추기</button>
-      <label className="checkbox"><input type="checkbox" checked={grasp.follow_object !== false} disabled={disabled || !fitted} onChange={event => update({ follow_object: event.target.checked })}/>이 키프레임에서 박스 이동 시 양손 따라가기</label>
+      <button className="wide" disabled={disabled || !fitted} onClick={onEditGhost}><Move3d size={15}/>이 키프레임의 고스트 박스 편집</button>
+      <label className="checkbox"><input type="checkbox" checked={grasp.follow_object !== false} disabled={disabled || !fitted} onChange={event => update({ follow_object: event.target.checked })}/>고스트 박스 이동 시 양손 따라가기</label>
       <button className="wide" disabled={disabled || !fitted} onClick={onValidate}><Play size={15}/>이 키프레임부터 물리 검증</button>
-      {fitted && <p className="hint">박스 평행 파지 자세 적용 완료 · 손목 비틀림 {grasp.hand_twist_deg?.toFixed(0) ?? 0}° · 물리 재생에서도 이 편집 자세를 그대로 사용합니다.</p>}
+      {fitted && <p className="hint">반투명 고스트 박스는 이 키프레임에만 저장되며 충돌하지 않습니다. 이동·회전하면 실제 장면 박스는 그대로 두고 양손 자세만 다시 계산합니다. · 손목 비틀림 {grasp.hand_twist_deg?.toFixed(0) ?? 0}°</p>}
       {grasp.closure_qpos && <p className="hint">이 키프레임은 이전 방식의 재생용 닫힘 보정값을 포함합니다. 현재 오프셋 방식으로 다시 맞추면 편집 자세에 직접 반영됩니다.</p>}
       <button className="wide danger-subtle" disabled={disabled} onClick={() => { onPickMode(null); onChange(undefined); }}><RotateCcw size={14}/>파지 설정 제거</button>
       <p className="hint">간격은 힘 명령이 아니며, 박스보다 작은 간격은 물리가 막아야 하는 닫힘 목표입니다. 실제 접촉력은 MuJoCo 검증 결과에서 측정합니다.</p>

@@ -1,3 +1,5 @@
+import type { SceneObjectPose } from './scene-objects';
+
 export type TwoHandGrasp = {
   format: 'motioncreator.two-hand-grasp.v1';
   object_id: string;
@@ -10,6 +12,7 @@ export type TwoHandGrasp = {
   target_force_n: number;
   max_force_n: number;
   follow_object?: boolean;
+  object_pose?: SceneObjectPose;
   contact_anchor?: 'lower_palm_wrist' | 'finger_wrist_pad';
   hand_twist_deg?: number;
   contact_points_world?: Record<'left' | 'right', number[]>;

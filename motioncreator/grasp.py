@@ -21,6 +21,23 @@ def object_signature(item):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
+def grasp_object(item, event):
+    """Return the physical object geometry at this keyframe's authored ghost pose."""
+    pose = event.get('object_pose')
+    if pose is None:
+        return item
+    if not isinstance(pose, dict):
+        raise ValueError('Grasp object pose must be an object')
+    position = np.asarray(pose.get('position'), dtype=float)
+    quaternion = np.asarray(pose.get('quaternion_xyzw'), dtype=float)
+    if position.shape != (3,) or not np.isfinite(position).all() or np.max(np.abs(position)) > 5:
+        raise ValueError('Grasp object position must contain three finite values within 5 m')
+    if (quaternion.shape != (4,) or not np.isfinite(quaternion).all()
+            or abs(np.linalg.norm(quaternion) - 1.) > 1e-4):
+        raise ValueError('Grasp object quaternion must be normalized (xyzw)')
+    return {**item, 'position': position.tolist(), 'quaternion_xyzw': quaternion.tolist()}
+
+
 def lower_palm_wrist_anchors():
     """Return the center of each finger-tip-to-wrist contact plane in wrist coordinates."""
     return {side: grip_pad_contact_anchor(side) for side in ('left', 'right')}
@@ -40,6 +57,7 @@ def validate_grasp_event(robot: Robot, event, objects):
     target = next((item for item in objects if item.get('id') == object_id), None)
     if target is None or target.get('shape') != 'box':
         raise ValueError('Two-hand grasp interactions require an existing box object')
+    target = grasp_object(target, event)
     _validate_uv(event.get('left_surface_uv'), 'Left hand')
     _validate_uv(event.get('right_surface_uv'), 'Right hand')
     if 'hand_gap_m' in event:
@@ -136,7 +154,9 @@ def fit_two_hand_grasp(robot: Robot, qpos, pins, item, event, angle_pins=()):
 
     fitted = {key: value for key, value in event.items()
               if key not in ('closure_qpos', 'inward_offset_m')}
-    fitted.update({'object_signature': object_signature(item),
+    fitted.update({'object_signature': object_signature(target),
+              'object_pose': {'position': list(target['position']),
+                              'quaternion_xyzw': list(target['quaternion_xyzw'])},
               'hand_gap_m': hand_gap,
               'contact_anchor': 'finger_wrist_pad', 'hand_twist_deg': twist,
               'contact_points_world': contacts})

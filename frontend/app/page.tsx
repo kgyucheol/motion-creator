@@ -18,7 +18,30 @@ type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: bool
 type GroupPreset = { id: string; name: string; members: string[] };
 type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; keyframes: Keyframe[]; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
+const GRASP_GHOST_ID = '__grasp_keyframe_ghost__';
 const genericFrameNames = new Set(['stand', 'standing', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip', '서기', '서있기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세']);
+function objectAtGraspPose(frame: Keyframe | undefined, objects: SceneObject[]) {
+  const grasp = frame?.grasp;
+  const object = objects.find(value => value.id === grasp?.object_id);
+  if (!grasp || !object) return undefined;
+  return grasp.object_pose ? { ...object, position: [...grasp.object_pose.position],
+    quaternion_xyzw: [...grasp.object_pose.quaternion_xyzw] } : object;
+}
+function graspGhost(frame: Keyframe | undefined, objects: SceneObject[]) {
+  const target = objectAtGraspPose(frame, objects);
+  if (!target || !frame?.grasp?.object_pose) return undefined;
+  return { ...target, id: GRASP_GHOST_ID, name: `${target.name} · 키프레임 고스트`, color: '#56d8e4',
+    opacity: .24, visible: true, placement: { prevent_overlap: false, surface_snap: false, ground_lock: false }, ghost: true };
+}
+function withLegacyGraspGhosts(project: Project, objects: SceneObject[]) {
+  return { ...project, keyframes: project.keyframes.map(frame => {
+    const grasp = frame.grasp;
+    const object = objects.find(value => value.id === grasp?.object_id);
+    if (!grasp?.object_signature || grasp.object_pose || !object) return frame;
+    return { ...frame, grasp: { ...grasp, object_pose: { position: [...object.position],
+      quaternion_xyzw: [...object.quaternion_xyzw] } } };
+  }) };
+}
 function automaticProjectName(project: Project) {
   const names: string[] = [];
   for (const frame of project.keyframes) {
@@ -113,6 +136,7 @@ export default function Editor() {
   const history = useRef<EditorSnapshot[]>([]);
   const future = useRef<EditorSnapshot[]>([]);
   const objectDragCheckpointed = useRef(false);
+  const sceneObjectSelection = useRef<string | null>(null);
   const graspFollowTimer = useRef<number | null>(null);
   const graspFollowPending = useRef<{ object: SceneObject; frameIndex: number } | null>(null);
   const graspFollowInFlight = useRef(false);
@@ -201,7 +225,7 @@ export default function Editor() {
         current.current.project = nextProject; setProject(nextProject);
       }
       invalidate();
-      setMessage(`박스 파지점을 따라 양손 자세를 갱신했습니다 · 오차 ${result.solver.contact.target_error_mm.toFixed(2)} mm`);
+      setMessage(`키프레임 고스트 박스를 따라 양손 자세를 갱신했습니다 · 오차 ${result.solver.contact.target_error_mm.toFixed(2)} mm`);
     } catch (failure) {
       setError(`박스 파지점을 따라갈 수 없습니다: ${(failure as Error).message}`);
     } finally {
@@ -213,19 +237,53 @@ export default function Editor() {
   }
   function changeObject(id: string, patch: Partial<SceneObject>, recordHistory = true) {
     if (recordHistory) checkpoint();
-    const changesGeometry = Object.keys(patch).some(key => ['position', 'quaternion_xyzw', 'size', 'shape'].includes(key));
-    const committed = commitObjects(current.current.objects.map(object => {
+    commitObjects(current.current.objects.map(object => {
       if (object.id !== id) return object;
       const next = { ...object, ...patch };
       const normalized = { ...next, size: normalizedObjectSize(next.shape, next.size) };
       if (!Object.keys(patch).some(key => ['position', 'quaternion_xyzw', 'size', 'shape'].includes(key))) return normalized;
       return placeSceneObject(normalized, current.current.objects.filter(other => other.id !== id), scenePlacementOptions(object), object);
     }));
-    const changed = committed.find(object => object.id === id);
-    if (changesGeometry && changed) scheduleGraspFollow(changed);
+  }
+  function changeGraspGhost(patch: Partial<SceneObject>) {
+    const c = current.current;
+    const frame = c.project?.keyframes[c.frameIndex];
+    const grasp = frame?.grasp;
+    const target = objectAtGraspPose(frame, c.objects);
+    if (!c.project || !frame || !grasp?.object_signature || !target) return;
+    const nextTarget = { ...target,
+      position: patch.position ? [...patch.position] : target.position,
+      quaternion_xyzw: patch.quaternion_xyzw ? [...patch.quaternion_xyzw] : target.quaternion_xyzw };
+    const nextGrasp = { ...grasp, object_pose: { position: [...nextTarget.position],
+      quaternion_xyzw: [...nextTarget.quaternion_xyzw] } };
+    const nextProject = { ...c.project, keyframes: c.project.keyframes.map((item, index) => index === c.frameIndex
+      ? { ...item, grasp: nextGrasp } : item) };
+    current.current.project = nextProject; setProject(nextProject); invalidate();
+    scheduleGraspFollow(nextTarget);
+  }
+  function editGraspGhost() {
+    const c = current.current;
+    const frame = c.project?.keyframes[c.frameIndex];
+    const ghost = graspGhost(frame, c.objects);
+    if (!ghost || !frame?.grasp) return;
+    setSelectedObjectId(null); current.current.selectedObjectId = null;
+    sceneObjectSelection.current = GRASP_GHOST_ID;
+    setObjectTransformMode('translate'); current.current.objectTransformMode = 'translate';
+    scene.current?.selectSceneObject(GRASP_GHOST_ID, 'translate');
+    setMessage('반투명 고스트 박스를 이동하거나 E로 회전하세요. 현재 키프레임의 양손만 따라갑니다.');
   }
   function selectObject(id: string | null) {
+    if (id === GRASP_GHOST_ID) {
+      const grasp = current.current.project?.keyframes[current.current.frameIndex]?.grasp;
+      if (!grasp) return;
+      setSelectedObjectId(null); current.current.selectedObjectId = null;
+      sceneObjectSelection.current = id;
+      scene.current?.selectSceneObject(id, current.current.objectTransformMode);
+      setMessage('키프레임 고스트 박스를 선택했습니다. 실제 장면 박스 위치는 바뀌지 않습니다.');
+      return;
+    }
     setSelectedObjectId(id); current.current.selectedObjectId = id;
+    sceneObjectSelection.current = id;
     const selectedObject = current.current.objects.find(object => object.id === id);
     if (selectedObject) {
       const placement = scenePlacementOptions(selectedObject);
@@ -237,7 +295,7 @@ export default function Editor() {
   }
   function changeObjectMode(mode: ObjectTransformMode) {
     setObjectTransformMode(mode); current.current.objectTransformMode = mode;
-    scene.current?.selectSceneObject(current.current.selectedObjectId, mode);
+    scene.current?.selectSceneObject(sceneObjectSelection.current, mode);
   }
   function addObject(shape: SceneObjectShape) {
     checkpoint();
@@ -264,9 +322,7 @@ export default function Editor() {
     if (placement.groundLock) {
       updated = { ...updated, position: [updated.position[0], updated.position[1], objectVerticalHalfExtent(updated)] };
     }
-    const committed = commitObjects(current.current.objects.map(object => object.id === id ? updated : object));
-    const changed = committed.find(object => object.id === id);
-    if (changed) scheduleGraspFollow(changed);
+    commitObjects(current.current.objects.map(object => object.id === id ? updated : object));
   }
   function changeGraspPickMode(mode: GraspPickMode) {
     graspPickModeRef.current = mode; setGraspPickMode(mode); scene.current?.setSurfacePickMode(!!mode);
@@ -303,6 +359,7 @@ export default function Editor() {
     current.current.members = next;
     setSelected(active); setMembers(next); setInfo(null);
     setSelectedObjectId(null); current.current.selectedObjectId = null; scene.current?.selectSceneObject(null);
+    sceneObjectSelection.current = null;
     if (scene.current && !hover) scene.current.selectionLocked = true;
     const previousMode = current.current.transformMode;
     const controls = controlSelection(next);
@@ -426,7 +483,8 @@ export default function Editor() {
         objectTransformBegin: () => { objectDragCheckpointed.current = false; },
         transformObject: (id, patch) => {
           if (!objectDragCheckpointed.current) { checkpoint(); objectDragCheckpointed.current = true; }
-          changeObject(id, patch, false);
+          if (id === GRASP_GHOST_ID) changeGraspGhost(patch);
+          else changeObject(id, patch, false);
         },
         objectTransformEnd: () => { objectDragCheckpointed.current = false; },
         objectTransformMode: changeObjectMode,
@@ -452,7 +510,7 @@ export default function Editor() {
       } catch { setMessage('이전 자동 저장을 복원하지 못해 기본 자세로 시작했습니다.'); nextProject = init.project; }
       if (!alive.current) return;
       const nextObjects = objectsFromProject(nextProject);
-      nextProject = { ...nextProject, scene_objects: nextObjects };
+      nextProject = withLegacyGraspGhosts({ ...nextProject, scene_objects: nextObjects }, nextObjects);
       setObjects(nextObjects); current.current.objects = nextObjects;
       setProject(nextProject); current.current.project = nextProject;
       setPins(initialPins); current.current.pins = initialPins;
@@ -485,11 +543,16 @@ export default function Editor() {
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
   useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
   useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
-  useEffect(() => { scene.current?.setSceneObjects(objects); }, [objects]);
+  useEffect(() => {
+    const ghost = !playing && !preview?.physics ? graspGhost(project?.keyframes[frameIndex], objects) : undefined;
+    scene.current?.setSceneObjects(ghost ? [...objects, ghost] : objects);
+    if (!ghost && sceneObjectSelection.current === GRASP_GHOST_ID) sceneObjectSelection.current = null;
+  }, [objects, project, frameIndex, playing, preview]);
   useEffect(() => { current.current.project = project; }, [project]);
   useEffect(() => {
     const grasp = project?.keyframes[frameIndex]?.grasp;
-    scene.current?.setGripMarkers(grasp?.object_id ?? null, grasp?.left_surface_uv, grasp?.right_surface_uv);
+    scene.current?.setGripMarkers(grasp?.object_pose ? GRASP_GHOST_ID : grasp?.object_id ?? null,
+      grasp?.left_surface_uv, grasp?.right_surface_uv);
   }, [project, frameIndex, objects]);
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
@@ -535,7 +598,7 @@ export default function Editor() {
     const valid = await api<Project>('validate', { project: next });
     const pose = await api<PoseState>('pose', { qpos: valid.current_qpos ?? valid.keyframes[0].qpos });
     const nextObjects = objectsFromProject(valid);
-    const normalized = { ...valid, scene_objects: nextObjects };
+    const normalized = withLegacyGraspGhosts({ ...valid, scene_objects: nextObjects }, nextObjects);
     setProject(normalized); current.current.project = normalized; setFrameIndex(0);
     setObjects(nextObjects); current.current.objects = nextObjects; selectObject(null);
     setPins(valid.pins ?? valid.keyframes[0].pins);
@@ -579,18 +642,24 @@ export default function Editor() {
   async function fitGrasp() {
     const frame = project?.keyframes[frameIndex];
     const grasp = frame?.grasp;
-    const object = objects.find(value => value.id === grasp?.object_id);
+    const baseObject = objects.find(value => value.id === grasp?.object_id);
+    const object = objectAtGraspPose(frame, objects);
     if (!frame || !grasp || !object) return;
     await run(async () => {
       const result = await api<{ state: PoseState; grasp: TwoHandGrasp; solver: { contact: SolveInfo } }>('grasp-fit', {
         qpos: frame.qpos, pins: frame.pins, angle_pins: frame.angle_pins ?? [], object,
-        grasp: { ...grasp, follow_object: grasp.follow_object !== false },
+        grasp: { ...grasp, follow_object: grasp.follow_object !== false,
+          object_pose: grasp.object_pose ?? { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } },
       });
       checkpoint(); applyState(result.state); setPins([...frame.pins]); setAnglePins([...(frame.angle_pins ?? [])]); setPoseDirty(false); setInfo(result.solver.contact);
-      setProject(value => value ? { ...value, keyframes: value.keyframes.map((item, index) => index === frameIndex
-        ? { ...item, qpos: [...result.state.qpos], grasp: result.grasp } : item) } : value);
+      const activeProject = current.current.project;
+      if (activeProject) {
+        const nextProject = { ...activeProject, keyframes: activeProject.keyframes.map((item, index) => index === frameIndex
+          ? { ...item, qpos: [...result.state.qpos], grasp: result.grasp } : item) };
+        current.current.project = nextProject; setProject(nextProject);
+      }
       invalidate(); changeGraspPickMode(null);
-      setMessage(`양손 파지 자세를 맞췄습니다 · 접촉점 오차 ${result.solver.contact.target_error_mm.toFixed(2)} mm · 손목 비틀림 ${result.grasp.hand_twist_deg?.toFixed(0) ?? 0}°`);
+      setMessage(`${baseObject?.name ?? '박스'} 위치를 키프레임 고스트로 저장하고 양손 파지 자세를 맞췄습니다 · 접촉점 오차 ${result.solver.contact.target_error_mm.toFixed(2)} mm · 손목 비틀림 ${result.grasp.hand_twist_deg?.toFixed(0) ?? 0}°`);
     });
   }
   function addFrame() {
@@ -897,7 +966,7 @@ export default function Editor() {
       <div className="section-divider"/>
       <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock} onSelect={selectObject} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}/>
       <div className="section-divider"/>
-      <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={changeGraspPickMode} onFit={() => void fitGrasp()} onValidate={() => void validateGraspPhysics()}/>
+      <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={changeGraspPickMode} onFit={() => void fitGrasp()} onEditGhost={editGraspGhost} onValidate={() => void validateGraspPhysics()}/>
       <div className="section-divider"/>
       <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>
       <select aria-label="최근 저장한 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">최근 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>
