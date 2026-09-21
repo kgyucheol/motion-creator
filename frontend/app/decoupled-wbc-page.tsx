@@ -14,7 +14,12 @@ type Snapshot = {
     root_error_m: number; yaw_error_deg: number };
   object_states: Record<string, SceneObjectPose>;
   grasp: null | { object_id: string; active: boolean; target_force_n: number;
-    bilateral_contact: boolean; normal_force_n: Record<'left' | 'right', number> };
+    verification_force_n: number; object_mass_kg: number; effective_friction: number;
+    bilateral_contact: boolean; normal_force_n: Record<'left' | 'right', number>;
+    force_feedback: { enabled: boolean; engaged: boolean; torque_saturated: boolean;
+      filtered_normal_force_n: Record<'left' | 'right', number>;
+      correction_force_n: Record<'left' | 'right', number>;
+      feedback_torque_nm: Record<'left' | 'right', number> } };
 };
 type SaveResult = { folder: string; files: string[] };
 
@@ -57,12 +62,12 @@ export default function DecoupledWbcPage() {
     scene.current?.updateReference(next.reference_state);
   }, []);
 
-  const sendCommand = useCallback(async (action: 'play' | 'stop' | 'reset' | 'key' | 'mode', key = '', mode?: 'auto' | 'manual') => {
+  const sendCommand = useCallback(async (action: 'play' | 'stop' | 'reset' | 'key' | 'mode' | 'grasp-force', key = '', mode?: 'auto' | 'manual', enabled?: boolean) => {
     if (!sessionId.current) { setError('먼저 모션을 불러오세요.'); return; }
     if (action === 'reset') { setResult(null); setError(''); }
     try {
       const next = await fetch(`/api/decoupled-wbc/sessions/${sessionId.current}/command`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, key, mode }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, key, mode, enabled }),
       }).then(responseJson<Snapshot>);
       renderSnapshot(next);
       if (next.error) setError(next.error);
@@ -208,6 +213,13 @@ export default function DecoupledWbcPage() {
         <h2>현재 명령</h2>
         <dl><dt>전후</dt><dd>{nav[0].toFixed(2)} m/s</dd><dt>좌우</dt><dd>{nav[1].toFixed(2)} m/s</dd><dt>회전</dt><dd>{nav[2].toFixed(2)} rad/s</dd><dt>높이</dt><dd>{(snapshot?.height ?? .74).toFixed(2)} m</dd><dt>허리 R/P/Y</dt><dd>{(snapshot?.torso_rpy ?? [0, 0, 0]).map(value => `${(value * 180 / Math.PI).toFixed(0)}°`).join(' / ')}</dd></dl>
       </section>
+      {snapshot?.grasp && <section className="wbc-command-card">
+        <h2>자동 파지력</h2>
+        <dl><dt>물체 질량</dt><dd>{snapshot.grasp.object_mass_kg.toFixed(2)} kg</dd><dt>보수 마찰계수</dt><dd>{snapshot.grasp.effective_friction.toFixed(2)}</dd><dt>자동 목표</dt><dd>{snapshot.grasp.target_force_n.toFixed(1)} N / 손</dd><dt>상태</dt><dd>{!snapshot.grasp.force_feedback.enabled ? '꺼짐' : snapshot.grasp.force_feedback.engaged ? '접촉 피드백' : '접촉 대기'}</dd></dl>
+        <button className={`wide ${snapshot.grasp.force_feedback.enabled ? 'chosen' : ''}`} disabled={!ready} onClick={() => void sendCommand('grasp-force', '', undefined, !snapshot.grasp!.force_feedback.enabled)}>파지력 피드백 {snapshot.grasp.force_feedback.enabled ? 'ON' : 'OFF'}</button>
+        <p>질량·마찰·들기 가속도와 안전계수로 목표를 계산합니다. 편집기의 검증 목표 {snapshot.grasp.verification_force_n.toFixed(1)} N과 별개로 실제 접촉 토크를 보정합니다.</p>
+        {snapshot.grasp.force_feedback.torque_saturated && <p className="error">모터 토크 포화: 파지면 간격을 늘리거나 자세를 다시 맞추세요.</p>}
+      </section>}
     </aside>
     <section className="wbc-stage">
       <div ref={host} className="wbc-canvas"/>
@@ -227,7 +239,7 @@ export default function DecoupledWbcPage() {
         {snapshot?.control_mode === 'auto' && <span>루트 추종 <b>{((snapshot?.tracking.root_error_m ?? 0) * 100).toFixed(1)} cm · {(snapshot?.tracking.yaw_error_deg ?? 0).toFixed(1)}°</b></span>}
         <span>환경 <b>{snapshot?.scene_objects.length ?? 0} objects</b></span>
         {snapshot?.grasp && <span>파지 <b>{snapshot.grasp.bilateral_contact
-          ? `물리 접촉 L ${snapshot.grasp.normal_force_n.left.toFixed(1)} · R ${snapshot.grasp.normal_force_n.right.toFixed(1)} N`
+          ? `L ${snapshot.grasp.normal_force_n.left.toFixed(1)} · R ${snapshot.grasp.normal_force_n.right.toFixed(1)} / 목표 ${snapshot.grasp.target_force_n.toFixed(1)} N`
           : snapshot.grasp.active ? '편집기 파지 자세 · 접촉 대기' : '대기'}</b></span>}
         <span>녹화 <b>{snapshot?.recording_frames ?? 0} frames</b></span>
       </div>

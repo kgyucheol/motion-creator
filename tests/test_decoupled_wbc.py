@@ -10,6 +10,7 @@ from motioncreator.decoupled_wbc import (
     ASSET_ROOT,
     CommandState,
     DecoupledSimulation,
+    automatic_grip_force,
     authored_waist_to_torso_rpy,
     build_environment_model,
     build_observation,
@@ -101,6 +102,8 @@ def test_grasp_control_ignores_stale_initial_event_and_never_refits_authored_pos
 
     control = prepare_grasp_control(robot, project)
     assert control["start_time"] == pytest.approx(2.)
+    assert control["target_force_n"] == pytest.approx(7.38125)
+    assert control["verification_force_n"] == pytest.approx(8.)
     assert "closure_ready" not in control and "arm_offset" not in control
 
     closure = np.asarray(contact["qpos"], dtype=float)
@@ -108,6 +111,16 @@ def test_grasp_control_ignores_stale_initial_event_and_never_refits_authored_pos
     contact["grasp"].update(object_signature=object_signature(item), closure_qpos=closure.tolist())
     control = prepare_grasp_control(robot, project)
     assert "closure_ready" not in control and "arm_offset" not in control
+
+
+def test_automatic_grip_force_uses_mass_and_conservative_friction():
+    values = parameters()
+    item = {"mass_kg": 1., "friction": 2.}
+    force = automatic_grip_force(item, values)
+    assert force["effective_friction"] == pytest.approx(.8)
+    assert force["target_force_n"] == pytest.approx(14.7625)
+    item.update(mass_kg=.3)
+    assert automatic_grip_force(item, values)["target_force_n"] == pytest.approx(4.42875)
 
 
 def test_recording_bundle_is_reimportable(tmp_path):
@@ -215,6 +228,7 @@ def test_http_command_fallback_dispatches_without_websocket(monkeypatch):
         def stop(self): self.calls.append(("stop", ""))
         def reset(self): self.calls.append(("reset", ""))
         def set_control_mode(self, mode): self.calls.append(("mode", mode))
+        def set_grasp_force_control(self, enabled): self.calls.append(("grasp-force", enabled))
         def apply_key(self, key): self.calls.append(("key", key))
         def snapshot(self): return {"calls": self.calls}
 
@@ -226,6 +240,9 @@ def test_http_command_fallback_dispatches_without_websocket(monkeypatch):
     result = decoupled_api.session_command(
         "session", decoupled_api.CommandInput(action="mode", mode="manual"))
     assert result["calls"][-1] == ("mode", "manual")
+    result = decoupled_api.session_command(
+        "session", decoupled_api.CommandInput(action="grasp-force", enabled=False))
+    assert result["calls"][-1] == ("grasp-force", False)
 
 
 @pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")

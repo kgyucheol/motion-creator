@@ -17,9 +17,10 @@ class SessionInput(BaseModel):
 
 
 class CommandInput(BaseModel):
-    action: Literal["play", "stop", "reset", "key", "mode"]
+    action: Literal["play", "stop", "reset", "key", "mode", "grasp-force"]
     key: str = ""
     mode: Literal["auto", "manual"] | None = None
+    enabled: bool | None = None
 
 
 def checked(call):
@@ -63,6 +64,7 @@ def session_command(identifier: str, payload: CommandInput):
     elif payload.action == "stop": session.stop()
     elif payload.action == "reset": session.reset()
     elif payload.action == "mode": session.set_control_mode(payload.mode or "auto")
+    elif payload.action == "grasp-force": session.set_grasp_force_control(payload.enabled is not False)
     else: session.apply_key(payload.key)
     return session.snapshot()
 
@@ -92,6 +94,7 @@ async def stream(websocket: WebSocket, identifier: str):
                 elif action == "stop": session.stop()
                 elif action == "reset": session.reset()
                 elif action == "mode": session.set_control_mode(str(message.get("mode", "auto")))
+                elif action == "grasp-force": session.set_grasp_force_control(bool(message.get("enabled", True)))
                 elif action == "key": session.apply_key(str(message.get("key", "")))
             except asyncio.TimeoutError:
                 pass
