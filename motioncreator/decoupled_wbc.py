@@ -22,7 +22,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .grip_geometry import (grip_pad_center, grip_pad_contact_anchor, grip_pad_half_size,
-                            grip_pad_quaternion_wxyz)
+                            grip_pad_quaternion_wxyz, grip_pad_rotation)
 from .hand_collision import physical_hand_geom_names
 from .motion import compile_motion, project_scene_objects, validate_project
 from .robot import ROOT, Robot
@@ -198,6 +198,7 @@ def prepare_grasp_control(robot: Robot, project: dict, parameters: dict | None =
         "max_force_n": float(event["max_force_n"]),
         "object_mass_kg": float(item["mass_kg"]),
         "effective_friction": force["effective_friction"],
+        "hand_twist_deg": float(event.get("hand_twist_deg", 0.)),
     }
 
 
@@ -523,19 +524,22 @@ class DecoupledSimulation:
             "correction_force_n": {"left": 0., "right": 0.},
             "integral_force_n": {"left": 0., "right": 0.},
             "feedback_torque_nm": {"left": 0., "right": 0.},
+            "orientation_error_deg": {"left": 0., "right": 0.},
+            "orientation_feedback_torque_nm": {"left": 0., "right": 0.},
             "torque_saturated": False,
         }
 
-    def _grasp_feedback_torque(self, forces: dict[str, float]) -> np.ndarray:
-        """Close the measured normal-force loop using bounded whole-arm J^T torque."""
+    def _grasp_feedback_torque(self, forces: dict[str, float]) -> tuple[np.ndarray, np.ndarray]:
+        """Return task feedback torque and the force/orientation task Jacobian."""
         torque = np.zeros(14)
+        no_tasks = np.empty((0, 14))
         if not self.grasp_control:
-            return torque
+            return torque, no_tasks
         config = self.parameters["grasp_force_control"]
         active = self.motion_time >= self.grasp_control["start_time"]
         if not self.grasp_force_enabled or not active:
             self._reset_grasp_force()
-            return torque
+            return torque, no_tasks
 
         dt = float(self.parameters["simulation_dt"])
         time_constant = max(dt, float(config["filter_time_constant_s"]))
@@ -552,20 +556,27 @@ class DecoupledSimulation:
             self.grasp_force["contact_lost_seconds"] += dt
             if self.grasp_force["contact_lost_seconds"] >= float(config["contact_loss_timeout_s"]):
                 self._reset_grasp_force()
-                return torque
+                return torque, no_tasks
         if not self.grasp_force["engaged"]:
-            return torque
+            return torque, no_tasks
 
         target = min(float(self.grasp_control["target_force_n"]),
                      float(self.grasp_control["max_force_n"]))
         object_body = self.object_bodies[self.grasp_control["object_id"]]
-        object_y = self.data.xmat[object_body].reshape(3, 3)[:, 1]
+        object_rotation = self.data.xmat[object_body].reshape(3, 3)
+        object_y = object_rotation[:, 1]
         kp = float(config["proportional_gain"])
         ki = float(config["integral_gain_per_second"])
+        orientation_kp = float(config["orientation_proportional_gain"])
+        orientation_kd = float(config["orientation_derivative_gain"])
         maximum = float(config["maximum_correction_force_n"])
         minimum = -float(config["maximum_release_force_n"])
         jacobian = np.zeros((3, self.model.nv))
         rotational = np.zeros((3, self.model.nv))
+        object_rotational = np.zeros((3, self.model.nv))
+        mujoco.mj_jacBody(self.model, self.data, None, object_rotational, object_body)
+        object_angular_velocity = object_rotational @ self.data.qvel
+        task_rows = []
         for side, arm_slice, direction in (
                 ("left", slice(0, 7), -object_y),
                 ("right", slice(7, 14), object_y)):
@@ -583,13 +594,34 @@ class DecoupledSimulation:
             rotational[:] = 0
             mujoco.mj_jac(self.model, self.data, jacobian, rotational, point, body)
             dofs = slice(21, 28) if side == "left" else slice(28, 35)
-            side_torque = jacobian[:, dofs].T @ (direction * correction)
+            normal_row = np.zeros(14)
+            normal_row[arm_slice] = direction @ jacobian[:, dofs]
+            task_rows.append(normal_row)
+            orientation_rows = np.zeros((3, 14))
+            orientation_rows[:, arm_slice] = rotational[:, dofs]
+            task_rows.extend(orientation_rows)
+            twist = self.grasp_control["hand_twist_deg"] if side == "left" else -self.grasp_control["hand_twist_deg"]
+            desired_rotation = (object_rotation
+                                @ Rotation.from_euler("y", twist, degrees=True).as_matrix()
+                                @ grip_pad_rotation(side).T)
+            current_rotation = self.data.xmat[body].reshape(3, 3)
+            orientation_error = Rotation.from_matrix(desired_rotation @ current_rotation.T).as_rotvec()
+            relative_angular_velocity = object_angular_velocity - rotational @ self.data.qvel
+            orientation_moment = (orientation_kp * orientation_error
+                                  + orientation_kd * relative_angular_velocity)
+            force_torque = jacobian[:, dofs].T @ (direction * correction)
+            orientation_torque = rotational[:, dofs].T @ orientation_moment
+            side_torque = force_torque + orientation_torque
             limit = (np.max(np.abs(self.arm_torque_limits[arm_slice]), axis=1)
                      * float(config["maximum_feedback_torque_fraction"]))
             side_torque = np.clip(side_torque, -limit, limit)
             torque[arm_slice] = side_torque
             self.grasp_force["feedback_torque_nm"][side] = float(np.max(np.abs(side_torque)))
-        return torque
+            self.grasp_force["orientation_error_deg"][side] = float(np.rad2deg(
+                np.linalg.norm(orientation_error)))
+            self.grasp_force["orientation_feedback_torque_nm"][side] = float(np.max(np.abs(
+                orientation_torque)))
+        return torque, np.asarray(task_rows)
 
     def step(self) -> None:
         with self.lock:
@@ -605,13 +637,15 @@ class DecoupledSimulation:
             # MuJoCo motors apply raw joint torque.  Cancel the arm's modeled
             # gravity/Coriolis load so PD error is not required merely to hold
             # the authored pose; the lower-body policy remains unchanged.
-            arm_control = (
-                self._pd(self._arm_target(), self.data.qpos[22:36], np.asarray(p["arm_kp"]),
-                         self.data.qvel[21:35], np.asarray(p["arm_kd"]))
-                + self.data.qfrc_bias[21:35]
-            )
+            pose_control = self._pd(self._arm_target(), self.data.qpos[22:36], np.asarray(p["arm_kp"]),
+                                    self.data.qvel[21:35], np.asarray(p["arm_kd"]))
             forces = self._grasp_contact_forces() if self.grasp_control else {}
-            requested_arm_control = arm_control + self._grasp_feedback_torque(forces)
+            grasp_torque, task_jacobian = self._grasp_feedback_torque(forces)
+            if len(task_jacobian):
+                damping = float(p["grasp_force_control"]["hybrid_projection_damping"])
+                gram = task_jacobian @ task_jacobian.T + damping ** 2 * np.eye(len(task_jacobian))
+                pose_control -= task_jacobian.T @ np.linalg.solve(gram, task_jacobian @ pose_control)
+            requested_arm_control = pose_control + self.data.qfrc_bias[21:35] + grasp_torque
             self.data.ctrl[15:29] = np.clip(requested_arm_control,
                                             self.arm_torque_limits[:, 0], self.arm_torque_limits[:, 1])
             self.grasp_force["torque_saturated"] = bool(np.any(

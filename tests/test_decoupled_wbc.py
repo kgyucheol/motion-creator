@@ -19,7 +19,7 @@ from motioncreator.decoupled_wbc import (
     save_recording_bundle,
     verify_assets,
 )
-from motioncreator.grasp import object_signature
+from motioncreator.grasp import fit_two_hand_grasp, object_signature
 from motioncreator.motion import new_project
 from motioncreator.robot import Robot
 
@@ -121,6 +121,37 @@ def test_automatic_grip_force_uses_mass_and_conservative_friction():
     assert force["target_force_n"] == pytest.approx(14.7625)
     item.update(mass_kg=.3)
     assert automatic_grip_force(item, values)["target_force_n"] == pytest.approx(4.42875)
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_grasp_feedback_uses_whole_arm_to_resist_wrist_yaw_error():
+    robot = Robot()
+    project = new_project(robot)
+    item = {"id": "box", "name": "Box", "shape": "box", "position": [.35, 0., .85],
+            "quaternion_xyzw": [0., 0., 0., 1.], "size": [.2, .2, .2], "mass_kg": 1.,
+            "friction": .8, "color": "#ffffff", "opacity": 1., "visible": True}
+    event = {"format": "motioncreator.two-hand-grasp.v1", "object_id": "box",
+             "left_surface_uv": [0., 0.], "right_surface_uv": [0., 0.],
+             "hand_gap_m": .19, "closure_seconds": .4,
+             "target_force_n": 8., "max_force_n": 60.}
+    fitted = fit_two_hand_grasp(robot, project["keyframes"][0]["qpos"],
+                                project["keyframes"][0]["pins"], item, event)
+    project["scene_objects"] = [item]
+    project["keyframes"][0].update(qpos=fitted["state"]["qpos"], grasp=fitted["grasp"])
+    simulation = DecoupledSimulation(robot, project, autostart=False)
+    try:
+        simulation.data.qpos[28] += .2
+        mujoco.mj_forward(simulation.model, simulation.data)
+        simulation.grasp_force["engaged"] = True
+        target = simulation.grasp_control["target_force_n"]
+        torque, task_jacobian = simulation._grasp_feedback_torque({"left": target, "right": target})
+        assert task_jacobian.shape == (8, 14)
+        assert simulation.grasp_force["orientation_error_deg"]["left"] > 8
+        assert simulation.grasp_force["orientation_error_deg"]["right"] < 4
+        assert simulation.grasp_force["orientation_feedback_torque_nm"]["left"] > 1
+        assert np.linalg.norm(torque[:7]) > np.linalg.norm(torque[7:])
+    finally:
+        simulation.close()
 
 
 def test_recording_bundle_is_reimportable(tmp_path):

@@ -19,7 +19,9 @@ type Snapshot = {
     force_feedback: { enabled: boolean; engaged: boolean; torque_saturated: boolean;
       filtered_normal_force_n: Record<'left' | 'right', number>;
       correction_force_n: Record<'left' | 'right', number>;
-      feedback_torque_nm: Record<'left' | 'right', number> } };
+      feedback_torque_nm: Record<'left' | 'right', number>;
+      orientation_error_deg: Record<'left' | 'right', number>;
+      orientation_feedback_torque_nm: Record<'left' | 'right', number> } };
 };
 type SaveResult = { folder: string; files: string[] };
 
@@ -214,10 +216,11 @@ export default function DecoupledWbcPage() {
         <dl><dt>전후</dt><dd>{nav[0].toFixed(2)} m/s</dd><dt>좌우</dt><dd>{nav[1].toFixed(2)} m/s</dd><dt>회전</dt><dd>{nav[2].toFixed(2)} rad/s</dd><dt>높이</dt><dd>{(snapshot?.height ?? .74).toFixed(2)} m</dd><dt>허리 R/P/Y</dt><dd>{(snapshot?.torso_rpy ?? [0, 0, 0]).map(value => `${(value * 180 / Math.PI).toFixed(0)}°`).join(' / ')}</dd></dl>
       </section>
       {snapshot?.grasp && <section className="wbc-command-card">
-        <h2>자동 파지력</h2>
+        <h2>파지 연결 제어</h2>
         <dl><dt>물체 질량</dt><dd>{snapshot.grasp.object_mass_kg.toFixed(2)} kg</dd><dt>보수 마찰계수</dt><dd>{snapshot.grasp.effective_friction.toFixed(2)}</dd><dt>자동 목표</dt><dd>{snapshot.grasp.target_force_n.toFixed(1)} N / 손</dd><dt>상태</dt><dd>{!snapshot.grasp.force_feedback.enabled ? '꺼짐' : snapshot.grasp.force_feedback.engaged ? '접촉 피드백' : '접촉 대기'}</dd></dl>
-        <button className={`wide ${snapshot.grasp.force_feedback.enabled ? 'chosen' : ''}`} disabled={!ready} onClick={() => void sendCommand('grasp-force', '', undefined, !snapshot.grasp!.force_feedback.enabled)}>파지력 피드백 {snapshot.grasp.force_feedback.enabled ? 'ON' : 'OFF'}</button>
-        <p>질량·마찰·들기 가속도와 안전계수로 목표를 계산합니다. 편집기의 검증 목표 {snapshot.grasp.verification_force_n.toFixed(1)} N과 별개로 실제 접촉 토크를 보정합니다.</p>
+        {snapshot.grasp.force_feedback.engaged && <p>박스 면 방향 오차 L {snapshot.grasp.force_feedback.orientation_error_deg.left.toFixed(1)}° · R {snapshot.grasp.force_feedback.orientation_error_deg.right.toFixed(1)}°</p>}
+        <button className={`wide ${snapshot.grasp.force_feedback.enabled ? 'chosen' : ''}`} disabled={!ready} onClick={() => void sendCommand('grasp-force', '', undefined, !snapshot.grasp!.force_feedback.enabled)}>힘·파지면 방향 피드백 {snapshot.grasp.force_feedback.enabled ? 'ON' : 'OFF'}</button>
+        <p>접촉 후 박스 면과 양손 파지면의 방향을 유지하면서 질량·마찰에 맞는 실제 접촉 토크를 냅니다. 물체를 손에 붙이는 weld 제약은 사용하지 않습니다. 편집기의 검증 최소 힘 {snapshot.grasp.verification_force_n.toFixed(1)} N과 별개입니다.</p>
         {snapshot.grasp.force_feedback.torque_saturated && <p className="error">모터 토크 포화: 파지면 간격을 늘리거나 자세를 다시 맞추세요.</p>}
       </section>}
     </aside>

@@ -22,6 +22,9 @@
     "filter_time_constant_s": 0.05,
     "proportional_gain": 0.35,
     "integral_gain_per_second": 2.0,
+    "orientation_proportional_gain": 32.0,
+    "orientation_derivative_gain": 3.2,
+    "hybrid_projection_damping": 0.05,
     "maximum_correction_force_n": 30.0,
     "maximum_release_force_n": 20.0,
     "maximum_feedback_torque_fraction": 0.65
