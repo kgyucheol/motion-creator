@@ -9,6 +9,7 @@ export type TwoHandGrasp = {
   closure_seconds: number;
   target_force_n: number;
   max_force_n: number;
+  follow_object?: boolean;
   contact_anchor?: 'lower_palm_wrist' | 'finger_wrist_pad';
   hand_twist_deg?: number;
   contact_points_world?: Record<'left' | 'right', number[]>;

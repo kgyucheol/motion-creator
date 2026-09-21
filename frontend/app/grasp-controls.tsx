@@ -21,6 +21,7 @@ const freshGrasp = (object: SceneObject): TwoHandGrasp => ({
   format: 'motioncreator.two-hand-grasp.v1', object_id: object.id,
   left_surface_uv: [0, 0], right_surface_uv: [0, 0],
   hand_gap_m: object.size[1], closure_seconds: .4, target_force_n: 8, max_force_n: 60,
+  follow_object: true,
 });
 
 export default function GraspControls({ objects, selectedObjectId, grasp, disabled, pickMode, onChange, onPickMode, onFit, onValidate }: Props) {
@@ -33,9 +34,11 @@ export default function GraspControls({ objects, selectedObjectId, grasp, disabl
   const fitted = !!grasp?.object_signature && !grasp.closure_qpos;
   const update = (patch: Partial<TwoHandGrasp>) => {
     if (!selectedBox) return;
+    const preservesFit = Object.keys(patch).every(key => ['follow_object', 'target_force_n', 'max_force_n'].includes(key));
     onChange({ ...(grasp ?? freshGrasp(selectedBox)), hand_gap_m: handGap, inward_offset_m: undefined,
       ...patch, object_id: patch.object_id ?? selectedBox.id,
-      closure_qpos: undefined, object_signature: undefined, contact_points_world: undefined, hand_twist_deg: undefined });
+      ...(preservesFit ? {} : { closure_qpos: undefined, object_signature: undefined,
+        contact_points_world: undefined, hand_twist_deg: undefined }) });
   };
   return <section className="grasp-controls">
     <div className="panel-heading"><span>양손 파지</span><small>키프레임 상호작용</small></div>
@@ -61,6 +64,7 @@ export default function GraspControls({ objects, selectedObjectId, grasp, disabl
       <p className="hint">0 mm에서는 두 보조면이 맞닿고, 박스 너비에서는 양쪽 면과 일치합니다. {clearance > .0005 ? `현재는 면보다 ${Math.round(clearance * 1000)} mm 벌어진 접근 자세입니다.` : clearance < -.0005 ? `현재는 박스보다 ${Math.round(-clearance * 1000)} mm 작은, 접촉력을 만들기 위한 닫힘 목표입니다.` : '현재 보조면이 박스 양쪽 면에 맞춰집니다.'} 값을 바꾼 뒤 자세 맞추기를 누르세요.</p>
       <div className="grasp-force-row"><label>검증 최소 힘 <input type="number" min="1" max="200" value={grasp.target_force_n} disabled={disabled} onChange={event => { const value = +event.target.value; update({ target_force_n: value, max_force_n: Math.max(value, grasp.max_force_n) }); }}/>N</label><label>검증 안전 상한 <input type="number" min={grasp.target_force_n} max="400" value={grasp.max_force_n} disabled={disabled} onChange={event => update({ max_force_n: Math.max(grasp.target_force_n, +event.target.value) })}/>N</label></div>
       <button className="wide primary" disabled={disabled || !selectedBox} onClick={onFit}><Hand size={15}/>양손 파지 자세 맞추기</button>
+      <label className="checkbox"><input type="checkbox" checked={grasp.follow_object !== false} disabled={disabled || !fitted} onChange={event => update({ follow_object: event.target.checked })}/>이 키프레임에서 박스 이동 시 양손 따라가기</label>
       <button className="wide" disabled={disabled || !fitted} onClick={onValidate}><Play size={15}/>이 키프레임부터 물리 검증</button>
       {fitted && <p className="hint">박스 평행 파지 자세 적용 완료 · 손목 비틀림 {grasp.hand_twist_deg?.toFixed(0) ?? 0}° · 물리 재생에서도 이 편집 자세를 그대로 사용합니다.</p>}
       {grasp.closure_qpos && <p className="hint">이 키프레임은 이전 방식의 재생용 닫힘 보정값을 포함합니다. 현재 오프셋 방식으로 다시 맞추면 편집 자세에 직접 반영됩니다.</p>}

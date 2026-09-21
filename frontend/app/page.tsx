@@ -108,11 +108,14 @@ export default function Editor() {
   const [saveMenuOpen, setSaveMenuOpen] = useState(false);
   const [historyCount, setHistoryCount] = useState(0);
   const [futureCount, setFutureCount] = useState(0);
-  const current = useRef({ state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty });
-  current.current = { state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty };
+  const current = useRef({ state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty, frameIndex });
+  current.current = { state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty, frameIndex };
   const history = useRef<EditorSnapshot[]>([]);
   const future = useRef<EditorSnapshot[]>([]);
   const objectDragCheckpointed = useRef(false);
+  const graspFollowTimer = useRef<number | null>(null);
+  const graspFollowPending = useRef<{ object: SceneObject; frameIndex: number } | null>(null);
+  const graspFollowInFlight = useRef(false);
   const anchor = useRef<number[]>([]);
   const anchorPositions = useRef<Record<string, number[]>>({});
   const anchorCenter = useRef<number[]>([0, 0, 0]);
@@ -158,18 +161,68 @@ export default function Editor() {
     const grounded = next.map(groundedSceneObject);
     current.current.objects = grounded;
     setObjects(grounded);
-    setProject(value => value ? { ...value, scene_objects: grounded } : value);
+    const activeProject = current.current.project;
+    if (activeProject) {
+      const nextProject = { ...activeProject, scene_objects: grounded };
+      current.current.project = nextProject;
+      setProject(nextProject);
+    }
     invalidate();
+    return grounded;
+  }
+  function scheduleGraspFollow(object: SceneObject) {
+    const c = current.current;
+    const grasp = c.project?.keyframes[c.frameIndex]?.grasp;
+    if (!grasp?.object_signature || grasp.object_id !== object.id || grasp.follow_object === false) return;
+    graspFollowPending.current = { object: structuredClone(object), frameIndex: c.frameIndex };
+    if (graspFollowTimer.current !== null) window.clearTimeout(graspFollowTimer.current);
+    graspFollowTimer.current = window.setTimeout(() => { graspFollowTimer.current = null; void drainGraspFollow(); }, 70);
+  }
+  async function drainGraspFollow() {
+    if (graspFollowInFlight.current) return;
+    const pendingFollow = graspFollowPending.current;
+    if (!pendingFollow) return;
+    graspFollowPending.current = null;
+    const c = current.current;
+    const frame = c.project?.keyframes[pendingFollow.frameIndex];
+    if (!frame?.grasp || c.frameIndex !== pendingFollow.frameIndex || frame.grasp.object_id !== pendingFollow.object.id) return;
+    graspFollowInFlight.current = true; setSolving(true); setError('');
+    try {
+      const result = await api<{ state: PoseState; grasp: TwoHandGrasp; solver: { contact: SolveInfo } }>('grasp-fit', {
+        qpos: c.state?.qpos ?? frame.qpos, pins: c.pins, angle_pins: c.anglePins,
+        object: pendingFollow.object, grasp: { ...frame.grasp, follow_object: true },
+      });
+      if (!alive.current || current.current.frameIndex !== pendingFollow.frameIndex || graspFollowPending.current) return;
+      applyState(result.state); setInfo(result.solver.contact); setPoseDirty(false);
+      const activeProject = current.current.project;
+      if (activeProject) {
+        const nextProject = { ...activeProject, keyframes: activeProject.keyframes.map((item, index) => index === pendingFollow.frameIndex
+          ? { ...item, qpos: [...result.state.qpos], grasp: { ...result.grasp, follow_object: true } } : item) };
+        current.current.project = nextProject; setProject(nextProject);
+      }
+      invalidate();
+      setMessage(`박스 파지점을 따라 양손 자세를 갱신했습니다 · 오차 ${result.solver.contact.target_error_mm.toFixed(2)} mm`);
+    } catch (failure) {
+      setError(`박스 파지점을 따라갈 수 없습니다: ${(failure as Error).message}`);
+    } finally {
+      graspFollowInFlight.current = false; setSolving(false);
+      if (graspFollowPending.current) {
+        graspFollowTimer.current = window.setTimeout(() => { graspFollowTimer.current = null; void drainGraspFollow(); }, 0);
+      }
+    }
   }
   function changeObject(id: string, patch: Partial<SceneObject>, recordHistory = true) {
     if (recordHistory) checkpoint();
-    commitObjects(current.current.objects.map(object => {
+    const changesGeometry = Object.keys(patch).some(key => ['position', 'quaternion_xyzw', 'size', 'shape'].includes(key));
+    const committed = commitObjects(current.current.objects.map(object => {
       if (object.id !== id) return object;
       const next = { ...object, ...patch };
       const normalized = { ...next, size: normalizedObjectSize(next.shape, next.size) };
       if (!Object.keys(patch).some(key => ['position', 'quaternion_xyzw', 'size', 'shape'].includes(key))) return normalized;
       return placeSceneObject(normalized, current.current.objects.filter(other => other.id !== id), scenePlacementOptions(object), object);
     }));
+    const changed = committed.find(object => object.id === id);
+    if (changesGeometry && changed) scheduleGraspFollow(changed);
   }
   function selectObject(id: string | null) {
     setSelectedObjectId(id); current.current.selectedObjectId = id;
@@ -211,7 +264,9 @@ export default function Editor() {
     if (placement.groundLock) {
       updated = { ...updated, position: [updated.position[0], updated.position[1], objectVerticalHalfExtent(updated)] };
     }
-    commitObjects(current.current.objects.map(object => object.id === id ? updated : object));
+    const committed = commitObjects(current.current.objects.map(object => object.id === id ? updated : object));
+    const changed = committed.find(object => object.id === id);
+    if (changed) scheduleGraspFollow(changed);
   }
   function changeGraspPickMode(mode: GraspPickMode) {
     graspPickModeRef.current = mode; setGraspPickMode(mode); scene.current?.setSurfacePickMode(!!mode);
@@ -412,6 +467,7 @@ export default function Editor() {
     api<GroupPreset[]>('groups').then(setGroups).catch(e => setError(`그룹 프리셋 불러오기 실패: ${e.message}`));
     return () => {
       alive.current = false; viewer?.dispose(); scene.current = null;
+      if (graspFollowTimer.current !== null) window.clearTimeout(graspFollowTimer.current);
       const request = policyRequest.current;
       if (request) {
         request.cancelled = true;
@@ -527,7 +583,8 @@ export default function Editor() {
     if (!frame || !grasp || !object) return;
     await run(async () => {
       const result = await api<{ state: PoseState; grasp: TwoHandGrasp; solver: { contact: SolveInfo } }>('grasp-fit', {
-        qpos: frame.qpos, pins: frame.pins, angle_pins: frame.angle_pins ?? [], object, grasp,
+        qpos: frame.qpos, pins: frame.pins, angle_pins: frame.angle_pins ?? [], object,
+        grasp: { ...grasp, follow_object: grasp.follow_object !== false },
       });
       checkpoint(); applyState(result.state); setPins([...frame.pins]); setAnglePins([...(frame.angle_pins ?? [])]); setPoseDirty(false); setInfo(result.solver.contact);
       setProject(value => value ? { ...value, keyframes: value.keyframes.map((item, index) => index === frameIndex
