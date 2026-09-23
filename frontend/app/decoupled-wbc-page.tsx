@@ -4,6 +4,9 @@ import { RobotScene, type PoseState } from '../lib/robot-scene';
 import type { SceneObject, SceneObjectPose } from '../lib/scene-objects';
 
 type Runtime = { available: boolean; missing: string[]; invalid: string[]; source_revision: string; setup_command: string };
+type ArmJoint = 'shoulder_pitch' | 'shoulder_roll' | 'shoulder_yaw' | 'elbow' | 'wrist_roll' | 'wrist_pitch' | 'wrist_yaw';
+type JointTorque = { pose: number; bias: number; normal: number; orientation: number;
+  vertical_support: number; feedback: number; command: number; limit: number; utilization_percent: number };
 type Snapshot = {
   revision: number; phase: string; playing: boolean; error: string; policy: 'balance' | 'walk';
   control_mode: 'auto' | 'manual';
@@ -21,12 +24,20 @@ type Snapshot = {
       correction_force_n: Record<'left' | 'right', number>;
       feedback_torque_nm: Record<'left' | 'right', number>;
       orientation_error_deg: Record<'left' | 'right', number>;
-      orientation_feedback_torque_nm: Record<'left' | 'right', number> } };
+      orientation_error_rpy_deg: Record<'left' | 'right', Record<'roll' | 'pitch' | 'yaw', number>>;
+      orientation_feedback_torque_nm: Record<'left' | 'right', number>;
+      vertical_support: { target_height_m: number; height_error_m: number; target_velocity_mps: number;
+        object_velocity_mps: number; force_n_per_hand: number };
+      joint_torque_nm: Record<'left' | 'right', Record<ArmJoint, JointTorque>> } };
 };
 type SaveResult = { folder: string; files: string[] };
 
 const filePath = (name: string) => name.split('/').map(encodeURIComponent).join('/');
 const phaseLabel: Record<string, string> = { ready: '준비', settling: '상체 준비', playing: '재생·녹화', paused: '일시정지', fallen: '낙상 감지' };
+const armJoints: [ArmJoint, string][] = [['shoulder_pitch', '어깨 P'], ['shoulder_roll', '어깨 R'],
+  ['shoulder_yaw', '어깨 Y'], ['elbow', '팔꿈치'], ['wrist_roll', '손목 R'],
+  ['wrist_pitch', '손목 P'], ['wrist_yaw', '손목 Y']];
+const signed = (value: number, digits = 1) => `${value >= 0 ? '+' : ''}${value.toFixed(digits)}`;
 
 async function responseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -218,9 +229,18 @@ export default function DecoupledWbcPage() {
       {snapshot?.grasp && <section className="wbc-command-card">
         <h2>파지 연결 제어</h2>
         <dl><dt>물체 질량</dt><dd>{snapshot.grasp.object_mass_kg.toFixed(2)} kg</dd><dt>보수 마찰계수</dt><dd>{snapshot.grasp.effective_friction.toFixed(2)}</dd><dt>자동 목표</dt><dd>{snapshot.grasp.target_force_n.toFixed(1)} N / 손</dd><dt>상태</dt><dd>{!snapshot.grasp.force_feedback.enabled ? '꺼짐' : snapshot.grasp.force_feedback.engaged ? '접촉 피드백' : '접촉 대기'}</dd></dl>
-        {snapshot.grasp.force_feedback.engaged && <p>박스 면 방향 오차 L {snapshot.grasp.force_feedback.orientation_error_deg.left.toFixed(1)}° · R {snapshot.grasp.force_feedback.orientation_error_deg.right.toFixed(1)}°</p>}
+        {snapshot.grasp.force_feedback.engaged && <div className="wbc-feedback-summary">
+          {(['left', 'right'] as const).map(side => { const error = snapshot.grasp!.force_feedback.orientation_error_rpy_deg[side]; return <div key={side}><b>{side === 'left' ? '왼손' : '오른손'} R/P/Y</b><span>{signed(error.roll)}° / {signed(error.pitch)}° / {signed(error.yaw)}°</span></div>; })}
+          <div><b>수직 지지</b><span>{snapshot.grasp.force_feedback.vertical_support.force_n_per_hand.toFixed(1)} N/손 · 오차 {signed(snapshot.grasp.force_feedback.vertical_support.height_error_m * 1000, 0)} mm</span></div>
+        </div>}
         <button className={`wide ${snapshot.grasp.force_feedback.enabled ? 'chosen' : ''}`} disabled={!ready} onClick={() => void sendCommand('grasp-force', '', undefined, !snapshot.grasp!.force_feedback.enabled)}>힘·파지면 방향 피드백 {snapshot.grasp.force_feedback.enabled ? 'ON' : 'OFF'}</button>
-        <p>접촉 후 박스 면과 양손 파지면의 방향을 유지하면서 질량·마찰에 맞는 실제 접촉 토크를 냅니다. 물체를 손에 붙이는 weld 제약은 사용하지 않습니다. 편집기의 검증 최소 힘 {snapshot.grasp.verification_force_n.toFixed(1)} N과 별개입니다.</p>
+        <p>접촉 후 박스 면 방향과 편집기 손 궤적의 높이를 추종합니다. 물체 질량의 중력을 양팔에 분배하며 weld 제약은 사용하지 않습니다. 편집기의 검증 최소 힘 {snapshot.grasp.verification_force_n.toFixed(1)} N과 별개입니다.</p>
+        {snapshot.grasp.force_feedback.engaged && <details className="wbc-feedback-details"><summary>관절별 토크 진단</summary>
+          {(['left', 'right'] as const).map(side => <div className="wbc-torque-table-wrap" key={side}><b>{side === 'left' ? '왼팔' : '오른팔'}</b><table><thead><tr><th>관절</th><th>명령/한계</th><th>자세</th><th>방향</th><th>지지</th></tr></thead><tbody>
+            {armJoints.map(([joint, label]) => { const value = snapshot.grasp!.force_feedback.joint_torque_nm[side][joint]; return <tr className={value.utilization_percent >= 95 ? 'saturated' : ''} key={joint}><td>{label}</td><td>{signed(value.command)} / {value.limit.toFixed(0)}<small>{value.utilization_percent.toFixed(0)}%</small></td><td>{signed(value.pose)}</td><td>{signed(value.orientation)}</td><td>{signed(value.vertical_support)}</td></tr>; })}
+          </tbody></table></div>)}
+          <p>단위 Nm. 명령은 자세·중력보상·파지 피드백을 합친 최종 모터 토크입니다.</p>
+        </details>}
         {snapshot.grasp.force_feedback.torque_saturated && <p className="error">모터 토크 포화: 파지면 간격을 늘리거나 자세를 다시 맞추세요.</p>}
       </section>}
     </aside>

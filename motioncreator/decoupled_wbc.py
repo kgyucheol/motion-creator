@@ -31,6 +31,10 @@ from .robot import ROOT, Robot
 ASSET_ROOT = ROOT / "external/task-models/decoupled-wbc"
 ASSET_MANIFEST = ROOT / "integrations/decoupled-wbc-assets.json"
 PARAMETERS_PATH = ROOT / "integrations/decoupled-wbc-parameters.json"
+ARM_JOINT_NAMES = (
+    "shoulder_pitch", "shoulder_roll", "shoulder_yaw", "elbow",
+    "wrist_roll", "wrist_pitch", "wrist_yaw",
+)
 
 
 def _parameters() -> dict:
@@ -363,6 +367,9 @@ class DecoupledSimulation:
         } if self.grasp_control else {}
         self.hand_bodies = {side: self.model.body(f"{side}_wrist_yaw_link").id
                             for side in ("left", "right")} if self.grasp_control else {}
+        self.reference_grasp_height = self._reference_grasp_heights() if self.grasp_control else np.zeros(1)
+        self.reference_grasp_velocity = (np.gradient(self.reference_grasp_height, 1 / 50)
+                                         if len(self.reference_grasp_height) > 1 else np.zeros(1))
         arm_joint_ids = self.model.actuator_trnid[15:29, 0]
         self.arm_torque_limits = self.model.jnt_actfrcrange[arm_joint_ids].copy()
         self.policy = LowerBodyPolicy(self.parameters)
@@ -389,6 +396,21 @@ class DecoupledSimulation:
         self.thread = threading.Thread(target=self._loop, name="decoupled-wbc", daemon=True)
         if autostart:
             self.thread.start()
+
+    def _reference_grasp_heights(self) -> np.ndarray:
+        """Return the authored mean grip-plane height for load-support tracking."""
+        bodies = {side: self.robot.model.body(f"{side}_wrist_yaw_link").id
+                  for side in ("left", "right")}
+        data = mujoco.MjData(self.robot.model)
+        heights = []
+        for qpos in self.reference["qpos"]:
+            data.qpos[:] = qpos
+            mujoco.mj_forward(self.robot.model, data)
+            points = [data.xpos[body]
+                      + data.xmat[body].reshape(3, 3) @ grip_pad_contact_anchor(side)
+                      for side, body in bodies.items()]
+            heights.append(float(np.mean([point[2] for point in points])))
+        return np.asarray(heights)
 
     def _reference_at(self, seconds: float) -> np.ndarray:
         index = min(int(round(seconds * 50)), len(self.reference["qpos"]) - 1)
@@ -516,6 +538,13 @@ class DecoupledSimulation:
         return (target - q) * kp - dq * kd
 
     def _reset_grasp_force(self) -> None:
+        empty_joint_metrics = {
+            side: {name: {component: 0. for component in (
+                "pose", "bias", "normal", "orientation", "vertical_support",
+                "feedback", "command", "limit", "utilization_percent")}
+                   for name in ARM_JOINT_NAMES}
+            for side in ("left", "right")
+        }
         self.grasp_force = {
             "enabled": self.grasp_force_enabled,
             "engaged": False,
@@ -525,7 +554,18 @@ class DecoupledSimulation:
             "integral_force_n": {"left": 0., "right": 0.},
             "feedback_torque_nm": {"left": 0., "right": 0.},
             "orientation_error_deg": {"left": 0., "right": 0.},
+            "orientation_error_rpy_deg": {
+                "left": {"roll": 0., "pitch": 0., "yaw": 0.},
+                "right": {"roll": 0., "pitch": 0., "yaw": 0.},
+            },
             "orientation_feedback_torque_nm": {"left": 0., "right": 0.},
+            "vertical_support": {
+                "target_height_m": 0., "height_error_m": 0.,
+                "target_velocity_mps": 0., "object_velocity_mps": 0.,
+                "force_n_per_hand": 0.,
+            },
+            "support_height_offset_m": None,
+            "joint_torque_nm": empty_joint_metrics,
             "torque_saturated": False,
         }
 
@@ -567,15 +607,37 @@ class DecoupledSimulation:
         object_y = object_rotation[:, 1]
         kp = float(config["proportional_gain"])
         ki = float(config["integral_gain_per_second"])
-        orientation_kp = float(config["orientation_proportional_gain"])
-        orientation_kd = float(config["orientation_derivative_gain"])
+        orientation_kp = np.asarray(config["orientation_proportional_gain_rpy"], dtype=float)
+        orientation_kd = np.asarray(config["orientation_derivative_gain_rpy"], dtype=float)
         maximum = float(config["maximum_correction_force_n"])
         minimum = -float(config["maximum_release_force_n"])
         jacobian = np.zeros((3, self.model.nv))
         rotational = np.zeros((3, self.model.nv))
+        object_linear = np.zeros((3, self.model.nv))
         object_rotational = np.zeros((3, self.model.nv))
-        mujoco.mj_jacBody(self.model, self.data, None, object_rotational, object_body)
+        mujoco.mj_jacBody(self.model, self.data, object_linear, object_rotational, object_body)
         object_angular_velocity = object_rotational @ self.data.qvel
+        object_linear_velocity = object_linear @ self.data.qvel
+        reference_index = min(int(round(self.motion_time * 50)), len(self.reference_grasp_height) - 1)
+        if self.grasp_force["support_height_offset_m"] is None:
+            self.grasp_force["support_height_offset_m"] = (
+                float(self.data.xpos[object_body, 2]) - self.reference_grasp_height[reference_index])
+        target_height = (self.reference_grasp_height[reference_index]
+                         + float(self.grasp_force["support_height_offset_m"]))
+        target_velocity = float(self.reference_grasp_velocity[reference_index])
+        height_error = float(target_height - self.data.xpos[object_body, 2])
+        velocity_error = float(target_velocity - object_linear_velocity[2])
+        support_force = float(np.clip(
+            (float(self.grasp_control["object_mass_kg"]) * 9.81
+             + float(config["vertical_position_gain_n_per_m"]) * height_error
+             + float(config["vertical_velocity_gain_ns_per_m"]) * velocity_error) / 2,
+            0., float(config["maximum_vertical_support_force_n_per_hand"])))
+        self.grasp_force["vertical_support"] = {
+            "target_height_m": float(target_height), "height_error_m": height_error,
+            "target_velocity_mps": target_velocity,
+            "object_velocity_mps": float(object_linear_velocity[2]),
+            "force_n_per_hand": support_force,
+        }
         task_rows = []
         for side, arm_slice, direction in (
                 ("left", slice(0, 7), -object_y),
@@ -600,6 +662,9 @@ class DecoupledSimulation:
             orientation_rows = np.zeros((3, 14))
             orientation_rows[:, arm_slice] = rotational[:, dofs]
             task_rows.extend(orientation_rows)
+            vertical_row = np.zeros(14)
+            vertical_row[arm_slice] = jacobian[2, dofs]
+            task_rows.append(vertical_row)
             twist = self.grasp_control["hand_twist_deg"] if side == "left" else -self.grasp_control["hand_twist_deg"]
             desired_rotation = (object_rotation
                                 @ Rotation.from_euler("y", twist, degrees=True).as_matrix()
@@ -607,11 +672,15 @@ class DecoupledSimulation:
             current_rotation = self.data.xmat[body].reshape(3, 3)
             orientation_error = Rotation.from_matrix(desired_rotation @ current_rotation.T).as_rotvec()
             relative_angular_velocity = object_angular_velocity - rotational @ self.data.qvel
-            orientation_moment = (orientation_kp * orientation_error
-                                  + orientation_kd * relative_angular_velocity)
+            orientation_error_object = object_rotation.T @ orientation_error
+            relative_angular_velocity_object = object_rotation.T @ relative_angular_velocity
+            orientation_moment = object_rotation @ (
+                orientation_kp * orientation_error_object
+                + orientation_kd * relative_angular_velocity_object)
             force_torque = jacobian[:, dofs].T @ (direction * correction)
             orientation_torque = rotational[:, dofs].T @ orientation_moment
-            side_torque = force_torque + orientation_torque
+            support_torque = jacobian[:, dofs].T @ np.array([0., 0., support_force])
+            side_torque = force_torque + orientation_torque + support_torque
             limit = (np.max(np.abs(self.arm_torque_limits[arm_slice]), axis=1)
                      * float(config["maximum_feedback_torque_fraction"]))
             side_torque = np.clip(side_torque, -limit, limit)
@@ -619,8 +688,16 @@ class DecoupledSimulation:
             self.grasp_force["feedback_torque_nm"][side] = float(np.max(np.abs(side_torque)))
             self.grasp_force["orientation_error_deg"][side] = float(np.rad2deg(
                 np.linalg.norm(orientation_error)))
+            self.grasp_force["orientation_error_rpy_deg"][side] = dict(zip(
+                ("roll", "pitch", "yaw"), np.rad2deg(orientation_error_object).tolist()))
             self.grasp_force["orientation_feedback_torque_nm"][side] = float(np.max(np.abs(
                 orientation_torque)))
+            for index, name in enumerate(ARM_JOINT_NAMES):
+                metrics = self.grasp_force["joint_torque_nm"][side][name]
+                metrics["normal"] = float(force_torque[index])
+                metrics["orientation"] = float(orientation_torque[index])
+                metrics["vertical_support"] = float(support_torque[index])
+                metrics["feedback"] = float(side_torque[index])
         return torque, np.asarray(task_rows)
 
     def step(self) -> None:
@@ -650,6 +727,16 @@ class DecoupledSimulation:
                                             self.arm_torque_limits[:, 0], self.arm_torque_limits[:, 1])
             self.grasp_force["torque_saturated"] = bool(np.any(
                 np.abs(requested_arm_control - self.data.ctrl[15:29]) > 1e-6))
+            for side, arm_slice in (("left", slice(0, 7)), ("right", slice(7, 14))):
+                limits = np.max(np.abs(self.arm_torque_limits[arm_slice]), axis=1)
+                for index, name in enumerate(ARM_JOINT_NAMES):
+                    metrics = self.grasp_force["joint_torque_nm"][side][name]
+                    metrics["pose"] = float(pose_control[arm_slice][index])
+                    metrics["bias"] = float(self.data.qfrc_bias[21:35][arm_slice][index])
+                    metrics["command"] = float(self.data.ctrl[15:29][arm_slice][index])
+                    metrics["limit"] = float(limits[index])
+                    metrics["utilization_percent"] = float(
+                        100 * abs(self.data.ctrl[15:29][arm_slice][index]) / limits[index])
             mujoco.mj_step(self.model, self.data)
             self.step_count += 1
             self.play_time += p["simulation_dt"]

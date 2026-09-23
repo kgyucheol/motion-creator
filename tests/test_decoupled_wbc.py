@@ -145,11 +145,44 @@ def test_grasp_feedback_uses_whole_arm_to_resist_wrist_yaw_error():
         simulation.grasp_force["engaged"] = True
         target = simulation.grasp_control["target_force_n"]
         torque, task_jacobian = simulation._grasp_feedback_torque({"left": target, "right": target})
-        assert task_jacobian.shape == (8, 14)
+        assert task_jacobian.shape == (10, 14)
         assert simulation.grasp_force["orientation_error_deg"]["left"] > 8
+        assert abs(simulation.grasp_force["orientation_error_rpy_deg"]["left"]["yaw"]) > 8
         assert simulation.grasp_force["orientation_error_deg"]["right"] < 4
         assert simulation.grasp_force["orientation_feedback_torque_nm"]["left"] > 1
         assert np.linalg.norm(torque[:7]) > np.linalg.norm(torque[7:])
+        assert simulation.grasp_force["vertical_support"]["force_n_per_hand"] == pytest.approx(4.905)
+        assert simulation.grasp_force["joint_torque_nm"]["left"]["wrist_yaw"]["feedback"] != 0
+    finally:
+        simulation.close()
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_grasp_feedback_reports_and_resists_wrist_pitch_error():
+    robot = Robot()
+    project = new_project(robot)
+    item = {"id": "box", "name": "Box", "shape": "box", "position": [.35, 0., .85],
+            "quaternion_xyzw": [0., 0., 0., 1.], "size": [.2, .2, .2], "mass_kg": 1.,
+            "friction": .8, "color": "#ffffff", "opacity": 1., "visible": True}
+    event = {"format": "motioncreator.two-hand-grasp.v1", "object_id": "box",
+             "left_surface_uv": [0., 0.], "right_surface_uv": [0., 0.],
+             "hand_gap_m": .19, "closure_seconds": .4,
+             "target_force_n": 8., "max_force_n": 60.}
+    fitted = fit_two_hand_grasp(robot, project["keyframes"][0]["qpos"],
+                                project["keyframes"][0]["pins"], item, event)
+    project["scene_objects"] = [item]
+    project["keyframes"][0].update(qpos=fitted["state"]["qpos"], grasp=fitted["grasp"])
+    simulation = DecoupledSimulation(robot, project, autostart=False)
+    try:
+        simulation.data.qpos[27] += .2
+        mujoco.mj_forward(simulation.model, simulation.data)
+        simulation.grasp_force["engaged"] = True
+        target = simulation.grasp_control["target_force_n"]
+        torque, _ = simulation._grasp_feedback_torque({"left": target, "right": target})
+        errors = simulation.grasp_force["orientation_error_rpy_deg"]["left"]
+        assert abs(errors["pitch"]) > 6
+        assert abs(torque[5]) > 1
+        assert abs(torque[0]) > 1 or abs(torque[3]) > 1
     finally:
         simulation.close()
 
