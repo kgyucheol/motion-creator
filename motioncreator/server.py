@@ -95,18 +95,20 @@ def checked(fn):
 
 @app.get('/api/health')
 def health():
-    return {'status': 'ok', 'model': 'G1 29 DoF', 'nq': robot.model.nq, 'nv': robot.model.nv}
+    return {'status': 'ok', 'model': 'G1 29 DoF', 'model_id': robot.model_id, 'nq': robot.model.nq, 'nv': robot.model.nv}
 
 
 @app.get('/api/init')
 def initialize():
-    return {'state': robot.state(robot.home), 'project': new_project(robot), 'joint_names': robot.names,
+    return {'model_id': robot.model_id, 'state': robot.state(robot.home), 'project': new_project(robot), 'joint_names': robot.names,
             'limits': robot.model.jnt_range[1:].tolist()}
 
 
 @app.get('/api/robot.glb')
 def visual():
-    path = ROOT / 'assets/g1/robot.glb'
+    path = ROOT / f'assets/g1/robot-{robot.model_id}.glb'
+    if not path.is_file():
+        robot.export_visual(path)
     return FileResponse(path, media_type='model/gltf-binary')
 
 
@@ -276,11 +278,14 @@ def main():
                 and running_health.get('status') == 'ok'
                 and running_health.get('model') == 'G1 29 DoF'
                 and running_schema.get('info', {}).get('title') == 'G1 Motion Creator'):
-            print(f'G1 Motion Creator가 이미 실행 중입니다.\n브라우저에서 열기: {address}/')
+            if running_health.get('model_id', 'g1') != robot.model_id:
+                print('다른 로봇 모델의 편집기가 이 포트에서 실행 중입니다. --port 8766 등 다른 포트를 사용하세요.')
+            else:
+                print(f'G1 Motion Creator가 이미 실행 중입니다.\n브라우저에서 열기: {address}/')
             return
     except (urllib.error.URLError, OSError, ValueError):
         pass
-    robot.export_visual(ROOT / 'assets/g1/robot.glb')
+    robot.export_visual(ROOT / f'assets/g1/robot-{robot.model_id}.glb')
     frontend = ROOT / 'frontend/dist'
     if (frontend / 'index.html').exists():
         app.mount('/', StaticFiles(directory=frontend, html=True), name='editor')

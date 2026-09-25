@@ -1,6 +1,8 @@
 """MuJoCo FK and bounded, weighted whole-body IK. No dynamics stepping."""
 from pathlib import Path
 import hashlib
+import os
+import copy
 import xml.etree.ElementTree as ET
 import numpy as np
 import mujoco
@@ -92,10 +94,22 @@ def matrix_quat(matrix):
 
 class Robot:
     def __init__(self):
-        self.model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+        self.model_id = os.environ.get('MOTIONCREATOR_MODEL', 'g1')
+        self.handles = dict(HANDLES)
+        if self.model_id == 'g1-tools':
+            from .tool_model import tool_model_xml
+            self.xml, tool_handles = tool_model_xml()
+            self.handles.update(tool_handles)
+            self.model = mujoco.MjModel.from_xml_string(ET.tostring(self.xml, encoding='unicode'))
+        elif self.model_id == 'g1':
+            self.xml = ET.parse(MODEL_PATH).getroot()
+            self.xml.find('compiler').set('meshdir', str(MODEL_PATH.parent / 'meshes'))
+            self.model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+        else:
+            raise ValueError('Unknown robot model')
         m = self.model
         self.names = [m.joint(i).name for i in range(1, m.njnt)]
-        self.ids = {k: m.body(v[0]).id for k, v in HANDLES.items()}
+        self.ids = {k: m.body(v[0]).id for k, v in self.handles.items()}
         # Hip translation/pivot follows the roll anchor; orientation includes all three hip axes.
         self.orientation_ids = {**self.ids, **{f'{side}_hip': m.body(f'{side}_hip_yaw_link').id for side in ('left', 'right')}, 'waist': m.body('torso_link').id}
         self.q_indices = np.r_[0:3, 7:m.nq]
@@ -110,7 +124,11 @@ class Robot:
         # The model uses radius-5 mm contact spheres at z=-30 mm.
         self.home[2] -= min(self.point(d, k)[0][2] for k in FEET)
         self.visual_ids = [i for i in range(m.ngeom) if m.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH and m.geom_group[i] == 1]
-        self.fingerprint = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()
+        self.fingerprint = hashlib.sha256(MODEL_PATH.read_bytes() if self.model_id == 'g1'
+                                          else ET.tostring(self.xml)).hexdigest()
+
+    def xml_root(self):
+        return copy.deepcopy(self.xml)
 
     def validate_q(self, value):
         q = np.array(value, dtype=float, copy=True)
@@ -134,7 +152,7 @@ class Robot:
     def point(self, d, key):
         b = self.ids[key]
         r = d.xmat[b].reshape(3, 3)
-        return d.xpos[b] + r @ np.array(HANDLES[key][1]), d.xmat[self.orientation_ids[key]].reshape(3, 3)
+        return d.xpos[b] + r @ np.array(self.handles[key][1]), d.xmat[self.orientation_ids[key]].reshape(3, 3)
 
     def distance(self, a, b):
         def ancestors(n):
@@ -327,12 +345,12 @@ class Robot:
 
     def state(self, q):
         d = self.data(q)
-        handles = {k: {'position': p.tolist(), 'quaternion': Rotation.from_matrix(r).as_quat().tolist(), 'label': HANDLES[k][2]}
+        handles = {k: {'position': p.tolist(), 'quaternion': Rotation.from_matrix(r).as_quat().tolist(), 'label': self.handles[k][2]}
                    for k in HANDLES for p, r in [self.point(d, k)]}
         geoms = {str(i): {'position': d.geom_xpos[i].tolist(), 'quaternion': Rotation.from_matrix(d.geom_xmat[i].reshape(3, 3)).as_quat().tolist()}
                  for i in self.visual_ids}
         grip_pads = {}
-        for side in ('left', 'right'):
+        for side in (() if self.model_id == 'g1-tools' else ('left', 'right')):
             body = self.model.body(f'{side}_wrist_yaw_link').id
             rotation = d.xmat[body].reshape(3, 3)
             grip_pads[side] = {

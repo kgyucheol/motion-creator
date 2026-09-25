@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+if [[ "${1:-}" == "--model" ]]; then
+  export MOTIONCREATOR_MODEL="${2:?모델 이름 필요: g1 또는 g1-tools}"
+  shift 2
+fi
 python_executable=.conda-policy/bin/python
 if [[ ! -x "$python_executable" ]]; then
   python_executable=.conda/bin/python

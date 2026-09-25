@@ -216,6 +216,8 @@ def validate_project(robot: Robot, project):
     for item in objects:
         if not isinstance(item, dict):
             raise ValueError('Each scene object must be an object')
+        if 'fixed' in item and not isinstance(item['fixed'], bool):
+            raise ValueError('Scene object fixed must be a boolean')
         identifier = item.get('id')
         if not isinstance(identifier, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', identifier):
             raise ValueError('Scene object IDs must use 1–64 letters, numbers, underscores or hyphens')

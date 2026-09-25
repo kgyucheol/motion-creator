@@ -426,6 +426,7 @@ export class RobotScene {
       const obj = this.geoms[id];
       if (obj) { obj.position.fromArray(pose.position); obj.quaternion.fromArray(pose.quaternion); }
     }
+    for (const side of ['left', 'right'] as const) this.gripPads[side].visible = !!state.grip_pads?.[side];
     for (const [side, pose] of Object.entries(state.grip_pads ?? {})) {
       const pad = this.gripPads[side as 'left' | 'right'];
       pad.position.fromArray(pose.position); pad.quaternion.fromArray(pose.quaternion); pad.scale.fromArray(pose.size);

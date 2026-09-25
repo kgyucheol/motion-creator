@@ -97,8 +97,7 @@ def _grounded_position(item):
 
 
 def build_model(robot, project=None):
-    root = ET.parse(MODEL_PATH).getroot()
-    root.find('compiler').set('meshdir', str(ROOT / 'assets/g1/meshes'))
+    root = robot.xml_root()
     option = root.find('option')
     if option is None:
         option = ET.SubElement(root, 'option')
@@ -112,6 +111,8 @@ def build_model(robot, project=None):
         if contact is None:
             contact = ET.SubElement(root, 'contact')
         for side in ('left', 'right'):
+            if robot.model_id == 'g1-tools':
+                continue
             body = root.find(f".//body[@name='{side}_wrist_yaw_link']")
             physical_hand_geom_names(root, side)
             ET.SubElement(body, 'geom', name=f'{side}_preview_grip', type='box',
@@ -126,6 +127,11 @@ def build_model(robot, project=None):
                                  pos=_numbers(_grounded_position(item)),
                                  quat=_numbers(np.asarray(item['quaternion_xyzw'])[[3, 0, 1, 2]]))
             ET.SubElement(body, 'freejoint', name=f'preview_object_joint_{index}')
+            if item.get('fixed', False):
+                equality = root.find('equality')
+                if equality is None:
+                    equality = ET.SubElement(root, 'equality')
+                ET.SubElement(equality, 'weld', body1='world', body2=f'preview_object_{index}', solref='.005 1')
             size = np.asarray(item['size'], dtype=float)
             mj_size = size / 2 if item['shape'] == 'box' else [size[0] / 2] if item['shape'] == 'sphere' else [size[0] / 2, size[2] / 2]
             geom_name = f'preview_object_geom_{index}'
@@ -134,8 +140,11 @@ def build_model(robot, project=None):
                           contype='0', conaffinity='0')
             object_geoms.append(geom_name)
             for side in ('left', 'right'):
-                for hand_index in range(2):
-                    ET.SubElement(contact, 'pair', geom1=f'{side}_physical_hand_{hand_index}', geom2=geom_name,
+                names = ([g.get('name') for g in root.find(f".//body[@name='{side}_wrist_yaw_link']").iter('geom')
+                          if g.get('contype', '1') != '0'] if robot.model_id == 'g1-tools'
+                         else [f'{side}_physical_hand_{i}' for i in range(2)])
+                for name in names:
+                    ET.SubElement(contact, 'pair', geom1=name, geom2=geom_name,
                                   condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
                                   solref='.01 1', solimp='.95 .99 .001')
             ET.SubElement(contact, 'pair', geom1='floor', geom2=geom_name, condim='3',
@@ -144,7 +153,7 @@ def build_model(robot, project=None):
             for geom2 in object_geoms[first + 1:]:
                 ET.SubElement(contact, 'pair', geom1=geom1, geom2=geom2, condim='3')
     model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding='unicode'))
-    if model.nq != 36 + 7 * len(objects) or model.nu != 29 or model.neq:
+    if model.nq != 36 + 7 * len(objects) or model.nu != 29:
         raise ValueError('Unexpected G1 physics model')
     return model
 

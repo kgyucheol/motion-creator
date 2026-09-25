@@ -127,6 +127,8 @@ def fit_two_hand_grasp(robot: Robot, qpos, pins, item, event, angle_pins=()):
     The inward offset is part of the keyframe pose itself.  No hidden physics-only
     closure pose is generated, so editor, preview and WBC playback share one pose.
     """
+    if robot.model_id != 'g1':
+        raise ValueError('도구 모델은 양손 TCP 이동·회전으로 자세를 편집하세요. 더미핸드용 박스 파지 맞춤은 지원하지 않습니다.')
     source = robot.validate_q(qpos)
     target = validate_grasp_event(robot, event, [item])
     left_uv = _validate_uv(event['left_surface_uv'], 'Left hand')

@@ -94,14 +94,18 @@ def _grounded_position(item: dict) -> np.ndarray:
 
 def build_environment_model(project: dict) -> mujoco.MjModel:
     """Load the WBC MJCF and add fully dynamic authored scene objects."""
-    root = ET.parse(ASSET_ROOT / "g1_gear_wbc.xml").getroot()
-    root.find("compiler").set("meshdir", str(ASSET_ROOT / "meshes"))
+    tool_model = os.environ.get('MOTIONCREATOR_MODEL') == 'g1-tools'
+    root = Robot().xml_root() if tool_model else ET.parse(ASSET_ROOT / "g1_gear_wbc.xml").getroot()
+    if not tool_model:
+        root.find("compiler").set("meshdir", str(ASSET_ROOT / "meshes"))
     objects = project_scene_objects(project)
     if objects:
         contact = root.find("contact")
         if contact is None:
             contact = ET.SubElement(root, "contact")
         for side in ("left", "right"):
+            if tool_model:
+                continue
             body = root.find(f".//body[@name='{side}_wrist_yaw_link']")
             physical_hand_geom_names(root, side, dex3=True)
             ET.SubElement(body, "geom", name=f"{side}_wbc_grip", type="box",
@@ -116,6 +120,11 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
                                  pos=_numbers(_grounded_position(item)),
                                  quat=_numbers(np.asarray(item["quaternion_xyzw"])[[3, 0, 1, 2]]))
             ET.SubElement(body, "freejoint", name=f"wbc_object_joint_{index}")
+            if item.get('fixed', False):
+                equality = root.find('equality')
+                if equality is None:
+                    equality = ET.SubElement(root, 'equality')
+                ET.SubElement(equality, 'weld', body1='world', body2=f'wbc_object_{index}', solref='.005 1')
             size = np.asarray(item["size"], dtype=float)
             mj_size = (size / 2 if item["shape"] == "box" else [size[0] / 2]
                        if item["shape"] == "sphere" else [size[0] / 2, size[2] / 2])
@@ -131,8 +140,11 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
                           contype="0", conaffinity="0")
             object_geoms.append(geom_name)
             for side in ("left", "right"):
-                for hand_index in range(6):
-                    ET.SubElement(contact, "pair", geom1=f"{side}_physical_hand_{hand_index}", geom2=geom_name,
+                names = ([g.get('name') for g in root.find(f".//body[@name='{side}_wrist_yaw_link']").iter('geom')
+                          if g.get('contype', '1') != '0'] if tool_model
+                         else [f'{side}_physical_hand_{i}' for i in range(6)])
+                for name in names:
+                    ET.SubElement(contact, "pair", geom1=name, geom2=geom_name,
                                   condim="3",
                                   friction=_numbers([item["friction"], item["friction"], 0, 0, 0]),
                                   solref=".01 1", solimp=".95 .99 .001")
@@ -188,6 +200,8 @@ def automatic_grip_force(item: dict, parameters: dict) -> dict[str, float]:
 
 def prepare_grasp_control(robot: Robot, project: dict, parameters: dict | None = None) -> dict | None:
     """Describe an editor-fitted grasp and its automatic force-control target."""
+    if robot.model_id != 'g1':
+        return None
     objects = project_scene_objects(project)
     activation = _grasp_activation(project)
     if activation is None:

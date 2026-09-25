@@ -13,3 +13,5 @@ frontend/.vinext/
 
 .conda-policy/
 tasks/
+assets/g1/robot-g1.glb
+assets/g1/robot-g1-tools.glb

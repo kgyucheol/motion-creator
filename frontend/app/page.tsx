@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import SceneObjectControls from './scene-object-controls';
+import { ramenScene } from '../lib/ramen-scene';
 import GraspControls, { type GraspPickMode } from './grasp-controls';
 import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
@@ -304,6 +305,13 @@ export default function Editor() {
     commitObjects([...current.current.objects, object]);
     selectObject(object.id);
   }
+  function addRamenScene() {
+    if (current.current.objects.length + 17 > 32) { setMessage('라면용기 장면에는 오브젝트 17개가 필요합니다. 기존 오브젝트를 줄여주세요.'); return; }
+    checkpoint();
+    const added = ramenScene(`ramen-${Date.now()}`);
+    commitObjects([...current.current.objects, ...added]);
+    selectObject(added[5].id);
+  }
   function removeObject(id: string) {
     checkpoint();
     commitObjects(current.current.objects.filter(object => object.id !== id));
@@ -492,7 +500,7 @@ export default function Editor() {
       });
       scene.current = viewer;
     } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
-    api<{ state: PoseState; project: Project; limits: number[][] }>('init').then(async init => {
+    api<{ model_id: string; state: PoseState; project: Project; limits: number[][] }>('init').then(async init => {
       if (!alive.current) return;
       setLimits(init.limits.map(range => range.map(v => v * 180 / Math.PI)));
       let nextProject = init.project;
@@ -516,7 +524,7 @@ export default function Editor() {
       setPins(initialPins); current.current.pins = initialPins;
       setAnglePins(initialAnglePins); current.current.anglePins = initialAnglePins;
       applyState(initialState); setTarget(initialState.handles.pelvis.position);
-      setMessage('부위에 마우스를 올리고 축을 드래그하세요. 양발은 고정되어 있습니다.');
+      setMessage(init.model_id === 'g1-tools' ? '도구 모델: 왼손 주걱 · 오른손 받침. 왼손/오른손 조작점은 도구 TCP입니다.' : '부위에 마우스를 올리고 축을 드래그하세요. 양발은 고정되어 있습니다.');
     }).catch(e => setError(`계산 서버에 연결할 수 없습니다: ${e.message}`));
     api<string[]>('saved').then(setSaved).catch(() => {});
     api<{ available: boolean; physics_available?: boolean }>('policy-preview/runtime').then(result => {
@@ -965,8 +973,12 @@ export default function Editor() {
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>
       <div className="section-divider"/>
       <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock} onSelect={selectObject} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}/>
+      <button className="wide" disabled={disabled} onClick={addRamenScene}>라면용기 4열 × 3층 + 열린 상자 생성</button>
+      <p className="hint">원기둥은 겹친 용기 묶음 1개를 나타냅니다. 생성 후 크기·질량·위치를 편집할 수 있습니다. 상자의 다섯 면은 물리 시뮬레이션에서 고정됩니다.</p>
       <div className="section-divider"/>
-      <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={changeGraspPickMode} onFit={() => void fitGrasp()} onEditGhost={editGraspGhost} onValidate={() => void validateGraspPhysics()}/>
+      {state?.handles.left_hand?.label.includes('TCP')
+        ? <p className="hint">도구 작업점: 왼손 주걱 · 오른손 받침. 손 조작점을 선택해 위치·회전을 편집하세요. 더미핸드용 양손 박스 파지는 이 모델에 적용하지 않습니다.</p>
+        : <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={graspPickMode => void changeGraspPickMode(graspPickMode)} onFit={() => void fitGrasp()} onEditGhost={editGraspGhost} onValidate={() => void validateGraspPhysics()}/>}
       <div className="section-divider"/>
       <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>
       <select aria-label="최근 저장한 프로젝트" value={savedChoice} onChange={e => setSavedChoice(e.target.value)}><option value="">최근 프로젝트 선택</option>{saved.map(name => <option key={name} value={name}>{name}</option>)}</select>
