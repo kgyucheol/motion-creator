@@ -93,8 +93,8 @@ def matrix_quat(matrix):
 
 
 class Robot:
-    def __init__(self):
-        self.model_id = os.environ.get('MOTIONCREATOR_MODEL', 'g1')
+    def __init__(self, model_id=None):
+        self.model_id = model_id or os.environ.get('MOTIONCREATOR_MODEL', 'g1')
         self.handles = dict(HANDLES)
         if self.model_id == 'g1-tools':
             from .tool_model import tool_model_xml

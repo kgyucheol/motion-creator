@@ -75,6 +75,21 @@ export default function Editor() {
   const file = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<PoseState | null>(null);
   const [project, setProject] = useState<Project | null>(null);
+  const [modelId, setModelId] = useState('g1');
+  const draftKey = useRef('g1-motion-draft-v1');
+  async function switchModel(next: string) {
+    if (next === modelId || !project || !state) return;
+    setBusy(true);
+    try {
+      const draft = JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects });
+      localStorage.setItem(draftKey.current, draft);
+      await api('model', { model_id: next });
+      location.reload();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '모델 변경 실패');
+      setBusy(false);
+    }
+  }
   const [selected, setSelected] = useState('pelvis');
   const [members, setMembers] = useState<string[]>(['pelvis']);
   const [expanded, setExpanded] = useState<string[]>(() => {
@@ -502,13 +517,15 @@ export default function Editor() {
     } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
     api<{ model_id: string; state: PoseState; project: Project; limits: number[][] }>('init').then(async init => {
       if (!alive.current) return;
+      setModelId(init.model_id);
+      draftKey.current = init.model_id === 'g1' ? 'g1-motion-draft-v1' : `g1-motion-draft-v1-${init.model_id}`;
       setLimits(init.limits.map(range => range.map(v => v * 180 / Math.PI)));
       let nextProject = init.project;
       let initialState = init.state;
       let initialPins = feet;
       let initialAnglePins: string[] = [];
       try {
-        const draft = localStorage.getItem('g1-motion-draft-v1');
+        const draft = localStorage.getItem(draftKey.current);
         if (draft) {
           nextProject = await api<Project>('validate', { project: JSON.parse(draft) });
           initialState = await api<PoseState>('pose', { qpos: nextProject.current_qpos ?? nextProject.keyframes[0].qpos });
@@ -565,7 +582,7 @@ export default function Editor() {
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
-      try { localStorage.setItem('g1-motion-draft-v1', JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects })); }
+      try { localStorage.setItem(draftKey.current, JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects })); }
       catch { setMessage('브라우저 자동 저장 공간이 부족합니다. 파일 저장을 사용하세요.'); }
     }, 500);
     return () => clearTimeout(timer);
@@ -857,7 +874,7 @@ export default function Editor() {
 
   return <div className="editor">
     <header className="topbar">
-      <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><b>G1 / 29 DOF</b></div>
+      <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><select aria-label="로봇 모델" title="이 서버의 모델을 변경합니다. 현재 모션은 모델별로 자동 보관됩니다." disabled={disabled} value={modelId} onChange={event => void switchModel(event.target.value)}><option value="g1">G1 · 기본 손</option><option value="g1-tools">G1 · 왼 주걱 / 오른 받침</option></select></div>
       <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="비워 두면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onChange={e => setProject({ ...project, name: e.target.value, name_mode: e.target.value.trim() ? 'manual' : 'auto' })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
       <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button></div>}</div></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>

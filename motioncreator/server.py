@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -22,6 +23,35 @@ app.add_middleware(CORSMiddleware, allow_origins=['http://127.0.0.1:3000', 'http
 
 class PoseInput(BaseModel):
     qpos: list[float]
+
+
+class ModelInput(BaseModel):
+    model_id: Literal['g1', 'g1-tools']
+
+
+@app.post('/api/model')
+def select_model(payload: ModelInput):
+    global robot
+    from .policy_preview import jobs
+    from .decoupled_wbc import sessions
+    with sessions.lock, jobs.lock:
+        if sessions.sessions or any(job['status'] == 'running' for job in jobs.jobs.values()):
+            raise HTTPException(409, 'WBC 세션을 닫고 물리 계산을 완료한 뒤 모델을 변경하세요.')
+        if robot.model_id == payload.model_id:
+            return {'model_id': robot.model_id}
+        try:
+            candidate = Robot(payload.model_id)
+            candidate.export_visual(ROOT / f'assets/g1/robot-{candidate.model_id}.glb')
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, detail=f'모델을 불러오지 못했습니다: {exc}') from exc
+        if jobs.sonic_process is not None:
+            jobs.sonic_process.terminate()
+            jobs.sonic_process.wait(timeout=5)
+            jobs.sonic_process = None
+        os.environ['MOTIONCREATOR_MODEL'] = candidate.model_id
+        robot = candidate
+        sessions.robot = None
+    return {'model_id': robot.model_id}
 
 
 class SolveInput(PoseInput):
