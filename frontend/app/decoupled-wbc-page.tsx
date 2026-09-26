@@ -89,20 +89,24 @@ export default function DecoupledWbcPage() {
 
   useEffect(() => {
     if (!host.current) return;
-    const viewer = new RobotScene(host.current, {
-      select: () => {}, begin: () => {}, move: () => {}, rotate: () => {}, jointAngle: () => {},
-      transformMode: () => {}, end: () => {}, error: value => setError(value),
-    });
-    viewer.setEditable(false); viewer.showHandles(false); viewer.setReferenceVisible(true); viewer.keyboardEnabled = false;
-    scene.current = viewer;
+    let mounted = true;
+    let viewer: RobotScene | null = null;
     Promise.all([
+      fetch('/api/init').then(responseJson<{ model_id: string; visual_revision: string }>),
       fetch('/api/decoupled-wbc/runtime').then(responseJson<Runtime>),
       fetch('/api/saved').then(responseJson<string[]>),
-    ]).then(([nextRuntime, projects]) => {
+    ]).then(([model, nextRuntime, projects]) => {
+      if (!mounted || !host.current) return;
+      viewer = new RobotScene(host.current, {
+        select: () => {}, begin: () => {}, move: () => {}, rotate: () => {}, jointAngle: () => {},
+        transformMode: () => {}, end: () => {}, error: value => setError(value),
+      }, model.model_id, model.visual_revision);
+      viewer.setEditable(false); viewer.showHandles(false); viewer.setReferenceVisible(true); viewer.keyboardEnabled = false;
+      scene.current = viewer;
       setRuntime(nextRuntime); setSaved(projects); setChoice(projects[0] || '');
       setMessage(nextRuntime.available ? '모션을 선택해 시뮬레이션을 준비하세요.' : 'Decoupled WBC 자산 설치가 필요합니다.');
     }).catch(failure => setError((failure as Error).message));
-    return () => { viewer.dispose(); scene.current = null; };
+    return () => { mounted = false; viewer?.dispose(); scene.current = null; };
   }, []);
 
   useEffect(() => { scene.current?.setReferenceVisible(showReference); }, [showReference]);

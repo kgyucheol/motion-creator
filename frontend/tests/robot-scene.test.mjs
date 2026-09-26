@@ -90,6 +90,18 @@ test('single focus centers on the selected hand', () => {
   assert.deepEqual(viewer.orbit.target.toArray(), [.3, -.2, .8]);
 });
 
+test('a pose from another robot model is rejected before geom transforms are applied', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  let error = '';
+  viewer.modelId = 'g1';
+  viewer.modelMismatchReported = false;
+  viewer.callbacks = { error: value => { error = value; } };
+  viewer.state = { marker: 'unchanged' };
+  viewer.update({ model_id: 'g1-tools', geoms: {} });
+  assert.deepEqual(viewer.state, { marker: 'unchanged' });
+  assert.match(error, /새로고침/);
+});
+
 test('group rotation preserves separation and rotates around the selection center', () => {
   const initial = quaternionFromDegrees([25, 15, 10]);
   const after = incrementRotation(initial, 2, 90, 'world');

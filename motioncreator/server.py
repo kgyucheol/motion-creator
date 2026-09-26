@@ -130,16 +130,31 @@ def health():
 
 @app.get('/api/init')
 def initialize():
-    return {'model_id': robot.model_id, 'state': robot.state(robot.home), 'project': new_project(robot), 'joint_names': robot.names,
+    return {'model_id': robot.model_id, 'visual_revision': robot.fingerprint[:16],
+            'state': robot.state(robot.home), 'project': new_project(robot), 'joint_names': robot.names,
             'limits': robot.model.jnt_range[1:].tolist()}
+
+
+def visual_response(model_id: str):
+    if model_id != robot.model_id:
+        raise HTTPException(409, detail=f'현재 선택된 로봇은 {robot.model_id}입니다. 화면을 새로고침하세요.')
+    path = ROOT / f'assets/g1/robot-{model_id}.glb'
+    if not path.is_file():
+        robot.export_visual(path)
+    return FileResponse(path, media_type='model/gltf-binary', headers={
+        'Cache-Control': 'no-store, max-age=0',
+        'Pragma': 'no-cache',
+    })
+
+
+@app.get('/api/robot/{model_id}.glb')
+def model_visual(model_id: Literal['g1', 'g1-tools']):
+    return visual_response(model_id)
 
 
 @app.get('/api/robot.glb')
 def visual():
-    path = ROOT / f'assets/g1/robot-{robot.model_id}.glb'
-    if not path.is_file():
-        robot.export_visual(path)
-    return FileResponse(path, media_type='model/gltf-binary')
+    return visual_response(robot.model_id)
 
 
 @app.post('/api/pose')

@@ -360,7 +360,7 @@ class Robot:
             }
         floor_min = min(self.point(d, k)[0][2] + (self.point(d, k)[1] @ np.array(o))[2]
                         for k in FEET for o in ((-.085, -.03, 0), (-.085, .03, 0), (.085, -.03, 0), (.085, .03, 0)))
-        return {'qpos': np.asarray(q).tolist(), 'handles': handles, 'geoms': geoms, 'grip_pads': grip_pads,
+        return {'model_id': self.model_id, 'qpos': np.asarray(q).tolist(), 'handles': handles, 'geoms': geoms, 'grip_pads': grip_pads,
                 'com': d.subtree_com[self.ids['pelvis']].tolist(), 'floor_min_mm': float(floor_min * 1000),
                 'hinges': {k: {'joint_name': name, 'angle': float(q[self.model.joint(name).qposadr[0]]),
                               'limits': self.model.joint(name).range.tolist(),

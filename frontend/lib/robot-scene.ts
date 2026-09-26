@@ -7,6 +7,7 @@ import { canMirrorSelection } from './pose-transforms.ts';
 import { normalizedObjectSize, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
 
 export type PoseState = {
+  model_id?: string;
   qpos: number[];
   handles: Record<string, { position: number[]; quaternion: number[]; label: string }>;
   geoms: Record<string, { position: number[]; quaternion: number[] }>;
@@ -104,8 +105,9 @@ export class RobotScene {
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
   hingeDrag: { quaternion: THREE.Quaternion; angle: number; lastTwist: number; delta: number; limits: number[]; key: string; component: 'x' | 'y' | 'z' } | null = null;
+  modelMismatchReported = false;
 
-  constructor(public host: HTMLDivElement, private callbacks: Callbacks) {
+  constructor(public host: HTMLDivElement, private callbacks: Callbacks, public modelId = 'g1', visualRevision = '') {
     this.scene.background = new THREE.Color('#10171f');
     this.scene.fog = new THREE.Fog('#10171f', 5, 14);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -224,7 +226,8 @@ export class RobotScene {
       this.frame = requestAnimationFrame(render);
     };
     render();
-    new GLTFLoader().load('/api/robot.glb', gltf => {
+    const revision = visualRevision ? `?revision=${encodeURIComponent(visualRevision)}` : '';
+    new GLTFLoader().load(`/api/robot/${encodeURIComponent(modelId)}.glb${revision}`, gltf => {
       if (this.destroyed) return;
       gltf.scene.traverse(node => {
         if (node.name.startsWith('geom_')) this.geoms[node.name.slice(5)] = node;
@@ -421,6 +424,12 @@ export class RobotScene {
   }
 
   update(state: PoseState) {
+    if (state.model_id && state.model_id !== this.modelId) {
+      if (!this.modelMismatchReported) this.callbacks.error(`로봇 모델이 ${this.modelId}에서 ${state.model_id}(으)로 변경되었습니다. 화면을 새로고침하세요.`);
+      this.modelMismatchReported = true;
+      return;
+    }
+    this.modelMismatchReported = false;
     this.state = state;
     for (const [id, pose] of Object.entries(state.geoms)) {
       const obj = this.geoms[id];
@@ -454,6 +463,7 @@ export class RobotScene {
   }
 
   updateReference(state: PoseState) {
+    if (state.model_id && state.model_id !== this.modelId) return;
     this.referenceState = state;
     for (const [id, pose] of Object.entries(state.geoms)) {
       const object = this.referenceGeoms[id];

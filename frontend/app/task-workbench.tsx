@@ -255,32 +255,37 @@ export default function TaskWorkbench({
   }
   useEffect(() => {
     let mounted = true;
-    const v = new RobotScene(host.current!, {
-      select: noop,
-      begin: noop,
-      move: noop,
-      rotate: noop,
-      jointAngle: noop,
-      transformMode: noop,
-      end: noop,
-      error: setError,
-    });
-    viewer.current = v;
-    v.setEditable(false);
-    v.showHandles(false);
-    v.orbit.target.set(0.65, 0, 0.65);
-    v.camera.position.set(2.8, -3.2, 2.1);
-    v.orbit.update();
-    extras.current = new THREE.Group();
-    v.scene.add(extras.current);
+    let v: RobotScene | null = null;
     void (async () => {
       try {
-        const [defaults, rt, list] = await Promise.all([
+        const [model, defaults, rt, list] = await Promise.all([
+          fetch('/api/init').then(async response => {
+            if (!response.ok) throw new Error(`모델 정보 요청 실패 (${response.status})`);
+            return response.json() as Promise<{ model_id: string; visual_revision: string }>;
+          }),
           api<Spec>('/defaults'),
           api<NonNullable<typeof runtime>>('/runtime'),
           api<typeof tasks>(''),
         ]);
         if (!mounted) return;
+        v = new RobotScene(host.current!, {
+          select: noop,
+          begin: noop,
+          move: noop,
+          rotate: noop,
+          jointAngle: noop,
+          transformMode: noop,
+          end: noop,
+          error: setError,
+        }, model.model_id, model.visual_revision);
+        viewer.current = v;
+        v.setEditable(false);
+        v.showHandles(false);
+        v.orbit.target.set(0.65, 0, 0.65);
+        v.camera.position.set(2.8, -3.2, 2.1);
+        v.orbit.update();
+        extras.current = new THREE.Group();
+        v.scene.add(extras.current);
         setRuntime(rt);
         setTasks(list);
         const last =
@@ -294,7 +299,7 @@ export default function TaskWorkbench({
     })();
     return () => {
       mounted = false;
-      v.dispose();
+      v?.dispose();
       viewer.current = null;
     };
   }, []);

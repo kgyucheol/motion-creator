@@ -495,28 +495,31 @@ export default function Editor() {
   useEffect(() => {
     alive.current = true;
     let viewer: RobotScene | null = null;
-    try {
-      viewer = new RobotScene(host.current!, {
-        select: (key, additive, hover) => actions.current.select(key, additive, hover), begin: () => actions.current.begin(),
-        move: (key, value) => actions.current.move(key, value), rotate: (key, value) => actions.current.rotate(key, value), end: () => actions.current.end(), error: setError,
-        transformMode: mode => actions.current.transformMode(mode),
-        jointAngle: (key, angle) => actions.current.jointAngle(key, angle),
-        history: redo => actions.current.history(redo),
-        selectObject,
-        objectTransformBegin: () => { objectDragCheckpointed.current = false; },
-        transformObject: (id, patch) => {
-          if (!objectDragCheckpointed.current) { checkpoint(); objectDragCheckpointed.current = true; }
-          if (id === GRASP_GHOST_ID) changeGraspGhost(patch);
-          else changeObject(id, patch, false);
-        },
-        objectTransformEnd: () => { objectDragCheckpointed.current = false; },
-        objectTransformMode: changeObjectMode,
-        pickObjectSurface: (id, point, normal) => actions.current.pickSurface(id, point, normal),
-      });
-      scene.current = viewer;
-    } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
-    api<{ model_id: string; state: PoseState; project: Project; limits: number[][] }>('init').then(async init => {
+    const createViewer = (modelId: string, visualRevision: string) => {
+      try {
+        viewer = new RobotScene(host.current!, {
+          select: (key, additive, hover) => actions.current.select(key, additive, hover), begin: () => actions.current.begin(),
+          move: (key, value) => actions.current.move(key, value), rotate: (key, value) => actions.current.rotate(key, value), end: () => actions.current.end(), error: setError,
+          transformMode: mode => actions.current.transformMode(mode),
+          jointAngle: (key, angle) => actions.current.jointAngle(key, angle),
+          history: redo => actions.current.history(redo),
+          selectObject,
+          objectTransformBegin: () => { objectDragCheckpointed.current = false; },
+          transformObject: (id, patch) => {
+            if (!objectDragCheckpointed.current) { checkpoint(); objectDragCheckpointed.current = true; }
+            if (id === GRASP_GHOST_ID) changeGraspGhost(patch);
+            else changeObject(id, patch, false);
+          },
+          objectTransformEnd: () => { objectDragCheckpointed.current = false; },
+          objectTransformMode: changeObjectMode,
+          pickObjectSurface: (id, point, normal) => actions.current.pickSurface(id, point, normal),
+        }, modelId, visualRevision);
+        scene.current = viewer;
+      } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
+    };
+    api<{ model_id: string; visual_revision: string; state: PoseState; project: Project; limits: number[][] }>('init').then(async init => {
       if (!alive.current) return;
+      createViewer(init.model_id, init.visual_revision);
       setModelId(init.model_id);
       draftKey.current = init.model_id === 'g1' ? 'g1-motion-draft-v1' : `g1-motion-draft-v1-${init.model_id}`;
       setLimits(init.limits.map(range => range.map(v => v * 180 / Math.PI)));

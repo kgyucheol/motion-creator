@@ -28,3 +28,16 @@ def test_model_change_rejects_existing_simulation(monkeypatch):
         server.select_model(server.ModelInput(model_id='g1-tools'))
     assert error.value.status_code == 409
     assert server.robot is original
+
+
+def test_visual_route_is_model_specific_and_not_cached(monkeypatch):
+    selected = Robot('g1')
+    monkeypatch.setattr(server, 'robot', selected)
+    response = server.model_visual('g1')
+    assert str(response.path).endswith('robot-g1.glb')
+    assert response.headers['cache-control'] == 'no-store, max-age=0'
+    assert server.initialize()['state']['model_id'] == 'g1'
+    assert server.initialize()['visual_revision'] == selected.fingerprint[:16]
+    with pytest.raises(HTTPException) as error:
+        server.model_visual('g1-tools')
+    assert error.value.status_code == 409
