@@ -1,4 +1,4 @@
-"""Compile the supplied 29-axis URDF without changing its source assets."""
+"""Compile the supplied 29-axis G1 gripper URDF without changing its assets."""
 import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path

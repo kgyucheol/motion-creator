@@ -124,8 +124,27 @@ class Robot:
         # The model uses radius-5 mm contact spheres at z=-30 mm.
         self.home[2] -= min(self.point(d, k)[0][2] for k in FEET)
         self.visual_ids = [i for i in range(m.ngeom) if m.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH and m.geom_group[i] == 1]
-        self.fingerprint = hashlib.sha256(MODEL_PATH.read_bytes() if self.model_id == 'g1'
-                                          else ET.tostring(self.xml)).hexdigest()
+        if self.model_id == 'g1':
+            fingerprint_source = MODEL_PATH.read_bytes()
+        else:
+            # mj_saveLastXML may keep or omit the inferred content_type attribute
+            # depending on MuJoCo's process-local mesh cache.  It has no effect on
+            # the model, so exclude it from the project identity.  Otherwise the
+            # editor and the physics worker can reject the same gripper URDF as
+            # two different robots.
+            fingerprint_xml = copy.deepcopy(self.xml)
+            for element in fingerprint_xml.iter():
+                element.attrib.pop('content_type', None)
+            fingerprint_source = ET.tostring(fingerprint_xml)
+        self.fingerprint = hashlib.sha256(fingerprint_source).hexdigest()
+        self.compatible_fingerprints = {self.fingerprint}
+        if self.model_id == 'g1-tools':
+            # Projects created by the first gripper-model load in older builds
+            # may contain MuJoCo's inferred STL content_type attributes.
+            legacy_xml = copy.deepcopy(fingerprint_xml)
+            for mesh in legacy_xml.findall('./asset/mesh'):
+                mesh.set('content_type', 'model/stl')
+            self.compatible_fingerprints.add(hashlib.sha256(ET.tostring(legacy_xml)).hexdigest())
 
     def xml_root(self):
         return copy.deepcopy(self.xml)

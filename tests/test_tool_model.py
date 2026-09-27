@@ -3,8 +3,8 @@ import numpy as np
 import pytest
 
 from motioncreator.robot import Robot
-from motioncreator.motion import new_project
-from motioncreator.policy_preview import build_model
+from motioncreator.motion import new_project, validate_project
+from motioncreator.policy_preview import build_model, simulate
 from motioncreator.decoupled_wbc import build_environment_model
 
 
@@ -26,6 +26,24 @@ def test_tool_urdf_joint_mapping_and_tcp_ik(monkeypatch):
         q, result = robot.solve(robot.home, robot.home, selected_targets={f'{side}_hand': target})
         assert result['target_error_mm'] < 1
         assert np.isfinite(q).all()
+
+
+def test_gripper_fingerprint_is_stable_and_pd_physics_runs(monkeypatch):
+    monkeypatch.setenv('MOTIONCREATOR_MODEL', 'g1-tools')
+    editor_robot = Robot()
+    project = new_project(editor_robot)
+    project['keyframes'][0]['duration'] = .1
+    worker_robot = Robot()
+    assert worker_robot.fingerprint == editor_robot.fingerprint
+    assert len(editor_robot.compatible_fingerprints) == 2
+    legacy_project = new_project(editor_robot)
+    legacy_project['model_sha256'] = next(value for value in editor_robot.compatible_fingerprints
+                                          if value != editor_robot.fingerprint)
+    assert validate_project(worker_robot, legacy_project)['model_sha256'] == worker_robot.fingerprint
+    result = simulate(project, controller='pd')
+    assert result['physics'] is True
+    assert result['controller'] == 'pd'
+    assert result['states'][0]['model_id'] == 'g1-tools'
 
 
 @pytest.mark.parametrize('backend', ['preview', 'wbc'])

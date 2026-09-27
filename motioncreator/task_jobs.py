@@ -87,7 +87,7 @@ def start_run(tid,kind,reference_run=None,reference_file=None,controller='sonic'
     if source:
         from .reference import load_reference,joint_permutation
         data,meta=load_reference(source); robot=Robot()
-        if meta.get('model_sha256')!=robot.fingerprint: raise ValueError('Reference model fingerprint mismatch')
+        if meta.get('model_sha256') not in robot.compatible_fingerprints: raise ValueError('Reference model fingerprint mismatch')
         if data['joint_names'].tolist()!=robot.names: raise ValueError('Reference joint order mismatch')
         import shutil
         shutil.copyfile(source,folder/'reference.npz')

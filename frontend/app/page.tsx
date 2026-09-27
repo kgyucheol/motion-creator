@@ -544,7 +544,7 @@ export default function Editor() {
       setPins(initialPins); current.current.pins = initialPins;
       setAnglePins(initialAnglePins); current.current.anglePins = initialAnglePins;
       applyState(initialState); setTarget(initialState.handles.pelvis.position);
-      setMessage(init.model_id === 'g1-tools' ? '도구 모델: 왼손 주걱 · 오른손 받침. 왼손/오른손 조작점은 도구 TCP입니다.' : '부위에 마우스를 올리고 축을 드래그하세요. 양발은 고정되어 있습니다.');
+      setMessage(init.model_id === 'g1-tools' ? 'G1 그리퍼 모델: 왼손 주걱 · 오른손 받침. 양쪽 조작점은 그리퍼 TCP이며 Physics 재생을 지원합니다.' : '부위에 마우스를 올리고 축을 드래그하세요. 양발은 고정되어 있습니다.');
     }).catch(e => setError(`계산 서버에 연결할 수 없습니다: ${e.message}`));
     api<string[]>('saved').then(setSaved).catch(() => {});
     api<{ available: boolean; physics_available?: boolean }>('policy-preview/runtime').then(result => {
@@ -877,7 +877,7 @@ export default function Editor() {
 
   return <div className="editor">
     <header className="topbar">
-      <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><select aria-label="로봇 모델" title="이 서버의 모델을 변경합니다. 현재 모션은 모델별로 자동 보관됩니다." disabled={disabled} value={modelId} onChange={event => void switchModel(event.target.value)}><option value="g1">G1 · 기본 손</option><option value="g1-tools">G1 · 왼 주걱 / 오른 받침</option></select></div>
+      <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><select aria-label="로봇 모델" title="이 서버의 모델을 변경합니다. 현재 모션은 모델별로 자동 보관됩니다." disabled={disabled} value={modelId} onChange={event => void switchModel(event.target.value)}><option value="g1">G1 · 기본 손</option><option value="g1-tools">G1 그리퍼 · 왼 주걱 / 오른 받침</option></select></div>
       <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="비워 두면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onChange={e => setProject({ ...project, name: e.target.value, name_mode: e.target.value.trim() ? 'manual' : 'auto' })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
       <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button></div>}</div></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
@@ -997,7 +997,7 @@ export default function Editor() {
       <p className="hint">원기둥은 겹친 용기 묶음 1개를 나타냅니다. 생성 후 크기·질량·위치를 편집할 수 있습니다. 상자의 다섯 면은 물리 시뮬레이션에서 고정됩니다.</p>
       <div className="section-divider"/>
       {state?.handles.left_hand?.label.includes('TCP')
-        ? <p className="hint">도구 작업점: 왼손 주걱 · 오른손 받침. 손 조작점을 선택해 위치·회전을 편집하세요. 더미핸드용 양손 박스 파지는 이 모델에 적용하지 않습니다.</p>
+        ? <p className="hint">G1 그리퍼 작업점: 왼손 주걱 · 오른손 받침. 손 조작점을 선택해 위치·회전을 편집하세요. Physics에서는 두 도구의 실제 충돌 형상·질량·관성이 적용됩니다. 더미핸드용 양손 박스 파지는 이 모델에 적용하지 않습니다.</p>
         : <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={graspPickMode => void changeGraspPickMode(graspPickMode)} onFit={() => void fitGrasp()} onEditGhost={editGraspGhost} onValidate={() => void validateGraspPhysics()}/>}
       <div className="section-divider"/>
       <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>

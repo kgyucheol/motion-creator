@@ -150,8 +150,9 @@ def environment_snapshot(project):
 
 def validate_project(robot: Robot, project):
     ensure_project_identity(project)
-    if project.get('format') != FORMAT or project.get('model_sha256') != robot.fingerprint:
+    if project.get('format') != FORMAT or project.get('model_sha256') not in robot.compatible_fingerprints:
         raise ValueError('Project format or G1 model fingerprint does not match')
+    project['model_sha256'] = robot.fingerprint
     if project.get('joint_names') != robot.names:
         raise ValueError('Joint order does not match this model')
     if not isinstance(project.get('name'), str) or not isinstance(project.get('coordinate_system'), str) or not isinstance(project.get('units'), dict):
