@@ -25,6 +25,7 @@ export type SceneObject = {
   asset_bounds_max?: number[];
   asset_axis_transform_xyzw?: number[];
   asset_part_id?: string;
+  asset_node_name?: string;
   wall_thickness_m?: number;
 };
 
@@ -38,6 +39,7 @@ export type SceneObjectGroup = {
 
 export type SceneAssetPart = {
   part_id: string;
+  node_name: string;
   name: string;
   url: string;
   bounds_min: number[];
@@ -273,6 +275,7 @@ export function createImportedSceneObjects(asset: SceneAssetImport, startIndex =
       color: part.suggestion.color, opacity: 1, visible: true, fixed: part.suggestion.fixed,
       placement: { prevent_overlap: false, surface_snap: false, ground_lock: false },
       asset_id: asset.asset_id, asset_part_id: part.part_id,
+      asset_node_name: part.node_name,
       asset_bounds_min: [...part.bounds_min], asset_bounds_max: [...part.bounds_max],
       asset_axis_transform_xyzw: [...asset.axis_transform_xyzw],
       ...(part.suggestion.wall_thickness_m ? { wall_thickness_m: part.suggestion.wall_thickness_m } : {}),

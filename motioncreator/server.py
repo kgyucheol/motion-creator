@@ -205,16 +205,6 @@ def scene_model(identifier: str):
     return FileResponse(path, media_type='model/gltf-binary', headers={'Cache-Control': 'public, max-age=31536000, immutable'})
 
 
-@app.get('/api/scene-assets/{identifier}/parts/{part_id}.glb')
-def scene_model_part(identifier: str, part_id: str):
-    from .scene_assets import asset_part_path
-    try:
-        path = asset_part_path(identifier, part_id)
-    except (ValueError, FileNotFoundError):
-        raise HTTPException(404, detail='3D model asset part not found')
-    return FileResponse(path, media_type='model/gltf-binary', headers={'Cache-Control': 'public, max-age=31536000, immutable'})
-
-
 @app.post('/api/solve-group')
 def solve_group(payload: GroupSolveInput):
     def run():

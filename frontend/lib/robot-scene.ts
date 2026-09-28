@@ -592,27 +592,32 @@ export class RobotScene {
     }
     return root;
   }
-  private loadSceneAsset(assetId: string, partId?: string) {
-    const cacheKey = partId ? `${assetId}/${partId}` : assetId;
-    let pending = this.sceneAssetLoads.get(cacheKey);
+  private loadSceneAsset(assetId: string) {
+    let pending = this.sceneAssetLoads.get(assetId);
     if (!pending) {
-      const url = partId
-        ? `/api/scene-assets/${encodeURIComponent(assetId)}/parts/${encodeURIComponent(partId)}.glb`
-        : `/api/scene-assets/${encodeURIComponent(assetId)}.glb`;
+      const url = `/api/scene-assets/${encodeURIComponent(assetId)}.glb`;
       pending = new Promise((resolve, reject) => new GLTFLoader().load(
         url,
         gltf => resolve(gltf.scene), undefined, reject,
       ));
-      this.sceneAssetLoads.set(cacheKey, pending);
+      this.sceneAssetLoads.set(assetId, pending);
     }
     return pending;
   }
   private installSceneAsset(object: SceneObject, root: THREE.Object3D) {
     if (!object.asset_id || !object.asset_bounds_min || !object.asset_bounds_max) return;
     const expectedId = object.asset_id;
-    void this.loadSceneAsset(expectedId, object.asset_part_id).then(template => {
+    void this.loadSceneAsset(expectedId).then(template => {
       if (this.destroyed || this.sceneObjects[object.id] !== root || root.userData.assetId !== expectedId) return;
-      const clone = template.clone(true);
+      let clone: THREE.Object3D;
+      if (object.asset_node_name) {
+        template.updateMatrixWorld(true);
+        const source = template.getObjectByName(object.asset_node_name);
+        if (!source) throw new Error(`GLB node not found: ${object.asset_node_name}`);
+        const selected = source.clone(true);
+        source.matrixWorld.decompose(selected.position, selected.quaternion, selected.scale);
+        clone = new THREE.Group(); clone.add(selected);
+      } else clone = template.clone(true);
       clone.traverse(node => {
         if (!(node instanceof THREE.Mesh)) return;
         node.geometry = node.geometry.clone();
@@ -636,7 +641,8 @@ export class RobotScene {
     }
     for (const object of objects) {
       let mesh = this.sceneObjects[object.id];
-      if (!mesh || mesh.userData.shape !== object.shape || mesh.userData.assetId !== object.asset_id) {
+      if (!mesh || mesh.userData.shape !== object.shape || mesh.userData.assetId !== object.asset_id
+          || mesh.userData.assetNodeName !== object.asset_node_name) {
         if (mesh) {
           this.scene.remove(mesh); this.disposeSceneObject(mesh);
         }
@@ -644,6 +650,7 @@ export class RobotScene {
         mesh.userData.sceneObjectId = object.id;
         mesh.userData.shape = object.shape;
         mesh.userData.assetId = object.asset_id;
+        mesh.userData.assetNodeName = object.asset_node_name;
         this.sceneObjects[object.id] = mesh;
         this.scene.add(mesh);
         this.installSceneAsset(object, mesh);

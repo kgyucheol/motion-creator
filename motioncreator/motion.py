@@ -245,6 +245,8 @@ def validate_project(robot: Robot, project):
                 part = next((value for value in metadata.get('parts', []) if value['part_id'] == part_id), None)
                 if part_id is not None and part is None:
                     raise ValueError('Scene object asset part does not exist')
+                if part is not None:
+                    item['asset_node_name'] = part['node_name']
                 if 'asset_axis_transform_xyzw' not in item and metadata['source_format'] == 'glb':
                     old_size = np.asarray(item.get('size'), dtype=float)
                     old_lower = np.asarray(item.get('asset_bounds_min'), dtype=float)
@@ -286,6 +288,9 @@ def validate_project(robot: Robot, project):
             part_id = item.get('asset_part_id')
             if part_id is not None and (not isinstance(part_id, str) or not re.fullmatch(r'part-[0-9]{2}-[a-z0-9-]{1,32}', part_id)):
                 raise ValueError('Scene object asset part ID is invalid')
+            node_name = item.get('asset_node_name')
+            if node_name is not None and (not isinstance(node_name, str) or not 1 <= len(node_name) <= 256):
+                raise ValueError('Scene object asset node name is invalid')
             for field in ('asset_bounds_min', 'asset_bounds_max'):
                 value = np.asarray(item.get(field), dtype=float)
                 if value.shape != (3,) or not np.isfinite(value).all():

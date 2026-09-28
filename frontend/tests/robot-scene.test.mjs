@@ -98,11 +98,12 @@ test('a multi-part GLB becomes independently positioned scene objects', () => {
   const objects = createImportedSceneObjects({ asset_id: '0123456789abcdef01234567', name: 'Carton', source_name: 'carton.glb', source_format: 'glb', url: '',
     bounds_min: [-.5, -.5, 0], bounds_max: [.5, .5, 1], dimensions: [1, 1, 1], axis_transform_xyzw: [Math.SQRT1_2, 0, 0, Math.SQRT1_2], suggestion,
     parts: [
-      { part_id: 'part-01-floor', name: 'Floor', url: '', bounds_min: [-.5, -.5, 0], bounds_max: [.5, .5, .1], dimensions: [1, 1, .1], suggestion },
-      { part_id: 'part-02-wall', name: 'Wall', url: '', bounds_min: [-.5, -.5, .1], bounds_max: [-.4, .5, 1], dimensions: [.1, 1, .9], suggestion: { ...suggestion, size: [.1, 1, .9] } },
+      { part_id: 'part-01-floor', node_name: 'Floor', name: 'Floor', url: '', bounds_min: [-.5, -.5, 0], bounds_max: [.5, .5, .1], dimensions: [1, 1, .1], suggestion },
+      { part_id: 'part-02-wall', node_name: 'Wall', name: 'Wall', url: '', bounds_min: [-.5, -.5, .1], bounds_max: [-.4, .5, 1], dimensions: [.1, 1, .9], suggestion: { ...suggestion, size: [.1, 1, .9] } },
     ] }, 3);
   assert.equal(objects.length, 2);
   assert.equal(objects[0].asset_part_id, 'part-01-floor');
+  assert.equal(objects[0].asset_node_name, 'Floor');
   assert.ok(new THREE.Vector3(...objects[0].position).distanceTo(new THREE.Vector3(.4, 0, .05)) < 1e-12);
   assert.ok(new THREE.Vector3(...objects[1].position).distanceTo(new THREE.Vector3(-.05, 0, .55)) < 1e-12);
   assert.ok(objects.every(object => object.placement?.ground_lock === false));

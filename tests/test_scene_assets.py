@@ -1,4 +1,5 @@
 import json
+import struct
 
 import numpy as np
 import pytest
@@ -53,7 +54,7 @@ def test_asset_import_rejects_invalid_input(tmp_path, monkeypatch, filename, con
         scene_assets.import_scene_asset(content, filename)
 
 
-def test_joined_cardboard_glb_is_split_into_five_editable_panels(tmp_path, monkeypatch):
+def test_joined_cardboard_glb_remains_one_semantic_object(tmp_path, monkeypatch):
     monkeypatch.setattr(scene_assets, "ASSET_ROOT", tmp_path)
     panels = []
     for extents, translation in [
@@ -68,12 +69,31 @@ def test_joined_cardboard_glb_is_split_into_five_editable_panels(tmp_path, monke
     content = trimesh.exchange.gltf.export_glb(trimesh.Scene(joined))
 
     imported = scene_assets.import_scene_asset(content, "cardboard_box_72x55x40cm.glb")
-    assert len(imported["parts"]) == 5
-    assert all(part["suggestion"]["shape"] == "box" for part in imported["parts"])
-    assert all(part["suggestion"]["fixed"] for part in imported["parts"])
-    assert sum(part["suggestion"]["mass_kg"] for part in imported["parts"]) == pytest.approx(2.)
-    assert all(scene_assets.asset_part_path(imported["asset_id"], part["part_id"]).is_file()
-               for part in imported["parts"])
+    assert "parts" not in imported
+    assert imported["suggestion"]["shape"] == "open_box"
+    assert imported["suggestion"]["fixed"]
+
+
+def test_packing_glb_uses_thirteen_authored_nodes_and_preserves_texture(tmp_path, monkeypatch):
+    source = scene_assets.ROOT / "assets/ramen_scan/ramen_box_packing_4x3.glb"
+    monkeypatch.setattr(scene_assets, "ASSET_ROOT", tmp_path)
+
+    imported = scene_assets.import_scene_asset(source.read_bytes(), source.name)
+
+    assert len(imported["parts"]) == 13
+    assert sum("Cardboard" in part["node_name"] for part in imported["parts"]) == 1
+    assert sum("Ramen_Bundle" in part["node_name"] for part in imported["parts"]) == 12
+    assert all(part["url"] == imported["url"] for part in imported["parts"])
+    assert not (tmp_path / imported["asset_id"] / "parts").exists()
+    # The original GLB is served intact; its embedded JPEG and material texture
+    # reference are therefore not discarded by a per-node re-export.
+    stored = (tmp_path / imported["asset_id"] / "model.glb").read_bytes()
+    assert stored == source.read_bytes()
+    json_length, _ = struct.unpack_from("<II", stored, 12)
+    gltf = json.loads(stored[20:20 + json_length])
+    assert gltf["images"]
+    assert any("baseColorTexture" in material.get("pbrMetallicRoughness", {})
+               for material in gltf["materials"])
 
 
 def test_open_box_proxy_has_floor_and_four_walls():
