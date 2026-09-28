@@ -59,6 +59,22 @@ export type Keyframe = {
   interaction?: ToolInteraction;
 };
 
+const STAND_POSE_NAMES = new Set([
+  'stand',
+  'standing',
+  '서기',
+  '서있기',
+  '기본 서기',
+  '기본 서기 자세',
+  '차렷',
+  '차렷자세',
+]);
+
+/** Returns the first explicitly named standing pose in the current timeline. */
+export function firstStandKeyframeIndex(keyframes: Keyframe[]) {
+  return keyframes.findIndex(frame => STAND_POSE_NAMES.has(frame.name.trim().toLocaleLowerCase()));
+}
+
 export function duplicateKeyframeAfter(keyframes: Keyframe[], selectedIndex: number) {
   if (selectedIndex < 0 || selectedIndex >= keyframes.length) return { keyframes, index: selectedIndex };
   const index = selectedIndex + 1;

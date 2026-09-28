@@ -10,7 +10,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
 import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
+import { duplicateKeyframeAfter, firstStandKeyframeIndex, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
@@ -981,6 +981,8 @@ export default function Editor() {
   const activeFrame = project?.keyframes[frameIndex];
   const motionClip = project?.keyframes.length === 1 ? project.keyframes[0].samples : undefined;
   const duration = motionClip ? project!.keyframes[0].duration : project?.keyframes.slice(1).reduce((sum, f) => sum + f.duration, 0) ?? 0;
+  const attentionFrameIndex = project ? firstStandKeyframeIndex(project.keyframes) : -1;
+  const attentionFrame = attentionFrameIndex >= 0 ? project?.keyframes[attentionFrameIndex] : undefined;
   const selectedGroup = allNodes().find(node => node.children && nodeMembers(node).length === members.length && nodeMembers(node).every(key => members.includes(key)));
 
   return <div className="editor">
@@ -1024,7 +1026,11 @@ export default function Editor() {
       <p className="hint">먼 부위일수록 원래 위치를 더 유지합니다. 손의 위치를 정확히 유지하려면 손을 고정하세요.</p>
       <div className="pin-summary"><LockKeyhole size={14}/><span>노란 자물쇠: 위치 고정<br/>보라 회전 아이콘: 방향·관절각만 고정</span></div>
       <div className="section-divider"/>
-      <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); const init = await api<{state: PoseState}>('init'); applyState(init.state); setPins(feet); setAnglePins([]); setPoseDirty(true); invalidate(); })}><RotateCcw size={15}/> 기본 서기 자세</button>
+      <div className="panel-heading"><span>자세 프리셋</span><small>{attentionFrame ? `${attentionFrameIndex + 1}번 키프레임` : 'Stand 없음'}</small></div>
+      <button className="wide" disabled={disabled || attentionFrameIndex < 0} title={attentionFrame ? `현재 모션의 첫 Stand 키프레임 '${attentionFrame.name}'을 적용합니다.` : '현재 모션에 Stand 키프레임이 없습니다.'} onClick={() => {
+        void chooseFrame(attentionFrameIndex).then(() => setMessage(`첫 Stand 키프레임 '${attentionFrame?.name}'을 차렷자세로 적용했습니다.`));
+      }}><RotateCcw size={15}/> 차렷자세</button>
+      <p className="hint">현재 모션에 저장된 첫 Stand 자세를 사용합니다. 관절값과 위치·각도 고정 설정을 함께 불러옵니다.</p>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => {
         const init = await api<{ project: Project }>('init');
         await loadProject(init.project);
