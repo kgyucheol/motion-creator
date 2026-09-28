@@ -826,3 +826,15 @@ npm --prefix frontend run test:scene
 | `docs/mimickit-review.md` | G1 물리 모델과 MimicKit 적합성 검토 |
 
 이 문서와 코드가 충돌하면 실행 소스와 테스트를 우선한다. 기능을 추가하거나 계약을 바꾸면 해당 구현의 `파일 — 함수/클래스` 레퍼런스와 데이터 불변조건도 이 문서에 함께 갱신한다.
+
+## 24. 라면 꺼내기 상호작용 경로
+
+- `motioncreator/ramen_sequence.py — plan_ramen_sequence`: 현재 도구 TCP를 삽입 완료 teach pose로 삼아 7개 키프레임과 `motioncreator.ramen-interaction.v1` metadata를 생성한다.
+- `motioncreator/interaction.py`: metadata 검증, TCP 위치/회전 보간, 시간축 샘플링을 담당한다.
+- `motioncreator/motion.py — compile_motion`: 연속 두 키프레임에 interaction metadata가 있으면 TCP 보간값을 양팔 IK로 투영한다.
+- `motioncreator/policy_preview.py — _interaction_feedback`: 500 Hz MuJoCo step마다 위치·방향 오차를 Jacobian transpose 토크로 변환하고, 도구와 모든 장면 오브젝트 접촉력을 안전 상한과 비교한다.
+- `frontend/app/ramen-sequence-controls.tsx`: 대상 선택, 경로·임피던스 설정, 생성 단계 탐색과 물리 실행 UI다.
+
+interaction은 `g1-tools` 프로젝트에서만 허용한다. 모든 quaternion은 xyzw 단위 quaternion,
+위치와 삽입축은 월드 좌표계, 강성·감쇠·힘은 각각 SI 단위다. 접촉력은 안전 중단용이며
+토크 명령의 직접적인 힘 오차 피드백으로 사용하지 않는다.

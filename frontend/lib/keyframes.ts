@@ -20,6 +20,25 @@ export type TwoHandGrasp = {
   closure_qpos?: number[];
 };
 
+export type ToolInteraction = {
+  format: 'motioncreator.ramen-interaction.v1';
+  task: 'ramen_extract';
+  phase: string;
+  object_id: string;
+  mode: 'pose' | 'insertion' | 'hold' | 'carry';
+  tcp_targets: Record<'left' | 'right', { position: number[]; quaternion_xyzw: number[] }>;
+  insertion_axes_world: Record<'left' | 'right', number[]>;
+  control: {
+    lateral_stiffness_n_per_m: number;
+    insertion_stiffness_n_per_m: number;
+    translation_damping_ns_per_m: number;
+    orientation_stiffness_nm_per_rad: number;
+    orientation_damping_nms_per_rad: number;
+    maximum_feedback_torque_fraction: number;
+    force_limit_n: number;
+  };
+};
+
 export type Keyframe = {
   name: string;
   duration: number;
@@ -28,6 +47,7 @@ export type Keyframe = {
   angle_pins?: string[];
   samples?: number[][];
   grasp?: TwoHandGrasp;
+  interaction?: ToolInteraction;
 };
 
 export function duplicateKeyframeAfter(keyframes: Keyframe[], selectedIndex: number) {

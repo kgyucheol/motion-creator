@@ -101,6 +101,31 @@ class GraspFitInput(PoseInput):
     grasp: dict
 
 
+class RamenSequenceSettings(BaseModel):
+    model_config = {'extra': 'forbid'}
+    approach_clearance_m: float = Field(.08, ge=.01, le=.30)
+    lift_height_m: float = Field(.18, ge=.02, le=.60)
+    carry_offset_m: list[float] = Field(default_factory=lambda: [-.20, 0., 0.], min_length=3, max_length=3)
+    phase_seconds: float = Field(2., ge=.2, le=10.)
+    insertion_seconds: float = Field(3., ge=.2, le=15.)
+    hold_seconds: float = Field(1., ge=.1, le=10.)
+    force_limit_n: float = Field(35., ge=1., le=200.)
+    lateral_stiffness_n_per_m: float = Field(420., ge=1., le=3000.)
+    insertion_stiffness_n_per_m: float = Field(90., ge=0., le=1000.)
+    translation_damping_ns_per_m: float = Field(28., ge=0., le=300.)
+    orientation_stiffness_nm_per_rad: float = Field(38., ge=0., le=300.)
+    orientation_damping_nms_per_rad: float = Field(4.5, ge=0., le=50.)
+    maximum_feedback_torque_fraction: float = Field(.35, ge=.05, le=.8)
+
+
+class RamenSequenceInput(PoseInput):
+    model_config = {'extra': 'forbid'}
+    pins: list[str] = Field(default_factory=lambda: list(FEET))
+    angle_pins: list[str] = Field(default_factory=list, max_length=len(ANGLE_LOCKABLE))
+    object: dict
+    settings: RamenSequenceSettings = Field(default_factory=RamenSequenceSettings)
+
+
 @app.get('/api/groups')
 def list_groups():
     return checked(groups.list)
@@ -223,6 +248,13 @@ def grasp_fit(payload: GraspFitInput):
     from .grasp import fit_two_hand_grasp
     return checked(lambda: fit_two_hand_grasp(robot, payload.qpos, payload.pins, payload.object,
                                               payload.grasp, payload.angle_pins))
+
+
+@app.post('/api/ramen-sequence')
+def ramen_sequence(payload: RamenSequenceInput):
+    from .ramen_sequence import plan_ramen_sequence
+    return checked(lambda: plan_ramen_sequence(robot, payload.qpos, payload.pins, payload.angle_pins,
+                                               payload.object, payload.settings.model_dump()))
 
 
 @app.post('/api/preview')

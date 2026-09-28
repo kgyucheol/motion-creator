@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 
 import mujoco
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 from .motion import compile_motion, project_scene_objects, validate_project
 from .grasp import grasp_object, object_signature
@@ -23,6 +24,7 @@ from .robot import MODEL_PATH, ROOT, Robot
 from .sonic import KP, KD, Reference, SonicCPU
 from .task_jobs import atomic_json
 from .scene_geometry import append_collision_geoms, grounded_position
+from .interaction import interaction_at, interaction_timeline
 
 MAX_SECONDS = 60
 
@@ -140,6 +142,80 @@ def build_model(robot, project=None):
     return model
 
 
+def _interaction_feedback(model, data, robot, interaction, joint_dofs, joint_limits):
+    """Operational-space impedance for authored tool TCP targets."""
+    torque = np.zeros(len(joint_dofs))
+    if not interaction:
+        return torque, {'position_error_mm': 0., 'orientation_error_deg': 0., 'feedback_torque_nm': 0.}
+    control = interaction['control']
+    lateral_kp = float(control['lateral_stiffness_n_per_m'])
+    insertion_kp = float(control['insertion_stiffness_n_per_m'])
+    translation_kd = float(control['translation_damping_ns_per_m'])
+    orientation_kp = float(control['orientation_stiffness_nm_per_rad'])
+    orientation_kd = float(control['orientation_damping_nms_per_rad'])
+    position_errors, orientation_errors = [], []
+    jp, jr = np.zeros((3, model.nv)), np.zeros((3, model.nv))
+    for side, indices in (('left', slice(15, 22)), ('right', slice(22, 29))):
+        key = f'{side}_hand'
+        body = model.body(robot.handles[key][0]).id
+        current_rotation = data.xmat[body].reshape(3, 3)
+        point = data.xpos[body] + current_rotation @ np.asarray(robot.handles[key][1])
+        jp[:] = 0.; jr[:] = 0.
+        mujoco.mj_jac(model, data, jp, jr, point, body)
+        target = interaction['tcp_targets'][side]
+        desired_position = np.asarray(target['position'], dtype=float)
+        desired_rotation = Rotation.from_quat(target['quaternion_xyzw']).as_matrix()
+        position_error = desired_position - point
+        orientation_error = Rotation.from_matrix(desired_rotation @ current_rotation.T).as_rotvec()
+        axis = np.asarray(interaction['insertion_axes_world'][side], dtype=float)
+        axis /= np.linalg.norm(axis)
+        if interaction['mode'] == 'insertion':
+            stiffness = lateral_kp * (np.eye(3) - np.outer(axis, axis)) + insertion_kp * np.outer(axis, axis)
+        else:
+            stiffness = lateral_kp * np.eye(3)
+        force = stiffness @ position_error - translation_kd * (jp @ data.qvel)
+        moment = orientation_kp * orientation_error - orientation_kd * (jr @ data.qvel)
+        generalized = jp.T @ force + jr.T @ moment
+        torque[indices] = generalized[joint_dofs[indices]]
+        position_errors.append(np.linalg.norm(position_error))
+        orientation_errors.append(np.linalg.norm(orientation_error))
+    fraction = float(control['maximum_feedback_torque_fraction'])
+    feedback_limits = np.max(np.abs(joint_limits), axis=1) * fraction
+    torque = np.clip(torque, -feedback_limits, feedback_limits)
+    return torque, {
+        'position_error_mm': float(max(position_errors, default=0.) * 1000),
+        'orientation_error_deg': float(np.rad2deg(max(orientation_errors, default=0.))),
+        'feedback_torque_nm': float(np.max(np.abs(torque))),
+    }
+
+
+def _tool_contact_forces(model, data, robot, object_geom_ids):
+    tool_geoms = {}
+    for side in ('left', 'right'):
+        root_body = model.body(robot.handles[f'{side}_hand'][0]).id
+        descendants = set()
+        for body in range(model.nbody):
+            current = body
+            while current and current != root_body:
+                current = int(model.body_parentid[current])
+            if current == root_body:
+                descendants.add(body)
+        tool_geoms[side] = {index for index in range(model.ngeom)
+                            if int(model.geom_bodyid[index]) in descendants and model.geom_contype[index] != 0}
+    forces = {'left': 0., 'right': 0.}
+    for index in range(data.ncon):
+        contact = data.contact[index]
+        for side in ('left', 'right'):
+            pair = ((contact.geom1 in tool_geoms[side] and contact.geom2 in object_geom_ids)
+                    or (contact.geom2 in tool_geoms[side] and contact.geom1 in object_geom_ids))
+            if not pair:
+                continue
+            wrench = np.zeros(6)
+            mujoco.mj_contactForce(model, data, index, wrench)
+            forces[side] += float(np.linalg.norm(wrench[:3]))
+    return forces
+
+
 def simulate(project, progress=lambda value: None, *, controller='gear-sonic', start_frame_index=0, sonic_policy=None):
     if controller not in ('pd', 'gear-sonic'):
         raise ValueError('Unknown physics controller')
@@ -168,6 +244,14 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
     qa, va = model.jnt_qposadr[joints], model.jnt_dofadr[joints]
     motors = np.array([np.flatnonzero(model.actuator_trnid[:, 0] == joint)[0] for joint in joints])
     limits = model.jnt_actfrcrange[joints]
+    interaction_reference = interaction_timeline(project)
+    object_geom_ids = {model.geom(index).id for index in range(model.ngeom)
+                       if (model.geom(index).name or '').startswith('preview_object_')}
+    interaction_stats = {'active': bool(interaction_reference), 'max_tcp_error_mm': 0.,
+                         'max_orientation_error_deg': 0., 'max_feedback_torque_nm': 0.,
+                         'max_contact_force_n': {'left': 0., 'right': 0.},
+                         'force_limit_exceeded': False}
+    force_excess_steps = 0
     grasp_object = next((index for index, item in enumerate(objects)
                          if grasp and item['id'] == grasp['object_id']), None)
     grasp_stats = {'left': {'max_normal_n': 0., 'contact_samples': 0},
@@ -216,10 +300,30 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
                   if policy is not None else ref.sample(data.time)[0][0, 7:])
         for _ in range(10):
             torque = KP * (target - data.qpos[qa]) - KD * data.qvel[va]
+            interaction = interaction_at(interaction_reference, float(data.time))
+            feedback, feedback_metrics = _interaction_feedback(model, data, robot, interaction, va, limits)
+            torque += feedback
             saturation.append(float(np.mean((torque < limits[:, 0]) | (torque > limits[:, 1]))))
             data.ctrl[motors] = np.clip(torque, limits[:, 0], limits[:, 1])
             mujoco.mj_step(model, data)
             update_grasp_stats()
+            if interaction:
+                interaction_stats['max_tcp_error_mm'] = max(interaction_stats['max_tcp_error_mm'], feedback_metrics['position_error_mm'])
+                interaction_stats['max_orientation_error_deg'] = max(interaction_stats['max_orientation_error_deg'], feedback_metrics['orientation_error_deg'])
+                interaction_stats['max_feedback_torque_nm'] = max(interaction_stats['max_feedback_torque_nm'], feedback_metrics['feedback_torque_nm'])
+                contact_forces = _tool_contact_forces(model, data, robot, object_geom_ids)
+                for side in ('left', 'right'):
+                    interaction_stats['max_contact_force_n'][side] = max(interaction_stats['max_contact_force_n'][side], contact_forces[side])
+                if max(contact_forces.values()) > float(interaction['control']['force_limit_n']):
+                    force_excess_steps += 1
+                else:
+                    force_excess_steps = 0
+                if force_excess_steps >= 5:
+                    interaction_stats['force_limit_exceeded'] = True
+                    reason = 'interaction_force_limit'
+                    break
+        if reason != 'completed':
+            mujoco.mj_forward(model, data)
         if (not np.isfinite(data.qpos).all() or not np.isfinite(data.qvel).all()
                 or any(data.warning[k].number for k in (mujoco.mjtWarning.mjWARN_BADQPOS,
                     mujoco.mjtWarning.mjWARN_BADQVEL, mujoco.mjtWarning.mjWARN_BADQACC,
@@ -255,7 +359,7 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
                 'max_torque_saturation': max(saturation, default=0.),
                 'device': 'cpu', 'physics_hz': 500, 'policy_hz': 50 if policy is not None else 0,
                 'target_hz': 50, 'start_frame_index': start_frame_index, 'start_frame_name': start_frame_name,
-                'grasp': grasp_summary}}
+                'grasp': grasp_summary, 'interaction': interaction_stats if interaction_stats['active'] else None}}
 
 
 class PreviewJobs:

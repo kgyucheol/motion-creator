@@ -349,6 +349,13 @@ def validate_project(robot: Robot, project):
             for key in ('prevent_overlap', 'surface_snap', 'ground_lock'):
                 if not isinstance(placement.get(key), bool):
                     raise ValueError(f'Scene object placement {key} must be a boolean')
+    interactions = [frame['interaction'] for frame in frames if frame.get('interaction') is not None]
+    if interactions:
+        if robot.model_id != 'g1-tools':
+            raise ValueError('Object-interaction sequences require the G1 gripper model')
+        from .interaction import validate_interaction
+        for interaction in interactions:
+            validate_interaction(interaction, identifiers)
     scene_groups = project.get('scene_groups', [])
     if not isinstance(scene_groups, list) or len(scene_groups) > 16:
         raise ValueError('Scene groups must be a list with at most 16 entries')
@@ -513,6 +520,7 @@ def compile_motion(robot: Robot, project, fps=30):
         root_rotation = quat_matrix(qa[3:7])
         root_delta = Rotation.from_matrix(root_rotation.T @ quat_matrix(qb[3:7])).as_rotvec()
         angular_deltas = {k: Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec() for k in ROTATABLE}
+        interaction_pair = a.get('interaction'), b.get('interaction')
         for i in range(1, count + 1):
             u = i / count
             s = u*u*u*(10 + u*(-15 + 6*u))  # quintic easing, zero endpoint velocity/acceleration
@@ -522,7 +530,21 @@ def compile_motion(robot: Robot, project, fps=30):
                 q[3:7] *= -1
             if i == count:
                 q = qb.copy()
-            if i != count and (pins or angle_pins):
+            if i != count and all(interaction_pair):
+                from .interaction import interpolate_interaction
+                interaction = interpolate_interaction(*interaction_pair, s)
+                tcp_targets = interaction['tcp_targets']
+                reference = q.copy()
+                q, info = robot.solve(
+                    poses[-1], qa, pins=pins, angle_pins=angle_pins, mode='free', resistance=0.,
+                    selected_targets={f'{side}_hand': tcp_targets[side]['position'] for side in ('left', 'right')},
+                    orientation_targets={f'{side}_hand': tcp_targets[side]['quaternion_xyzw'] for side in ('left', 'right')},
+                    posture_reference=reference, posture_weight=.18, max_nfev=45,
+                )
+                if not info['converged']:
+                    raise ValueError(f'Interaction path IK failed ({info["target_error_mm"]:.1f} mm, {info["angle_error_deg"]:.1f}°)')
+                pin_errors.append(info['pin_error_mm'])
+            elif i != count and (pins or angle_pins):
                 rotations = {k: pa[k][1] @ Rotation.from_rotvec(s*angular_deltas[k]).as_matrix() for k in ROTATABLE}
                 targets = {k: ((1-s)*pa[k][0] + s*pb[k][0], rotations.get(k, pa[k][1])) for k in HANDLES}
                 # Root orientation follows SLERP exactly; only end-effector rotations need projection.

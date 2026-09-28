@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import SceneObjectControls from './scene-object-controls';
 import { ramenScene } from '../lib/ramen-scene';
 import GraspControls, { type GraspPickMode } from './grasp-controls';
+import RamenSequenceControls, { type RamenSequenceSettings } from './ramen-sequence-controls';
 import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
@@ -13,7 +14,8 @@ import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib
 
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
-type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null } };
+type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
+type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
@@ -764,6 +766,29 @@ export default function Editor() {
       setMessage(`${baseObject?.name ?? '박스'} 위치를 키프레임 고스트로 저장하고 양손 파지 자세를 맞췄습니다 · 접촉점 오차 ${result.solver.contact.target_error_mm.toFixed(2)} mm · 손목 비틀림 ${result.grasp.hand_twist_deg?.toFixed(0) ?? 0}°`);
     });
   }
+  async function generateRamenSequence(objectId: string, settings: RamenSequenceSettings) {
+    if (!project || !state) return;
+    const object = objects.find(value => value.id === objectId);
+    if (!object) return;
+    await run(async () => {
+      const result = await api<{ keyframes: Keyframe[]; diagnostics: { target_error_mm: number; angle_error_deg: number }[] }>('ramen-sequence', {
+        qpos: state.qpos, pins, angle_pins: anglePins, object, settings,
+      });
+      const retained = project.keyframes.filter(frame => frame.interaction?.task !== 'ramen_extract');
+      if (retained.length + result.keyframes.length > 100) throw new Error('시퀀스를 추가하면 키프레임 최대 100개를 넘습니다.');
+      checkpoint();
+      const firstIndex = retained.length;
+      const keyframes = [...retained, ...result.keyframes];
+      const nextProject = { ...project, keyframes };
+      current.current.project = nextProject; setProject(nextProject);
+      const first = await api<PoseState>('pose', { qpos: result.keyframes[0].qpos });
+      applyState(first); setPins([...result.keyframes[0].pins]); setAnglePins([...(result.keyframes[0].angle_pins ?? [])]);
+      setFrameIndex(firstIndex); setPoseDirty(false); setInfo(null); invalidate();
+      const maxPosition = Math.max(...result.diagnostics.map(value => value.target_error_mm));
+      const maxAngle = Math.max(...result.diagnostics.map(value => value.angle_error_deg));
+      setMessage(`${object.name} 기준 라면 꺼내기 7단계를 생성했습니다 · TCP 오차 최대 ${maxPosition.toFixed(1)} mm / ${maxAngle.toFixed(1)}°`);
+    });
+  }
   function addFrame() {
     if (!project || !state || !project.keyframes[frameIndex]) return;
     const duplicated = duplicateKeyframeAfter(project.keyframes, frameIndex);
@@ -853,7 +878,7 @@ export default function Editor() {
     });
   }
   const controllerLabel = policyEnabled ? 'GEAR-SONIC' : '기본 PD';
-  async function play(forcePhysics = false) {
+  async function play(forcePhysics = false, startFrameOverride?: number) {
     if (playing) { setPlaying(false); return; }
     if (preview) { if (sample >= preview.states.length - 1) setSample(0); setPlaying(true); return; }
     await run(async () => {
@@ -865,12 +890,15 @@ export default function Editor() {
         return;
       }
       const request: { id?: string; cancelled: boolean } = { cancelled: false };
+      const physicsStartFrame = startFrameOverride ?? frameIndex;
+      // The override selects where the simulation begins; restoring Physics OFF must
+      // still return to the pose/keyframe that was visible before the run.
       policySource.current = state ? { state, pins: [...pins], anglePins: [...anglePins], frameIndex, dirty: poseDirty } : null;
       policyRequest.current = request;
       try {
-        const startFrame = project?.keyframes[frameIndex];
-        setMessage(`${controllerLabel} · ${frameIndex + 1}번 ${startFrame?.name ?? '키프레임'}부터 물리 계산 준비 중…`);
-        let job = await api<PolicyJob>('policy-preview', { project, controller: policyEnabled ? 'gear-sonic' : 'pd', start_frame_index: frameIndex });
+        const startFrame = project?.keyframes[physicsStartFrame];
+        setMessage(`${controllerLabel} · ${physicsStartFrame + 1}번 ${startFrame?.name ?? '키프레임'}부터 물리 계산 준비 중…`);
+        let job = await api<PolicyJob>('policy-preview', { project, controller: policyEnabled ? 'gear-sonic' : 'pd', start_frame_index: physicsStartFrame });
         request.id = job.id;
         if (request.cancelled) {
           await api(`policy-preview/${job.id}/cancel`, {});
@@ -882,7 +910,7 @@ export default function Editor() {
           if (!alive.current || request.cancelled) return;
           job = await api<PolicyJob>(`policy-preview/${job.id}`);
           setPolicyJob(job);
-          setMessage(`${controllerLabel} · ${frameIndex + 1}번 키프레임부터 물리 계산 ${Math.round(job.progress * 100)}% · CPU`);
+          setMessage(`${controllerLabel} · ${physicsStartFrame + 1}번 키프레임부터 물리 계산 ${Math.round(job.progress * 100)}% · CPU`);
         }
         if (job.status === 'cancelled') { setMessage('물리 계산을 취소했습니다.'); return; }
         if (job.status !== 'completed') throw new Error(job.message || '물리 계산에 실패했습니다.');
@@ -891,10 +919,13 @@ export default function Editor() {
         setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
         if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
         const summary = result.summary!;
-        const outcome = summary.reason === 'fallen' ? '넘어짐으로 조기 종료' : summary.reason === 'completed' ? '계산 완료' : '수치 불안정으로 중단';
+        const outcome = summary.reason === 'fallen' ? '넘어짐으로 조기 종료' : summary.reason === 'completed' ? '계산 완료'
+          : summary.reason === 'interaction_force_limit' ? '접촉력 상한으로 안전 중단' : '수치 불안정으로 중단';
         const grip = summary.grasp;
         const gripText = grip ? ` · 양손 ${grip.bilateral_contact ? '접촉' : '접촉 실패'} · 힘 L ${grip.left.max_normal_n.toFixed(1)} / R ${grip.right.max_normal_n.toFixed(1)} N${grip.force_limit_exceeded ? ' · 힘 상한 초과' : ''}` : '';
-        setMessage(`${controllerLabel} ${outcome} · ${frameIndex + 1}번 키프레임부터 ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°${gripText}`);
+        const interaction = summary.interaction;
+        const interactionText = interaction ? ` · TCP ${interaction.max_tcp_error_mm.toFixed(1)} mm / ${interaction.max_orientation_error_deg.toFixed(1)}° · 접촉 L ${interaction.max_contact_force_n.left.toFixed(1)} / R ${interaction.max_contact_force_n.right.toFixed(1)} N${interaction.force_limit_exceeded ? ' · 힘 상한 중단' : ''}` : '';
+        setMessage(`${controllerLabel} ${outcome} · ${physicsStartFrame + 1}번 키프레임부터 ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°${gripText}${interactionText}`);
       } catch (failure) {
         if (request.id) await api(`policy-preview/${request.id}/cancel`, {}).catch(() => {});
         throw failure;
@@ -1076,7 +1107,10 @@ export default function Editor() {
       <p className="hint">원기둥은 겹친 용기 묶음 1개를 나타냅니다. 생성 후 크기·질량·위치를 편집할 수 있습니다. 상자의 다섯 면은 물리 시뮬레이션에서 고정됩니다.</p>
       <div className="section-divider"/>
       {state?.handles.left_hand?.label.includes('TCP')
-        ? <p className="hint">G1 그리퍼 작업점: 왼손 주걱 · 오른손 받침. 손 조작점을 선택해 위치·회전을 편집하세요. Physics에서는 두 도구의 실제 충돌 형상·질량·관성이 적용됩니다. 더미핸드용 양손 박스 파지는 이 모델에 적용하지 않습니다.</p>
+        ? <><p className="hint">G1 그리퍼 작업점: 왼손 주걱 · 오른손 받침. 손 조작점을 선택해 위치·회전을 편집하세요. Physics에서는 두 도구의 실제 충돌 형상·질량·관성이 적용됩니다.</p>
+          <RamenSequenceControls objects={objects} selectedObjectId={selectedObjectId} keyframes={project?.keyframes ?? []} disabled={disabled || !!motionClip}
+            onTargetChange={id => { setSelectedObjectGroupId(null); selectObject(id); }} onGenerate={(id, settings) => void generateRamenSequence(id, settings)}
+            onSelectFrame={index => void chooseFrame(index)} onRun={index => { setPhysicsEnabled(true); void play(true, index); }}/></>
         : <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={graspPickMode => void changeGraspPickMode(graspPickMode)} onFit={() => void fitGrasp()} onEditGhost={editGraspGhost} onValidate={() => void validateGraspPhysics()}/>}
       <div className="section-divider"/>
       <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>
