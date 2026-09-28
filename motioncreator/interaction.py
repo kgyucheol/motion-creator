@@ -16,6 +16,10 @@ def validate_interaction(value, object_ids=()):
         raise ValueError('Interaction metadata format is invalid')
     if value.get('mode') not in MODES or not isinstance(value.get('phase'), str):
         raise ValueError('Interaction phase or mode is invalid')
+    if value.get('stage_id') is not None and (not isinstance(value['stage_id'], str) or not value['stage_id']):
+        raise ValueError('Interaction stage ID is invalid')
+    if value.get('stage_label') is not None and (not isinstance(value['stage_label'], str) or not value['stage_label']):
+        raise ValueError('Interaction stage label is invalid')
     if object_ids and value.get('object_id') not in object_ids:
         raise ValueError('Interaction target object does not exist')
     for side in SIDES:
@@ -41,6 +45,31 @@ def validate_interaction(value, object_ids=()):
             number = reference.get(key)
             if not isinstance(number, (int, float)) or isinstance(number, bool) or not np.isfinite(number) or not 0 < number <= 5:
                 raise ValueError(f'Interaction object reference {key} is invalid')
+    perception = value.get('perception')
+    if perception is not None:
+        if perception.get('pose_source') not in ('scene_ground_truth', 'rgb_pose_estimator') or perception.get('frame_id') != 'world':
+            raise ValueError('Interaction perception source or frame is invalid')
+        camera = perception.get('camera', {})
+        for key, length in (('mount_xyz_m', 3), ('mount_rpy_rad', 3),
+                            ('world_position_m', 3), ('world_quaternion_xyzw', 4)):
+            vector = np.asarray(camera.get(key), dtype=float)
+            if vector.shape != (length,) or not np.isfinite(vector).all():
+                raise ValueError(f'Interaction camera {key} is invalid')
+        if abs(np.linalg.norm(camera['world_quaternion_xyzw']) - 1) > 1e-4:
+            raise ValueError('Interaction camera quaternion must be normalized')
+        object_pose = perception.get('object_pose_world', {})
+        object_position = np.asarray(object_pose.get('position'), dtype=float)
+        object_quaternion = np.asarray(object_pose.get('quaternion_xyzw'), dtype=float)
+        if object_position.shape != (3,) or not np.isfinite(object_position).all():
+            raise ValueError('Perceived object position is invalid')
+        if (object_quaternion.shape != (4,) or not np.isfinite(object_quaternion).all()
+                or abs(np.linalg.norm(object_quaternion) - 1) > 1e-4):
+            raise ValueError('Perceived object quaternion is invalid')
+        for collection in ('insertion_sites_world', 'approach_sites_world'):
+            for side in SIDES:
+                position = np.asarray(perception.get(collection, {}).get(side), dtype=float)
+                if position.shape != (3,) or not np.isfinite(position).all():
+                    raise ValueError(f'Perception {collection} {side} is invalid')
     control = value.get('control')
     required = {
         'lateral_stiffness_n_per_m': (0., 3000.),

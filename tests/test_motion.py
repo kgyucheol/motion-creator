@@ -27,6 +27,20 @@ def test_grounded_real_29_dof_model(robot):
     assert abs(robot.state(robot.home)['floor_min_mm']) < .01
 
 
+def test_project_keeps_a_saved_attention_pose_separate_from_default_stand(robot, tmp_path):
+    project = new_project(robot)
+    attention = robot.home.copy()
+    attention[robot.model.joint('left_elbow_joint').qposadr[0]] += .1
+    project['attention_pose'] = {'qpos': attention.tolist(), 'pins': list(FEET),
+                                 'angle_pins': ['left_elbow']}
+    validated = validate_project(robot, project)
+    np.testing.assert_allclose(validated['keyframes'][0]['qpos'], robot.home)
+    np.testing.assert_allclose(validated['attention_pose']['qpos'], attention)
+    bundle = save_bundle(robot, validated, fps=15, directory=tmp_path)
+    reopened = json.loads((tmp_path / bundle['project_file']).read_text())
+    np.testing.assert_allclose(reopened['attention_pose']['qpos'], attention)
+
+
 def test_crouch_keeps_feet_and_distant_hands(robot):
     target = robot.home[:3].copy()
     target[2] -= .15

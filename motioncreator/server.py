@@ -120,12 +120,19 @@ class RamenSequenceSettings(BaseModel):
     maximum_feedback_torque_fraction: float = Field(.35, ge=.05, le=.8)
 
 
+class SavedPoseInput(PoseInput):
+    model_config = {'extra': 'forbid'}
+    pins: list[str] = Field(default_factory=list, max_length=len(HANDLES))
+    angle_pins: list[str] = Field(default_factory=list, max_length=len(ANGLE_LOCKABLE))
+
+
 class RamenSequenceInput(PoseInput):
     model_config = {'extra': 'forbid'}
     pins: list[str] = Field(default_factory=lambda: list(FEET))
     angle_pins: list[str] = Field(default_factory=list, max_length=len(ANGLE_LOCKABLE))
     object: dict
     settings: RamenSequenceSettings = Field(default_factory=RamenSequenceSettings)
+    attention_pose: SavedPoseInput | None = None
 
 
 @app.get('/api/groups')
@@ -256,7 +263,8 @@ def grasp_fit(payload: GraspFitInput):
 def ramen_sequence(payload: RamenSequenceInput):
     from .ramen_sequence import plan_ramen_sequence
     return checked(lambda: plan_ramen_sequence(robot, payload.qpos, payload.pins, payload.angle_pins,
-                                               payload.object, payload.settings.model_dump()))
+                                               payload.object, payload.settings.model_dump(),
+                                               payload.attention_pose.model_dump() if payload.attention_pose else None))
 
 
 @app.post('/api/preview')

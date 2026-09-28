@@ -10,9 +10,10 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
 import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeAfter, firstStandKeyframeIndex, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
+import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
-type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
+type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
+type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
 type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
@@ -772,7 +773,7 @@ export default function Editor() {
     if (!object) return;
     await run(async () => {
       const result = await api<{ keyframes: Keyframe[]; diagnostics: { target_error_mm: number; angle_error_deg: number }[]; object_reference: { center_world: number[]; diameter_m: number } }>('ramen-sequence', {
-        qpos: state.qpos, pins, angle_pins: anglePins, object, settings,
+        qpos: state.qpos, pins, angle_pins: anglePins, object, settings, attention_pose: project.attention_pose,
       });
       const retained = project.keyframes.filter(frame => frame.interaction?.task !== 'ramen_extract');
       if (retained.length + result.keyframes.length > 100) throw new Error('시퀀스를 추가하면 키프레임 최대 100개를 넘습니다.');
@@ -811,6 +812,24 @@ export default function Editor() {
     if (!project) return;
     const f = project.keyframes[index];
     await run(async () => { checkpoint(); changeGraspPickMode(null); applyState(await api<PoseState>('pose', { qpos: f.qpos })); setPins(f.pins); setAnglePins(f.angle_pins ?? []); setFrameIndex(index); setPoseDirty(false); setInfo(null); });
+  }
+  function saveAttentionPose() {
+    if (!project || !state) return;
+    const attention_pose = { qpos: [...state.qpos], pins: [...pins], angle_pins: [...anglePins] };
+    const nextProject = { ...project, attention_pose };
+    current.current.project = nextProject; setProject(nextProject);
+    setMessage('현재 자세와 고정 조건을 차렷자세로 저장했습니다. 기본 서기 자세는 그대로 유지됩니다.');
+  }
+  async function loadAttentionPose() {
+    const saved = project?.attention_pose;
+    if (!saved) return;
+    await run(async () => {
+      checkpoint(); changeGraspPickMode(null);
+      applyState(await api<PoseState>('pose', { qpos: saved.qpos }));
+      setPins([...saved.pins]); setAnglePins([...(saved.angle_pins ?? [])]);
+      setPoseDirty(true); setInfo(null); invalidate();
+      setMessage('저장된 차렷자세를 현재 편집 자세로 불러왔습니다. 선택 프레임에 반영하면 키프레임이 갱신됩니다.');
+    });
   }
   function changeHistory(redo: boolean) {
     if (current.current.busy || current.current.playing || inFlight.current || dragActive.current) return;
@@ -981,8 +1000,6 @@ export default function Editor() {
   const activeFrame = project?.keyframes[frameIndex];
   const motionClip = project?.keyframes.length === 1 ? project.keyframes[0].samples : undefined;
   const duration = motionClip ? project!.keyframes[0].duration : project?.keyframes.slice(1).reduce((sum, f) => sum + f.duration, 0) ?? 0;
-  const attentionFrameIndex = project ? firstStandKeyframeIndex(project.keyframes) : -1;
-  const attentionFrame = attentionFrameIndex >= 0 ? project?.keyframes[attentionFrameIndex] : undefined;
   const selectedGroup = allNodes().find(node => node.children && nodeMembers(node).length === members.length && nodeMembers(node).every(key => members.includes(key)));
 
   return <div className="editor">
@@ -1026,11 +1043,11 @@ export default function Editor() {
       <p className="hint">먼 부위일수록 원래 위치를 더 유지합니다. 손의 위치를 정확히 유지하려면 손을 고정하세요.</p>
       <div className="pin-summary"><LockKeyhole size={14}/><span>노란 자물쇠: 위치 고정<br/>보라 회전 아이콘: 방향·관절각만 고정</span></div>
       <div className="section-divider"/>
-      <div className="panel-heading"><span>자세 프리셋</span><small>{attentionFrame ? `${attentionFrameIndex + 1}번 키프레임` : 'Stand 없음'}</small></div>
-      <button className="wide" disabled={disabled || attentionFrameIndex < 0} title={attentionFrame ? `현재 모션의 첫 Stand 키프레임 '${attentionFrame.name}'을 적용합니다.` : '현재 모션에 Stand 키프레임이 없습니다.'} onClick={() => {
-        void chooseFrame(attentionFrameIndex).then(() => setMessage(`첫 Stand 키프레임 '${attentionFrame?.name}'을 차렷자세로 적용했습니다.`));
-      }}><RotateCcw size={15}/> 차렷자세</button>
-      <p className="hint">현재 모션에 저장된 첫 Stand 자세를 사용합니다. 관절값과 위치·각도 고정 설정을 함께 불러옵니다.</p>
+      <div className="panel-heading"><span>자세 프리셋</span><small>{project?.attention_pose ? '차렷 저장됨' : '차렷 미저장'}</small></div>
+      <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); const init = await api<{state: PoseState}>('init'); applyState(init.state); setPins(feet); setAnglePins([]); setPoseDirty(true); invalidate(); })}><RotateCcw size={15}/> 기본 서기 자세</button>
+      <button className="wide" disabled={disabled || !state || !!motionClip} onClick={saveAttentionPose}><Save size={15}/> 현재 자세를 차렷자세로 저장</button>
+      <button className="wide" disabled={disabled || !project?.attention_pose || !!motionClip} onClick={() => void loadAttentionPose()}><Download size={15}/> 차렷자세 불러오기</button>
+      <p className="hint">기본 서기는 로봇 초기 자세입니다. 차렷자세는 현재 관절값과 위치·각도 고정 설정을 프로젝트에 별도로 저장합니다.</p>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => {
         const init = await api<{ project: Project }>('init');
         await loadProject(init.project);
@@ -1116,6 +1133,7 @@ export default function Editor() {
       {state?.handles.left_hand?.label.includes('TCP')
         ? <><p className="hint">G1 그리퍼 작업점: 왼손 주걱 · 오른손 받침. 손 조작점을 선택해 위치·회전을 편집하세요. Physics에서는 두 도구의 실제 충돌 형상·질량·관성이 적용됩니다.</p>
           <RamenSequenceControls objects={objects} selectedObjectId={selectedObjectId} keyframes={project?.keyframes ?? []} disabled={disabled || !!motionClip}
+            attentionPoseSaved={!!project?.attention_pose}
             onTargetChange={id => { setSelectedObjectGroupId(null); selectObject(id); }} onGenerate={(id, settings) => void generateRamenSequence(id, settings)}
             onSelectFrame={index => void chooseFrame(index)} onRun={index => { setPhysicsEnabled(true); void play(true, index); }}/></>
         : <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={graspPickMode => void changeGraspPickMode(graspPickMode)} onFit={() => void fitGrasp()} onEditGhost={editGraspGhost} onValidate={() => void validateGraspPhysics()}/>}

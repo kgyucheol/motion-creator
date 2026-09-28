@@ -21,6 +21,10 @@ def test_tool_urdf_joint_mapping_and_tcp_ik(monkeypatch):
     np.testing.assert_allclose(robot.handles['left_hand'][1], [.221805, 0, -.0380589785])
     assert robot.handles['right_hand'][1][1] < 0
     assert robot.fingerprint != standard.fingerprint
+    camera = robot.state(robot.home)['cameras']['head']
+    assert camera['label'] == 'Head Cam · D435'
+    assert camera['calibrated_projection'] is False
+    assert len(camera['position']) == 3 and len(camera['quaternion']) == 4
     for side in ('left', 'right'):
         target = robot.point(robot.data(robot.home), f'{side}_hand')[0] + [.01, 0, 0]
         q, result = robot.solve(robot.home, robot.home, selected_targets={f'{side}_hand': target})

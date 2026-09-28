@@ -829,13 +829,17 @@ npm --prefix frontend run test:scene
 
 ## 24. 라면 꺼내기 상호작용 경로
 
-- `motioncreator/ramen_sequence.py — plan_ramen_sequence`: 물체 중심·충돌 지름·회전에서 장축/상자 위쪽/몸쪽 방향을 만들고, 기본자세부터 반복 인양·후퇴와 운반자세까지 `motioncreator.ramen-interaction.v1` metadata를 생성한다.
+- `motioncreator/ramen_sequence.py — plan_ramen_sequence`: 장면 또는 추후 RGB 추정 물체 포즈에서 양쪽 삽입점과 상부 접근 통로를 만들고, 저장된 차렷자세부터 무충돌 순차 삽입·안정화·수직 인양·인출·운반의 7개 UI 단계를 `motioncreator.ramen-interaction.v1` metadata로 생성한다.
+- `motioncreator/tool_model.py — head_camera_spec`: 그리퍼 URDF의 고정 `d435_joint` 장착 위치와 RPY를 읽는다. URDF에 없는 optical frame과 RGB intrinsics는 보정된 실카메라 드라이버가 공급해야 한다.
 - `motioncreator/interaction.py`: metadata 검증, TCP 위치/회전 보간, 시간축 샘플링을 담당한다.
 - `motioncreator/motion.py — compile_motion`: 연속 두 키프레임에 interaction metadata가 있으면 TCP 보간값을 양팔 IK로 투영한다.
 - `motioncreator/policy_preview.py — _interaction_feedback`: 500 Hz MuJoCo step마다 위치·방향 오차를 Jacobian transpose 토크로 변환하고, 도구와 모든 장면 오브젝트 접촉력을 안전 상한과 비교한다.
 - `frontend/app/ramen-sequence-controls.tsx`: 대상 선택, 경로·임피던스 설정, 생성 단계 탐색과 물리 실행 UI다.
+- `frontend/lib/robot-scene.ts — renderHeadCamera`: `Robot.state.cameras.head` FK를 별도 PerspectiveCamera에 적용해 메인 뷰 위에 Head Cam PiP를 합성한다. 현재 투영은 미보정 60° FOV다.
 
 interaction은 `g1-tools` 프로젝트에서만 허용한다. 모든 quaternion은 xyzw 단위 quaternion,
 위치와 삽입축은 월드 좌표계, 강성·감쇠·힘은 각각 SI 단위다. 접촉력은 안전 중단용이며
 토크 명령의 직접적인 힘 오차 피드백으로 사용하지 않는다. `object_reference`에는 생성 시점의
 물체 중심, 원기둥 장축, 상자 위쪽, 양손 횡방향, 몸쪽 방향, 지름과 길이를 수치로 저장한다.
+프로젝트의 선택적 `attention_pose`는 기본 `Stand` 키프레임과 독립적인 사용자 지정 자세이며
+qpos, 위치 고정, 각도 고정을 함께 저장한다.

@@ -6,6 +6,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .robot import FEET, Robot
+from .tool_model import head_camera_spec
 
 
 FORMAT = 'motioncreator.ramen-interaction.v1'
@@ -88,11 +89,65 @@ def _object_reference(item, taught, robot_position):
     }
 
 
-def _interaction(phase, object_id, targets, axes, settings, mode, reference):
-    return {
+def _camera_observation(robot, qpos):
+    specification = head_camera_spec()
+    data = robot.data(qpos)
+    try:
+        body = robot.model.body(specification['link']).id
+        position = data.xpos[body].copy()
+        rotation = data.xmat[body].reshape(3, 3).copy()
+    except KeyError:
+        body = robot.model.body(specification['parent_link']).id
+        parent_rotation = data.xmat[body].reshape(3, 3)
+        position = data.xpos[body] + parent_rotation @ np.asarray(specification['mount_xyz_m'])
+        rotation = parent_rotation @ Rotation.from_euler('xyz', specification['mount_rpy_rad']).as_matrix()
+    return {**specification, 'world_position_m': position.tolist(),
+            'world_quaternion_xyzw': Rotation.from_matrix(rotation).as_quat().tolist()}
+
+
+def _locate_insertion_sites(robot, qpos, item, settings, taught):
+    """Resolve the scene pose into two tool corridors.
+
+    `scene_ground_truth` is intentionally isolated here so a future RGB pose
+    provider can supply the same object pose contract without changing the
+    motion-generation stages.
+    """
+    reference = _object_reference(item, taught, qpos[:3])
+    center = reference['center_world']
+    diameter = reference['diameter_m']
+    up, side_axis = reference['box_up_world'], reference['side_axis_world']
+    support_center = center - up * max(.005, diameter * .5 - .005)
+    half_span = diameter * .5 + .005
+    inserted = {}
+    for side, sign in (('left', 1.), ('right', -1.)):
+        position = support_center + sign * side_axis * half_span
+        inserted[side] = (position, _align_tool_to_box(taught[side][1], up))
+    vertical_travel = max(float(settings['approach_clearance_m']), diameter)
+    approach = {side: (inserted[side][0] + up * vertical_travel, inserted[side][1])
+                for side in ('left', 'right')}
+    perception = {
+        'pose_source': 'scene_ground_truth',
+        'frame_id': 'world',
+        'camera': _camera_observation(robot, qpos),
+        'object_pose_world': {
+            'position': _vector(item.get('position'), 'object position').tolist(),
+            'quaternion_xyzw': _vector(item.get('quaternion_xyzw'), 'object quaternion', length=4).tolist(),
+        },
+        'insertion_sites_world': {side: inserted[side][0].tolist() for side in ('left', 'right')},
+        'approach_sites_world': {side: approach[side][0].tolist() for side in ('left', 'right')},
+        'approach_strategy': 'staggered_vertical_corridor',
+    }
+    return reference, inserted, approach, perception
+
+
+def _interaction(phase, stage_id, stage_label, object_id, targets, axes, settings, mode, reference,
+                 perception=None):
+    result = {
         'format': FORMAT,
         'task': 'ramen_extract',
         'phase': phase,
+        'stage_id': stage_id,
+        'stage_label': stage_label,
         'object_id': object_id,
         'mode': mode,
         'tcp_targets': {
@@ -118,9 +173,12 @@ def _interaction(phase, object_id, targets, axes, settings, mode, reference):
             'force_limit_n': float(settings['force_limit_n']),
         },
     }
+    if perception is not None:
+        result['perception'] = perception
+    return result
 
 
-def plan_ramen_sequence(robot: Robot, qpos, pins, angle_pins, item, settings):
+def plan_ramen_sequence(robot: Robot, qpos, pins, angle_pins, item, settings, attention_pose=None):
     """Build an object-relative, incrementally lifted extraction from a taught tool attitude."""
     if robot.model_id != 'g1-tools':
         raise ValueError('라면 꺼내기 시퀀스는 G1 그리퍼 모델에서만 사용할 수 있습니다.')
@@ -131,7 +189,6 @@ def plan_ramen_sequence(robot: Robot, qpos, pins, angle_pins, item, settings):
         raise ValueError('대상 라면 오브젝트가 필요합니다.')
     if item.get('fixed'):
         raise ValueError('고정된 오브젝트는 꺼내기 대상으로 사용할 수 없습니다.')
-    center = _vector(item.get('position'), 'object position')
     clearance = float(settings['approach_clearance_m'])
     lift = float(settings['lift_height_m'])
     extraction = float(settings['extraction_distance_m'])
@@ -142,19 +199,14 @@ def plan_ramen_sequence(robot: Robot, qpos, pins, angle_pins, item, settings):
         raise ValueError('접근·인양·운반 설정이 지원 범위를 벗어났습니다.')
 
     taught = {side: _tcp_pose(robot, qpos, side) for side in ('left', 'right')}
-    reference = _object_reference(item, taught, qpos[:3])
+    start_qpos = robot.validate_q(attention_pose['qpos']) if attention_pose else robot.home.copy()
+    start_pins = list(dict.fromkeys(attention_pose.get('pins', FEET))) if attention_pose else list(FEET)
+    start_angle_pins = list(dict.fromkeys(attention_pose.get('angle_pins', ()))) if attention_pose else []
+    reference, inserted, preinsert, perception = _locate_insertion_sites(
+        robot, start_qpos, item, settings, taught)
     diameter = reference['diameter_m']
     up, side_axis, bodyward = (reference[key] for key in ('box_up_world', 'side_axis_world', 'bodyward_world'))
-    support_center = center - up * max(.005, diameter * .5 - .005)
-    half_span = diameter * .5 + .005
-    inserted = {}
-    for side, sign in (('left', 1.), ('right', -1.)):
-        position = support_center + sign * side_axis * half_span
-        inserted[side] = (position, _align_tool_to_box(taught[side][1], up))
-    vertical_travel = max(clearance, diameter)
-    preinsert = {side: (inserted[side][0] + up * vertical_travel, inserted[side][1])
-                 for side in ('left', 'right')}
-    default = {side: _tcp_pose(robot, robot.home, side) for side in ('left', 'right')}
+    attention_targets = {side: _tcp_pose(robot, start_qpos, side) for side in ('left', 'right')}
     insertion_axes = {side: -up for side in ('left', 'right')}
     lift = max(lift, diameter)
     tilt_axis = _unit(np.cross(up, bodyward), side_axis)
@@ -163,53 +215,66 @@ def plan_ramen_sequence(robot: Robot, qpos, pins, angle_pins, item, settings):
     insertion_seconds = float(settings['insertion_seconds'])
     hold_seconds = float(settings['hold_seconds'])
     phase_specs = [
-        ('default_pose', '기본자세', default, .1, 'pose'),
-        ('object_align', '물체 중심 위 정렬', preinsert, phase_seconds, 'pose'),
-        ('left_insert', '왼 주걱 수직 삽입', {'left': inserted['left'], 'right': preinsert['right']}, insertion_seconds, 'insertion'),
-        ('right_insert', '오른 받침 수직 삽입', inserted, insertion_seconds, 'insertion'),
-        ('load_check', '접촉 하중 확인', inserted, hold_seconds, 'hold'),
+        ('attention_pose', '차렷자세', attention_targets, .1, 'pose',
+         'attention', '차렷자세', None, start_pins, start_angle_pins),
+        ('insertion_site_search', '삽입 위치 탐색', attention_targets, max(.1, phase_seconds * .5), 'pose',
+         'site_search', '삽입 위치 탐색', perception, pins, []),
+        ('approach_clearance', '무충돌 접근 · 상부 안전점', preinsert, phase_seconds, 'pose',
+         'collision_free_approach', '양손을 충돌없이 각 삽입지점으로 이동', None, pins, []),
+        ('left_insert', '무충돌 접근 · 왼 주걱 삽입',
+         {'left': inserted['left'], 'right': preinsert['right']}, insertion_seconds, 'insertion',
+         'collision_free_approach', '양손을 충돌없이 각 삽입지점으로 이동', None, pins, []),
+        ('right_insert', '무충돌 접근 · 오른 받침 삽입', inserted, insertion_seconds, 'insertion',
+         'collision_free_approach', '양손을 충돌없이 각 삽입지점으로 이동', None, pins, []),
+        ('bilateral_stabilize', '양손 지지 안정화', inserted, hold_seconds, 'hold',
+         'bilateral_stabilize', '양손 지지 안정화', None, pins, []),
     ]
-    previous_position = {side: inserted[side][0].copy() for side in ('left', 'right')}
+    lifted = {side: (inserted[side][0] + up * lift, inserted[side][1]) for side in ('left', 'right')}
+    phase_specs.append(('vertical_lift', '라면묶음 수직 인양', lifted, phase_seconds, 'carry',
+                        'vertical_lift', '라면묶음 수직 인양', None, pins, []))
+    previous_position = {side: lifted[side][0].copy() for side in ('left', 'right')}
     for cycle in range(1, cycles + 1):
         fraction = cycle / cycles
         tilt = Rotation.from_rotvec(tilt_axis * carry_tilt * fraction)
         orientations = {side: (tilt * Rotation.from_quat(inserted[side][1])).as_quat()
                         for side in ('left', 'right')}
         angled = {side: (previous_position[side], orientations[side]) for side in ('left', 'right')}
-        lifted = {side: (inserted[side][0] + up * lift * fraction + bodyward * extraction * (cycle - 1) / cycles,
-                         orientations[side]) for side in ('left', 'right')}
-        pulled = {side: (inserted[side][0] + up * lift * fraction + bodyward * extraction * fraction,
+        pulled = {side: (inserted[side][0] + up * lift + bodyward * extraction * fraction,
                          orientations[side]) for side in ('left', 'right')}
         phase_specs.extend([
-            (f'angle_relax_{cycle}', f'{cycle}차 툴 각도 완화', angled, max(.1, phase_seconds * .3), 'carry'),
-            (f'lift_{cycle}', f'{cycle}차 소폭 인양', lifted, max(.1, phase_seconds * .45), 'carry'),
-            (f'pull_{cycle}', f'{cycle}차 몸쪽 꺼내기', pulled, max(.1, phase_seconds * .55), 'carry'),
+            (f'extract_angle_{cycle}', f'상자 밖으로 꺼내기 · {cycle}차 각도 완화', angled,
+             max(.1, phase_seconds * .3), 'carry', 'extract', '상자 밖으로 꺼내기', None, pins, []),
+            (f'extract_pull_{cycle}', f'상자 밖으로 꺼내기 · {cycle}차 몸쪽 이동', pulled,
+             max(.1, phase_seconds * .55), 'carry', 'extract', '상자 밖으로 꺼내기', None, pins, []),
         ])
         previous_position = {side: pulled[side][0].copy() for side in ('left', 'right')}
     carried = phase_specs[-1][2]
-    phase_specs.append(('carry_hold', '몸쪽으로 꺾어 운반자세 유지', carried, hold_seconds, 'hold'))
+    phase_specs.append(('carry_hold', '운반 자세 유지', carried, hold_seconds, 'hold',
+                        'carry_hold', '운반 자세 유지', None, pins, []))
     frames, diagnostics = [], []
-    seed = robot.home.copy()
-    for phase, label, targets, duration, mode in phase_specs:
-        if phase == 'default_pose':
-            solved = robot.home.copy()
+    seed = start_qpos.copy()
+    for phase, label, targets, duration, mode, stage_id, stage_label, phase_perception, frame_pins, frame_angle_pins in phase_specs:
+        if phase in ('attention_pose', 'insertion_site_search'):
+            solved = start_qpos.copy()
             info = {'converged': True, 'target_error_mm': 0., 'angle_error_deg': 0.}
         else:
             solved, info = robot.solve(
-                seed, seed, pins=pins, angle_pins=[], mode='free', resistance=0.,
+                seed, seed, pins=frame_pins, angle_pins=[], mode='free', resistance=0.,
                 selected_targets={side + '_hand': targets[side][0] for side in ('left', 'right')},
                 orientation_targets={side + '_hand': targets[side][1] for side in ('left', 'right')},
-                posture_reference=robot.home, posture_weight=.3 if phase == 'carry_hold' else .12, max_nfev=180,
+                posture_reference=start_qpos, posture_weight=.3 if phase == 'carry_hold' else .12, max_nfev=180,
             )
         if not info['converged']:
             raise ValueError(f'{label} IK 실패: 위치 {info["target_error_mm"]:.1f} mm · 방향 {info["angle_error_deg"]:.1f}°')
-        interaction = _interaction(phase, item['id'], targets, insertion_axes, settings, mode, reference)
+        interaction = _interaction(phase, stage_id, stage_label, item['id'], targets, insertion_axes,
+                                   settings, mode, reference, phase_perception)
         frames.append({'name': label, 'duration': duration, 'qpos': solved.tolist(),
-                       'pins': deepcopy(pins), 'angle_pins': [],
+                       'pins': deepcopy(frame_pins), 'angle_pins': deepcopy(frame_angle_pins),
                        'interaction': interaction})
-        diagnostics.append({'phase': phase, 'label': label, 'target_error_mm': info['target_error_mm'],
+        diagnostics.append({'phase': phase, 'stage_id': stage_id, 'label': label,
+                            'target_error_mm': info['target_error_mm'],
                             'angle_error_deg': info['angle_error_deg']})
         seed = solved
     return {'format': 'motioncreator.ramen-sequence.v1', 'object_id': item['id'],
-            'object_pose_source': 'scene', 'object_reference': frames[0]['interaction']['object_reference'],
-            'keyframes': frames, 'diagnostics': diagnostics}
+            'object_pose_source': 'scene_ground_truth', 'object_reference': frames[0]['interaction']['object_reference'],
+            'perception': perception, 'keyframes': frames, 'diagnostics': diagnostics}

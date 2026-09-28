@@ -201,6 +201,17 @@ def validate_project(robot: Robot, project):
         raise ValueError('Unknown pinned handle')
     if any(k not in ANGLE_LOCKABLE for k in project.get('angle_pins', [])):
         raise ValueError('Unknown angle-pinned handle')
+    attention_pose = project.get('attention_pose')
+    if attention_pose is not None:
+        if not isinstance(attention_pose, dict):
+            raise ValueError('Attention pose must be an object')
+        robot.validate_q(attention_pose.get('qpos'))
+        attention_pins = attention_pose.get('pins', [])
+        attention_angle_pins = attention_pose.get('angle_pins', [])
+        if not isinstance(attention_pins, list) or any(k not in HANDLES for k in attention_pins):
+            raise ValueError('Attention pose contains an unknown pinned handle')
+        if not isinstance(attention_angle_pins, list) or any(k not in ANGLE_LOCKABLE for k in attention_angle_pins):
+            raise ValueError('Attention pose contains an unknown angle-pinned handle')
     if 'box' in project:
         box = project['box']
         for field in ('position', 'size'):

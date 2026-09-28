@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, canRotateSelection, headCameraViewQuaternion, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap, transformSceneObjectGroup } from '../lib/scene-objects.ts';
-import { duplicateKeyframeAfter, firstStandKeyframeIndex } from '../lib/keyframes.ts';
+import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
   const frames = [
@@ -22,11 +22,12 @@ test('a duplicated keyframe is inserted immediately after the selection as an in
   assert.notEqual(result.keyframes[2].pins, frames[1].pins);
 });
 
-test('the attention pose resolves to the first explicitly named Stand keyframe', () => {
-  const frame = (name) => ({ name, duration: 1, qpos: [], pins: [] });
-  assert.equal(firstStandKeyframeIndex([frame('Reach'), frame('Stand'), frame('기본 서기 자세')]), 1);
-  assert.equal(firstStandKeyframeIndex([frame('Reach'), frame(' 차렷자세 ')]), 1);
-  assert.equal(firstStandKeyframeIndex([frame('Reach'), frame('Carry')]), -1);
+test('the head camera view uses URDF +X as forward and +Z as image up', () => {
+  const view = headCameraViewQuaternion([0, 0, 0, 1]);
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(view);
+  const up = new THREE.Vector3(0, 1, 0).applyQuaternion(view);
+  assert.ok(forward.distanceTo(new THREE.Vector3(1, 0, 0)) < 1e-12);
+  assert.ok(up.distanceTo(new THREE.Vector3(0, 0, 1)) < 1e-12);
 });
 
 test('primitive scale constraints preserve spheres and round cylinders', () => {

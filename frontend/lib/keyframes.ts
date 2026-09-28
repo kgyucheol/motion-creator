@@ -24,6 +24,8 @@ export type ToolInteraction = {
   format: 'motioncreator.ramen-interaction.v1';
   task: 'ramen_extract';
   phase: string;
+  stage_id?: string;
+  stage_label?: string;
   object_id: string;
   mode: 'pose' | 'insertion' | 'hold' | 'carry';
   tcp_targets: Record<'left' | 'right', { position: number[]; quaternion_xyzw: number[] }>;
@@ -46,6 +48,24 @@ export type ToolInteraction = {
     maximum_feedback_torque_fraction: number;
     force_limit_n: number;
   };
+  perception?: {
+    pose_source: 'scene_ground_truth' | 'rgb_pose_estimator';
+    frame_id: string;
+    camera: {
+      link: string;
+      parent_link: string;
+      mount_xyz_m: number[];
+      mount_rpy_rad: number[];
+      world_position_m: number[];
+      world_quaternion_xyzw: number[];
+      optical_frame_declared: boolean;
+      intrinsics_declared: boolean;
+    };
+    object_pose_world: { position: number[]; quaternion_xyzw: number[] };
+    insertion_sites_world: Record<'left' | 'right', number[]>;
+    approach_sites_world: Record<'left' | 'right', number[]>;
+    approach_strategy: 'staggered_vertical_corridor';
+  };
 };
 
 export type Keyframe = {
@@ -58,22 +78,6 @@ export type Keyframe = {
   grasp?: TwoHandGrasp;
   interaction?: ToolInteraction;
 };
-
-const STAND_POSE_NAMES = new Set([
-  'stand',
-  'standing',
-  '서기',
-  '서있기',
-  '기본 서기',
-  '기본 서기 자세',
-  '차렷',
-  '차렷자세',
-]);
-
-/** Returns the first explicitly named standing pose in the current timeline. */
-export function firstStandKeyframeIndex(keyframes: Keyframe[]) {
-  return keyframes.findIndex(frame => STAND_POSE_NAMES.has(frame.name.trim().toLocaleLowerCase()));
-}
 
 export function duplicateKeyframeAfter(keyframes: Keyframe[], selectedIndex: number) {
   if (selectedIndex < 0 || selectedIndex >= keyframes.length) return { keyframes, index: selectedIndex };

@@ -1,6 +1,7 @@
 """Compile the supplied 29-axis G1 gripper URDF without changing its assets."""
 import tempfile
 import xml.etree.ElementTree as ET
+from functools import lru_cache
 from pathlib import Path
 
 import mujoco
@@ -8,6 +9,31 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 URDF = ROOT / 'assets/g1_scoop_endsupport/g1_29dof_rev_1_0_scoop_endsupport.urdf'
+
+
+@lru_cache(maxsize=1)
+def head_camera_spec():
+    """Return the D435 mount transform declared by the gripper URDF.
+
+    The URDF defines only the fixed link transform. It does not include a
+    camera optical frame or RGB intrinsics, so callers must supply those from
+    the calibrated camera driver before projecting pixels into 3-D.
+    """
+    source = ET.parse(URDF).getroot()
+    joint = source.find("joint[@name='d435_joint']")
+    if joint is None or joint.get('type') != 'fixed':
+        raise ValueError('The gripper URDF does not declare a fixed d435_joint')
+    origin = joint.find('origin')
+    parent = joint.find('parent')
+    child = joint.find('child')
+    return {
+        'link': child.get('link'),
+        'parent_link': parent.get('link'),
+        'mount_xyz_m': [float(value) for value in origin.get('xyz', '0 0 0').split()],
+        'mount_rpy_rad': [float(value) for value in origin.get('rpy', '0 0 0').split()],
+        'optical_frame_declared': False,
+        'intrinsics_declared': False,
+    }
 
 
 def tool_model_xml():

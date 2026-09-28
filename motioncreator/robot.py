@@ -381,9 +381,21 @@ class Robot:
                 'quaternion': Rotation.from_matrix(rotation @ grip_pad_rotation(side)).as_quat().tolist(),
                 'size': (2 * grip_pad_half_size()).tolist(),
             }
+        cameras = {}
+        if self.model_id == 'g1-tools':
+            from .tool_model import head_camera_spec
+            camera = head_camera_spec()
+            body = self.model.body(camera['link']).id
+            cameras['head'] = {
+                'position': d.xpos[body].tolist(),
+                'quaternion': Rotation.from_matrix(d.xmat[body].reshape(3, 3)).as_quat().tolist(),
+                'label': 'Head Cam · D435',
+                'calibrated_projection': False,
+            }
         floor_min = min(self.point(d, k)[0][2] + (self.point(d, k)[1] @ np.array(o))[2]
                         for k in FEET for o in ((-.085, -.03, 0), (-.085, .03, 0), (.085, -.03, 0), (.085, .03, 0)))
-        return {'model_id': self.model_id, 'qpos': np.asarray(q).tolist(), 'handles': handles, 'geoms': geoms, 'grip_pads': grip_pads,
+        return {'model_id': self.model_id, 'qpos': np.asarray(q).tolist(), 'handles': handles, 'geoms': geoms,
+                'grip_pads': grip_pads, 'cameras': cameras,
                 'com': d.subtree_com[self.ids['pelvis']].tolist(), 'floor_min_mm': float(floor_min * 1000),
                 'hinges': {k: {'joint_name': name, 'angle': float(q[self.model.joint(name).qposadr[0]]),
                               'limits': self.model.joint(name).range.tolist(),

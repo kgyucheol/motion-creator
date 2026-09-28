@@ -12,6 +12,7 @@ export type PoseState = {
   handles: Record<string, { position: number[]; quaternion: number[]; label: string }>;
   geoms: Record<string, { position: number[]; quaternion: number[] }>;
   grip_pads: Record<'left' | 'right', { position: number[]; quaternion: number[]; size: number[] }>;
+  cameras?: Record<'head', { position: number[]; quaternion: number[]; label: string; calibrated_projection: boolean }>;
   com: number[];
   floor_min_mm: number;
   hinges: Record<string, { joint_name: string; angle: number; limits: number[]; axis_world: number[]; position: number[] }>;
@@ -42,6 +43,12 @@ export function ankleFrame(state: PoseState, key: string) {
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, x.clone().cross(y).normalize()));
 }
 export const canRotateSelection = (members: string[]) => members.length > 0 && (members.every(k => ROTATABLE.includes(k)) || members.length === 1 && (HINGE_HANDLES.includes(members[0]) || isJointHandle(members[0])));
+const HEAD_CAMERA_VIEW_FRAME = new THREE.Quaternion().setFromRotationMatrix(
+  new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0)),
+);
+export function headCameraViewQuaternion(linkQuaternion: number[]) {
+  return new THREE.Quaternion().fromArray(linkQuaternion).multiply(HEAD_CAMERA_VIEW_FRAME);
+}
 type Callbacks = {
   select: (key: string, additive: boolean, hover: boolean) => void;
   begin: () => void;
@@ -64,6 +71,9 @@ type Callbacks = {
 export class RobotScene {
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(38, 1, .01, 100);
+  headCamera = new THREE.PerspectiveCamera(60, 16 / 9, .03, 20);
+  headCameraOverlay: HTMLDivElement;
+  headCameraAvailable = false;
   renderer: THREE.WebGLRenderer;
   orbit: OrbitControls;
   gizmo: TransformControls;
@@ -118,6 +128,11 @@ export class RobotScene {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     host.appendChild(this.renderer.domElement);
+    this.headCameraOverlay = document.createElement('div');
+    this.headCameraOverlay.className = 'head-camera-overlay';
+    this.headCameraOverlay.innerHTML = '<b>HEAD CAM · D435</b><small>SIM RGB · FOV 60° (미보정)</small>';
+    this.headCameraOverlay.hidden = true;
+    host.appendChild(this.headCameraOverlay);
     this.camera.up.set(0, 0, 1);
     this.camera.position.set(2.4, -2.8, 1.85);
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
@@ -223,7 +238,11 @@ export class RobotScene {
     const render = () => {
       if (this.destroyed) return;
       if (this.dirty) {
+        const size = this.renderer.getSize(new THREE.Vector2());
+        this.renderer.setScissorTest(false);
+        this.renderer.setViewport(0, 0, size.x, size.y);
         this.renderer.render(this.scene, this.camera);
+        if (this.headCameraAvailable) this.renderHeadCamera(size.x, size.y);
         this.positionLabels();
         this.dirty = false;
       }
@@ -274,6 +293,37 @@ export class RobotScene {
       if (this.referenceState) this.updateReference(this.referenceState);
       if (this.state) this.update(this.state);
     }, undefined, () => callbacks.error('G1 모델을 불러오지 못했습니다. 서버 연결을 확인하세요.'));
+  }
+
+  private headCameraRect(width: number, height: number) {
+    const frameWidth = Math.min(220, Math.max(150, width * .28));
+    const frameHeight = frameWidth * 9 / 16;
+    const right = 18;
+    const top = Math.min(160, Math.max(58, height - frameHeight - 18));
+    return { x: width - frameWidth - right, y: height - frameHeight - top,
+      width: frameWidth, height: frameHeight, right, top };
+  }
+
+  private renderHeadCamera(width: number, height: number) {
+    const rect = this.headCameraRect(width, height);
+    this.headCamera.aspect = rect.width / rect.height;
+    this.headCamera.updateProjectionMatrix();
+    this.headCameraOverlay.style.width = `${rect.width}px`;
+    this.headCameraOverlay.style.height = `${rect.height}px`;
+    this.headCameraOverlay.style.right = `${rect.right}px`;
+    this.headCameraOverlay.style.top = `${rect.top}px`;
+    const hidden = [this.gizmo.getHelper(), ...Object.values(this.markers), ...Object.values(this.gripMarkers),
+      ...Object.values(this.gripPads), this.referenceRoot, ...Object.values(this.collisionProxies)]
+      .filter((value): value is THREE.Object3D => !!value)
+      .map(object => [object, object.visible] as const);
+    hidden.forEach(([object]) => { object.visible = false; });
+    this.renderer.setViewport(rect.x, rect.y, rect.width, rect.height);
+    this.renderer.setScissor(rect.x, rect.y, rect.width, rect.height);
+    this.renderer.setScissorTest(true);
+    this.renderer.render(this.scene, this.headCamera);
+    this.renderer.setScissorTest(false);
+    this.renderer.setViewport(0, 0, width, height);
+    hidden.forEach(([object, visible]) => { object.visible = visible; });
   }
 
   applyHingeDrag() {
@@ -444,6 +494,13 @@ export class RobotScene {
     }
     this.modelMismatchReported = false;
     this.state = state;
+    const headCamera = state.cameras?.head;
+    this.headCameraAvailable = !!headCamera;
+    this.headCameraOverlay.hidden = !headCamera;
+    if (headCamera) {
+      this.headCamera.position.fromArray(headCamera.position);
+      this.headCamera.quaternion.copy(headCameraViewQuaternion(headCamera.quaternion));
+    }
     for (const [id, pose] of Object.entries(state.geoms)) {
       const obj = this.geoms[id];
       if (obj) { obj.position.fromArray(pose.position); obj.quaternion.fromArray(pose.quaternion); }

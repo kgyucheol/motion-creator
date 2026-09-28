@@ -1,10 +1,11 @@
 import numpy as np
+import pytest
 from scipy.spatial.transform import Rotation
 
 from motioncreator.motion import compile_motion, new_project, validate_project
 from motioncreator.policy_preview import _interaction_feedback, build_model
 from motioncreator.ramen_sequence import plan_ramen_sequence
-from motioncreator.robot import Robot
+from motioncreator.robot import FEET, Robot
 
 
 SETTINGS = {
@@ -50,9 +51,13 @@ def _project(monkeypatch, tilt_deg=0.):
 def test_ramen_sequence_uses_taught_tcp_pose_and_compiles_cartesian_path(monkeypatch):
     robot, project, result = _project(monkeypatch)
     assert [frame['interaction']['phase'] for frame in result['keyframes']] == [
-        'default_pose', 'object_align', 'left_insert', 'right_insert', 'load_check',
-        'angle_relax_1', 'lift_1', 'pull_1', 'angle_relax_2', 'lift_2', 'pull_2',
-        'angle_relax_3', 'lift_3', 'pull_3', 'carry_hold',
+        'attention_pose', 'insertion_site_search', 'approach_clearance', 'left_insert', 'right_insert',
+        'bilateral_stabilize', 'vertical_lift', 'extract_angle_1', 'extract_pull_1',
+        'extract_angle_2', 'extract_pull_2', 'extract_angle_3', 'extract_pull_3', 'carry_hold',
+    ]
+    assert list(dict.fromkeys(frame['interaction']['stage_id'] for frame in result['keyframes'])) == [
+        'attention', 'site_search', 'collision_free_approach', 'bilateral_stabilize',
+        'vertical_lift', 'extract', 'carry_hold',
     ]
     assert all(frame['interaction']['object_id'] == 'ramen-bundle' for frame in result['keyframes'])
     np.testing.assert_allclose(result['keyframes'][0]['qpos'], robot.home)
@@ -60,8 +65,12 @@ def test_ramen_sequence_uses_taught_tcp_pose_and_compiles_cartesian_path(monkeyp
     np.testing.assert_allclose(reference['center_world'], project['scene_objects'][0]['position'])
     np.testing.assert_allclose(reference['box_up_world'], [0., 0., 1.], atol=1e-7)
     assert reference['diameter_m'] == .1
-    preinsert = np.asarray(result['keyframes'][1]['interaction']['tcp_targets']['left']['position'])
-    inserted = np.asarray(result['keyframes'][2]['interaction']['tcp_targets']['left']['position'])
+    perception = result['keyframes'][1]['interaction']['perception']
+    assert perception['pose_source'] == 'scene_ground_truth'
+    assert perception['camera']['link'] == 'd435_link'
+    assert perception['camera']['mount_rpy_rad'][1] == pytest.approx(.8307767239493009)
+    preinsert = np.asarray(result['keyframes'][2]['interaction']['tcp_targets']['left']['position'])
+    inserted = np.asarray(result['keyframes'][3]['interaction']['tcp_targets']['left']['position'])
     assert np.dot(preinsert - inserted, reference['box_up_world']) >= reference['diameter_m'] - 1e-7
     validate_project(robot, project)
     motion = compile_motion(robot, project, fps=20)
@@ -93,8 +102,25 @@ def test_tilted_bundle_rotates_vertical_insertion_axis_with_box(monkeypatch):
     reference = result['object_reference']
     expected_up = Rotation.from_euler('x', 20., degrees=True).apply([0., 0., 1.])
     np.testing.assert_allclose(reference['box_up_world'], expected_up, atol=1e-7)
-    before = np.asarray(result['keyframes'][1]['interaction']['tcp_targets']['left']['position'])
-    after = np.asarray(result['keyframes'][2]['interaction']['tcp_targets']['left']['position'])
+    before = np.asarray(result['keyframes'][2]['interaction']['tcp_targets']['left']['position'])
+    after = np.asarray(result['keyframes'][3]['interaction']['tcp_targets']['left']['position'])
     displacement = before - after
     np.testing.assert_allclose(displacement / np.linalg.norm(displacement), expected_up, atol=1e-6)
     assert np.linalg.norm(displacement) >= reference['diameter_m'] - 1e-7
+
+
+def test_saved_attention_pose_is_independent_from_robot_home(monkeypatch):
+    monkeypatch.setenv('MOTIONCREATOR_MODEL', 'g1-tools')
+    robot = Robot()
+    attention = robot.home.copy()
+    attention[robot.model.joint('left_elbow_joint').qposadr[0]] += .08
+    data = robot.data(robot.home)
+    center = np.mean([robot.point(data, f'{side}_hand')[0] for side in ('left', 'right')], axis=0)
+    item = {'id': 'ramen-bundle', 'name': '라면 묶음', 'shape': 'cylinder',
+            'position': center.tolist(), 'quaternion_xyzw': [0., 2 ** -.5, 0., 2 ** -.5],
+            'size': [.1, .1, .2], 'mass_kg': .2, 'friction': .7,
+            'color': '#ffffff', 'opacity': 1., 'visible': True, 'fixed': False}
+    result = plan_ramen_sequence(robot, robot.home, list(FEET), [], item, SETTINGS,
+                                 {'qpos': attention.tolist(), 'pins': list(FEET), 'angle_pins': []})
+    np.testing.assert_allclose(result['keyframes'][0]['qpos'], attention)
+    assert result['keyframes'][0]['name'] == '차렷자세'

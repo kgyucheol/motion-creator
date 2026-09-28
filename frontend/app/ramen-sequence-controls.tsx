@@ -44,6 +44,7 @@ type Props = {
   selectedObjectId: string | null;
   keyframes: Keyframe[];
   disabled: boolean;
+  attentionPoseSaved: boolean;
   onTargetChange: (id: string) => void;
   onGenerate: (objectId: string, settings: RamenSequenceSettings) => void;
   onSelectFrame: (index: number) => void;
@@ -62,13 +63,23 @@ export default function RamenSequenceControls(props: Props) {
   const targetDiameter = targetSize ? Math.max(targetSize[0], targetSize[1]) : 0;
   const sequence = props.keyframes.map((frame, index) => ({ frame, index }))
     .filter(value => value.frame.interaction?.task === 'ramen_extract');
+  const stages = sequence.reduce<Array<{ id: string; label: string; index: number; count: number }>>((result, value) => {
+    const interaction = value.frame.interaction!;
+    const id = interaction.stage_id ?? interaction.phase;
+    const current = result[result.length - 1];
+    if (current?.id === id) current.count += 1;
+    else result.push({ id, label: interaction.stage_label ?? value.frame.name, index: value.index, count: 1 });
+    return result;
+  }, []);
+  const perception = sequence.find(value => value.frame.interaction?.perception)?.frame.interaction?.perception;
   const updateNumber = (key: keyof RamenSequenceSettings, value: number) => {
     if (!Number.isFinite(value)) return;
     setSettings(current => ({ ...current, [key]: value }));
   };
   return <section className="ramen-sequence-controls">
     <div className="panel-heading"><span>라면 꺼내기</span><small>물체 상대 TCP</small></div>
-    <p className="hint">대상 중심·충돌 지름·회전으로 양쪽 파지점과 상자 기울기를 계산합니다. 현재 TCP는 각 도구의 장착 방향을 판별하는 기준으로만 사용하며, 생성 경로는 G1 기본자세에서 시작합니다.</p>
+    <p className="hint">대상 중심·충돌 지름·회전으로 양쪽 삽입점을 계산합니다. 현재는 시뮬레이션 물체 포즈를 사용하며, 같은 입력 자리에 추후 RGB 포즈 추정 결과를 연결할 수 있습니다.</p>
+    <p className="ramen-object-reference">시작 자세 <b>{props.attentionPoseSaved ? '저장된 차렷자세' : '기본 서기 자세 (차렷 미저장)'}</b><br/>헤드 카메라 <b>D435 고정 링크 · roll 0° / pitch 47.6° / yaw 0°</b><br/>URDF에는 RGB 내부 파라미터와 optical frame은 없습니다.</p>
     <div className="inspector-label">대상 라면 묶음</div>
     <select aria-label="라면 꺼내기 대상" value={targetId} disabled={props.disabled || !candidates.length} onChange={event => props.onTargetChange(event.target.value)}>
       {!candidates.length && <option value="">움직일 수 있는 오브젝트 없음</option>}
@@ -93,9 +104,10 @@ export default function RamenSequenceControls(props: Props) {
         <label>토크 사용률 <span><input type="number" min="5" max="80" defaultValue={settings.maximum_feedback_torque_fraction * 100} disabled={props.disabled} onChange={event => updateNumber('maximum_feedback_torque_fraction', +event.target.value / 100)}/> %</span></label>
       </div>
     </details>
-    <button className="wide primary" disabled={props.disabled || !targetId} onClick={() => props.onGenerate(targetId, structuredClone(settings))}><Route size={15}/>현재 TCP로 시퀀스 생성</button>
-    {!sequence.length ? <p className="hint"><Crosshair size={13}/> 기본자세에서 시작해 물체 중심 위 정렬 → 양쪽 수직 삽입 → 접촉 확인 → 각도 완화·소폭 인양·몸쪽 꺼내기 반복 → 운반자세가 생성됩니다. 삽입·인양 거리는 물체 지름 이상으로 자동 보정됩니다.</p> : <>
-      <div className="ramen-sequence-steps">{sequence.map(({ frame, index }, order) => <button key={index} disabled={props.disabled} onClick={() => props.onSelectFrame(index)}><span>{order + 1}</span>{frame.name}</button>)}</div>
+    <button className="wide primary" disabled={props.disabled || !targetId} onClick={() => props.onGenerate(targetId, structuredClone(settings))}><Route size={15}/>물체 위치로 7단계 시퀀스 생성</button>
+    {!sequence.length ? <p className="hint"><Crosshair size={13}/> 차렷자세 → 삽입 위치 탐색 → 양손 무충돌 접근 → 양손 지지 안정화 → 수직 인양 → 상자 밖 인출 → 운반 자세 유지 순서입니다. 접근 단계는 상부 안전점과 좌·우 순차 삽입 세부 경로를 사용합니다.</p> : <>
+      {perception && <p className="ramen-object-reference">탐색 입력 <b>시뮬레이션 ground truth</b><br/>접근 방식 <b>상부 안전점 → 왼 주걱 → 오른 받침 순차 삽입</b></p>}
+      <div className="ramen-sequence-steps">{stages.map((stage, order) => <button key={stage.id} disabled={props.disabled} onClick={() => props.onSelectFrame(stage.index)}><span>{order + 1}</span>{stage.label}{stage.count > 1 ? ` · 세부 ${stage.count}개` : ''}</button>)}</div>
       <button className="wide" disabled={props.disabled} onClick={() => props.onRun(sequence[0].index)}><Play size={15}/>이 시퀀스 물리 실행</button>
       <p className="ramen-safety-note"><ShieldCheck size={14}/> 힘 상한이 10 ms 이상 계속되면 물리 실행을 중단합니다.</p>
     </>}
