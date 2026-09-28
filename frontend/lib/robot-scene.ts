@@ -584,6 +584,18 @@ export class RobotScene {
     });
   }
   private collisionProxy(object: SceneObject) {
+    if (object.collision_shape === 'convex_hull' && object.collision_hull_vertices && object.collision_hull_faces) {
+      const positions = object.collision_hull_vertices.flat();
+      const indices = object.collision_hull_faces.flat();
+      const buffer = new THREE.BufferGeometry();
+      buffer.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      buffer.setIndex(indices); buffer.computeVertexNormals();
+      const geometry = new THREE.Group();
+      geometry.add(new THREE.Mesh(buffer, new THREE.MeshStandardMaterial()));
+      geometry.scale.fromArray(object.size);
+      const root = new THREE.Group(); root.add(geometry);
+      return root;
+    }
     const descriptor = {
       ...object,
       shape: object.collision_shape ?? object.shape,
@@ -700,7 +712,8 @@ export class RobotScene {
       let proxy = this.collisionProxies[object.id];
       const proxyShape = object.collision_shape ?? object.shape;
       const proxySize = object.collision_size ?? object.size;
-      const proxySignature = `${proxyShape}:${proxySize.join(',')}:${(object.collision_quaternion_xyzw ?? [0, 0, 0, 1]).join(',')}`;
+      const proxySignature = JSON.stringify([proxyShape, proxySize, object.collision_quaternion_xyzw,
+        object.collision_hull_vertices, object.collision_hull_faces]);
       if (!proxy || proxy.userData.signature !== proxySignature) {
         if (proxy) { this.scene.remove(proxy); this.disposeSceneObject(proxy); }
         proxy = this.collisionProxy(object);

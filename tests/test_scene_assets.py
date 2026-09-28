@@ -25,6 +25,8 @@ def test_glb_import_is_content_addressed_and_reports_dimensions(tmp_path, monkey
     assert np.allclose(imported["dimensions"], [.72, .55, .4])
     assert np.allclose(imported["axis_transform_xyzw"], [2 ** -.5, 0, 0, 2 ** -.5])
     assert imported["suggestion"]["shape"] == "box"
+    assert imported["suggestion"]["collision_shape"] == "convex_hull"
+    assert len(imported["suggestion"]["collision_hull_vertices"]) == 8
     assert scene_assets.asset_path(imported["asset_id"]).read_bytes() == content
     assert json.loads((tmp_path / imported["asset_id"] / "metadata.json").read_text())["source_name"] == "tray.glb"
 
@@ -124,6 +126,24 @@ def test_separate_inscribed_cylinder_proxy_uses_its_local_axis():
     assert geom.get("type") == "cylinder"
     assert np.fromstring(geom.get("size"), sep=" ") == pytest.approx([.0665, .293])
     assert np.fromstring(geom.get("quat"), sep=" ") == pytest.approx([2 ** -.5, 0., 2 ** -.5, 0.])
+
+
+def test_convex_hull_proxy_compiles_as_a_mujoco_mesh():
+    robot = Robot()
+    project = new_project(robot)
+    project["scene_objects"] = [{
+        "id": "hull", "name": "Hull", "shape": "box", "position": [1.5, 0., .2],
+        "quaternion_xyzw": [0., 0., 0., 1.], "size": [.4, .3, .2], "mass_kg": 1.,
+        "friction": .7, "color": "#ffffff", "opacity": 1., "visible": True,
+        "collision_shape": "convex_hull",
+        "collision_hull_vertices": [[-.5, -.5, -.5], [.5, -.5, -.5], [0., .5, -.5], [0., 0., .5]],
+        "collision_hull_faces": [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]],
+    }]
+    model = build_model(robot, validate_project(robot, project))
+    geom = model.geom("preview_object_geom_0")
+    assert geom.type == mujoco.mjtGeom.mjGEOM_MESH
+    mesh_id = int(np.asarray(geom.dataid).reshape(-1)[0])
+    assert model.mesh(mesh_id).vertnum == 4
 
 
 def test_project_validates_assets_and_rigid_scene_groups():

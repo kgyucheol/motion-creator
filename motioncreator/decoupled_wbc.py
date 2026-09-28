@@ -111,7 +111,7 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
                 ET.SubElement(equality, 'weld', body1='world', body2=f'wbc_object_{index}', solref='.005 1')
             # Scene objects stay out of MuJoCo's broad robot collision mask.
             # Explicit pairs below are the complete contact allow-list.
-            geom_names = append_collision_geoms(body, 'wbc', index, item)
+            geom_names = append_collision_geoms(body, 'wbc', index, item, root)
             object_geoms.append(geom_names)
             for side in ("left", "right"):
                 names = ([g.get('name') for g in root.find(f".//body[@name='{side}_wrist_yaw_link']").iter('geom')

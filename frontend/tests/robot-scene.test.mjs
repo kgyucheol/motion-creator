@@ -157,6 +157,22 @@ test('a ramen visual box can use a separate inscribed cylinder collision proxy',
     .distanceTo(new THREE.Vector3(1, 0, 0)) < 1e-12);
 });
 
+test('a generic imported object displays its normalized convex hull collision', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  const object = { id: 'scan', name: 'Scan', shape: 'box', position: [0, 0, 0],
+    quaternion_xyzw: [0, 0, 0, 1], size: [.4, .3, .2], mass_kg: 1,
+    friction: .7, color: '#ffffff', opacity: 1, visible: true,
+    collision_shape: 'convex_hull',
+    collision_hull_vertices: [[-.5, -.5, -.5], [.5, -.5, -.5], [0, .5, -.5], [0, 0, .5]],
+    collision_hull_faces: [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]] };
+
+  const proxy = viewer.collisionProxy(object);
+  const geometryRoot = proxy.children[0]; const mesh = geometryRoot.children[0];
+  assert.equal(mesh.geometry.type, 'BufferGeometry');
+  assert.equal(mesh.geometry.getAttribute('position').count, 4);
+  assert.ok(geometryRoot.scale.distanceTo(new THREE.Vector3(.4, .3, .2)) < 1e-12);
+});
+
 function fixture() {
   const viewer = Object.create(RobotScene.prototype);
   viewer.state = { handles: { left_hand: { position: [.3, .2, .8] }, right_hand: { position: [.3, -.2, .8] } } };

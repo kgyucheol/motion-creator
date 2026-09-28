@@ -22,6 +22,15 @@ def _quaternion_product_xyzw(first, second) -> np.ndarray:
     ])
 
 
+def _quaternion_matrix_xyzw(value) -> np.ndarray:
+    x, y, z, w = np.asarray(value, dtype=float)
+    return np.array([
+        [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
+        [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+        [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)],
+    ])
+
+
 def grounded_position(item: dict) -> np.ndarray:
     position = np.asarray(item["position"], dtype=float).copy()
     if item.get("placement", {}).get("ground_lock") is False:
@@ -30,7 +39,10 @@ def grounded_position(item: dict) -> np.ndarray:
     size = np.asarray(item.get("collision_size", item["size"]), dtype=float)
     quaternion = _quaternion_product_xyzw(
         item["quaternion_xyzw"], item.get("collision_quaternion_xyzw", [0., 0., 0., 1.]))
-    if shape == "sphere":
+    if shape == "convex_hull":
+        vertices = np.asarray(item["collision_hull_vertices"], dtype=float) * np.asarray(item["size"], dtype=float)
+        extent = float(np.max(np.abs(vertices @ _quaternion_matrix_xyzw(quaternion).T[:, 2])))
+    elif shape == "sphere":
         extent = size[0] / 2
     else:
         x, y, z, w = quaternion
@@ -44,13 +56,29 @@ def grounded_position(item: dict) -> np.ndarray:
     return position
 
 
-def append_collision_geoms(body: ET.Element, prefix: str, index: int, item: dict) -> list[str]:
+def append_collision_geoms(body: ET.Element, prefix: str, index: int, item: dict,
+                           root: ET.Element | None = None) -> list[str]:
     """Append a primitive or five-panel open-box proxy and return geom names."""
     shape = item.get("collision_shape", item["shape"])
     size = np.asarray(item.get("collision_size", item["size"]), dtype=float)
     friction = numbers([item["friction"], .005, .0001])
     common = {"friction": friction, "contype": "0", "conaffinity": "0"}
     base = f"{prefix}_object_geom_{index}"
+    if shape == "convex_hull":
+        if root is None:
+            raise ValueError("Convex-hull collision requires the MuJoCo root element")
+        asset = root.find("asset")
+        if asset is None:
+            asset = ET.SubElement(root, "asset")
+        mesh_name = f"{prefix}_object_hull_{index}"
+        vertices = np.asarray(item["collision_hull_vertices"], dtype=float)
+        faces = np.asarray(item["collision_hull_faces"], dtype=int)
+        ET.SubElement(asset, "mesh", name=mesh_name, vertex=numbers(vertices.ravel()),
+                      face=" ".join(str(int(value)) for value in faces.ravel()),
+                      scale=numbers(item["size"]))
+        ET.SubElement(body, "geom", name=base, type="mesh", mesh=mesh_name,
+                      mass=str(float(item["mass_kg"])), **common)
+        return [base]
     if shape != "open_box":
         mj_size = (size / 2 if shape == "box" else [size[0] / 2]
                    if shape == "sphere" else [size[0] / 2, size[2] / 2])

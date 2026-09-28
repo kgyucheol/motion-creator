@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 
 export type SceneObjectShape = 'box' | 'open_box' | 'sphere' | 'cylinder';
+export type SceneCollisionShape = Exclude<SceneObjectShape, 'open_box'> | 'convex_hull';
 export type ObjectTransformMode = 'translate' | 'rotate' | 'scale';
 export type SceneObjectPlacement = { prevent_overlap: boolean; surface_snap: boolean; ground_lock: boolean };
 
@@ -26,9 +27,11 @@ export type SceneObject = {
   asset_axis_transform_xyzw?: number[];
   asset_part_id?: string;
   asset_node_name?: string;
-  collision_shape?: Exclude<SceneObjectShape, 'open_box'>;
+  collision_shape?: SceneCollisionShape;
   collision_size?: number[];
   collision_quaternion_xyzw?: number[];
+  collision_hull_vertices?: number[][];
+  collision_hull_faces?: number[][];
   wall_thickness_m?: number;
 };
 
@@ -59,9 +62,11 @@ type SceneAssetSuggestion = {
   color: string;
   fixed: boolean;
   wall_thickness_m?: number;
-  collision_shape?: Exclude<SceneObjectShape, 'open_box'>;
+  collision_shape?: SceneCollisionShape;
   collision_size?: number[];
   collision_quaternion_xyzw?: number[];
+  collision_hull_vertices?: number[][];
+  collision_hull_faces?: number[][];
 };
 
 export type SceneAssetImport = {
@@ -260,11 +265,7 @@ export function createImportedSceneObject(asset: SceneAssetImport, index = 1): S
     asset_bounds_min: [...asset.bounds_min],
     asset_bounds_max: [...asset.bounds_max],
     asset_axis_transform_xyzw: [...asset.axis_transform_xyzw],
-    ...(asset.suggestion.collision_shape ? {
-      collision_shape: asset.suggestion.collision_shape,
-      collision_size: [...asset.suggestion.collision_size!],
-      collision_quaternion_xyzw: [...asset.suggestion.collision_quaternion_xyzw!],
-    } : {}),
+    ...sceneAssetCollision(asset.suggestion),
     ...(asset.suggestion.wall_thickness_m ? { wall_thickness_m: asset.suggestion.wall_thickness_m } : {}),
   };
 }
@@ -289,14 +290,24 @@ export function createImportedSceneObjects(asset: SceneAssetImport, startIndex =
       asset_node_name: part.node_name,
       asset_bounds_min: [...part.bounds_min], asset_bounds_max: [...part.bounds_max],
       asset_axis_transform_xyzw: [...asset.axis_transform_xyzw],
-      ...(part.suggestion.collision_shape ? {
-        collision_shape: part.suggestion.collision_shape,
-        collision_size: [...part.suggestion.collision_size!],
-        collision_quaternion_xyzw: [...part.suggestion.collision_quaternion_xyzw!],
-      } : {}),
+      ...sceneAssetCollision(part.suggestion),
       ...(part.suggestion.wall_thickness_m ? { wall_thickness_m: part.suggestion.wall_thickness_m } : {}),
     };
   });
+}
+
+function sceneAssetCollision(suggestion: SceneAssetSuggestion): Partial<SceneObject> {
+  if (!suggestion.collision_shape) return {};
+  return {
+    collision_shape: suggestion.collision_shape,
+    ...(suggestion.collision_size ? { collision_size: [...suggestion.collision_size] } : {}),
+    ...(suggestion.collision_quaternion_xyzw
+      ? { collision_quaternion_xyzw: [...suggestion.collision_quaternion_xyzw] } : {}),
+    ...(suggestion.collision_hull_vertices
+      ? { collision_hull_vertices: suggestion.collision_hull_vertices.map(vertex => [...vertex]) } : {}),
+    ...(suggestion.collision_hull_faces
+      ? { collision_hull_faces: suggestion.collision_hull_faces.map(face => [...face]) } : {}),
+  };
 }
 
 export function createSceneObjectGroup(objects: SceneObject[], memberIds: string[], index = 1): SceneObjectGroup {

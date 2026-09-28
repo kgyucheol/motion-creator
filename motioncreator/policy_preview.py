@@ -115,7 +115,7 @@ def build_model(robot, project=None):
                 if equality is None:
                     equality = ET.SubElement(root, 'equality')
                 ET.SubElement(equality, 'weld', body1='world', body2=f'preview_object_{index}', solref='.005 1')
-            geom_names = append_collision_geoms(body, 'preview', index, item)
+            geom_names = append_collision_geoms(body, 'preview', index, item, root)
             object_geoms.append(geom_names)
             for side in ('left', 'right'):
                 names = ([g.get('name') for g in root.find(f".//body[@name='{side}_wrist_yaw_link']").iter('geom')

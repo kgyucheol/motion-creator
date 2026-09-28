@@ -19,7 +19,7 @@ ASSET_ROOT = ROOT / "assets/imported"
 CONVERTER = ROOT / "scripts/blender/export_motioncreator_asset.py"
 MAX_ASSET_BYTES = 200 * 1024 * 1024
 SUPPORTED_SUFFIXES = {".blend", ".glb"}
-PIPELINE_VERSION = 6
+PIPELINE_VERSION = 7
 IDENTITY_XYZW = [0., 0., 0., 1.]
 Y_UP_TO_Z_UP_XYZW = [2 ** -.5, 0., 0., 2 ** -.5]
 Y_UP_TO_Z_UP = np.array([
@@ -73,18 +73,70 @@ def _inscribed_cylinder(dimensions: list[float]) -> dict:
     }
 
 
-def _import_suggestion(filename: str, dimensions: list[float], properties: dict) -> dict:
+def _convex_hull(mesh: trimesh.Trimesh, transform: np.ndarray | None = None) -> dict:
+    aligned = mesh.copy()
+    if transform is not None:
+        aligned.apply_transform(transform)
+    hull = aligned.convex_hull
+    if len(hull.vertices) > 256:
+        points = np.asarray(hull.vertices)
+        selected = []
+        for axis in range(3):
+            for index in (int(np.argmin(points[:, axis])), int(np.argmax(points[:, axis]))):
+                if index not in selected:
+                    selected.append(index)
+        minimum_distance = np.full(len(points), np.inf)
+        while len(selected) < 256:
+            latest = points[selected[-1]]
+            minimum_distance = np.minimum(minimum_distance, np.sum((points - latest) ** 2, axis=1))
+            minimum_distance[selected] = -1
+            selected.append(int(np.argmax(minimum_distance)))
+        hull = trimesh.convex.convex_hull(points[selected])
+    bounds = np.asarray(aligned.bounds, dtype=float)
+    dimensions = bounds[1] - bounds[0]
+    center = (bounds[0] + bounds[1]) / 2
+    vertices = (np.asarray(hull.vertices, dtype=float) - center) / dimensions
+    return {
+        "collision_shape": "convex_hull",
+        "collision_hull_vertices": vertices.tolist(),
+        "collision_hull_faces": np.asarray(hull.faces, dtype=int).tolist(),
+    }
+
+
+def _import_suggestion(filename: str, dimensions: list[float], properties: dict,
+                       mesh: trimesh.Trimesh | None = None,
+                       transform: np.ndarray | None = None) -> dict:
     suggestion = _suggestion(filename, dimensions, properties)
-    if suggestion["shape"] != "cylinder":
+    if suggestion["shape"] == "open_box":
         return suggestion
-    collision = _inscribed_cylinder(dimensions)
-    if int(np.argmax(dimensions)) == 2:
-        return {**suggestion, **collision}
-    # Keep the authored visual extents, but use a separately oriented
-    # inscribed cylinder for a bundle already lying along X or Y.
-    return {"shape": "box", "fixed": False, "size": dimensions,
-            "mass_kg": suggestion["mass_kg"], "friction": suggestion["friction"],
-            "color": suggestion["color"], **collision}
+    if suggestion["shape"] == "cylinder":
+        collision = _inscribed_cylinder(dimensions)
+        if int(np.argmax(dimensions)) == 2:
+            return {**suggestion, **collision}
+        # Keep the authored visual extents, but use a separately oriented
+        # inscribed cylinder for a bundle already lying along X or Y.
+        return {"shape": "box", "fixed": False, "size": dimensions,
+                "mass_kg": suggestion["mass_kg"], "friction": suggestion["friction"],
+                "color": suggestion["color"], **collision}
+    if mesh is not None:
+        try:
+            return {**suggestion, **_convex_hull(mesh, transform)}
+        except (ValueError, TypeError, RuntimeError):
+            pass
+    return suggestion
+
+
+def _scene_mesh(path: Path) -> trimesh.Trimesh:
+    scene = trimesh.load(path, force="scene")
+    meshes = []
+    for node_name in scene.graph.nodes_geometry:
+        transform, geometry_name = scene.graph[node_name]
+        mesh = scene.geometry[geometry_name].copy()
+        mesh.apply_transform(transform)
+        meshes.append(mesh)
+    if not meshes:
+        raise ValueError("3D model contains no mesh geometry")
+    return trimesh.util.concatenate(meshes)
 
 
 def _asset_parts(folder: Path, source_format: str, properties: dict) -> list[dict]:
@@ -109,7 +161,7 @@ def _asset_parts(folder: Path, source_format: str, properties: dict) -> list[dic
         identifier = _part_id(index, name)
         lower, upper = _mesh_bounds(mesh, axis)
         dimensions = [upper[component] - lower[component] for component in range(3)]
-        suggestion = _import_suggestion(name, dimensions, properties)
+        suggestion = _import_suggestion(name, dimensions, properties, mesh, axis)
         parts.append({
             "part_id": identifier, "node_name": name, "name": name,
             "url": f"/api/scene-assets/{folder.name}.glb",
@@ -125,6 +177,7 @@ def _write_metadata(folder: Path, identifier: str, name: str, source_format: str
     axis_transform = Y_UP_TO_Z_UP_XYZW if direct_glb else IDENTITY_XYZW
     lower, upper = _bounds(glb, Y_UP_TO_Z_UP if direct_glb else None)
     dimensions = [upper[index] - lower[index] for index in range(3)]
+    combined_mesh = _scene_mesh(glb)
     metadata = {
         "pipeline_version": PIPELINE_VERSION,
         "asset_id": identifier,
@@ -138,7 +191,8 @@ def _write_metadata(folder: Path, identifier: str, name: str, source_format: str
         "bounds_min": lower,
         "bounds_max": upper,
         "dimensions": dimensions,
-        "suggestion": _import_suggestion(name, dimensions, properties),
+        "suggestion": _import_suggestion(name, dimensions, properties, combined_mesh,
+                                           Y_UP_TO_Z_UP if direct_glb else None),
     }
     # v4 wrote one lossy GLB per part. Parts now reference nodes in the original
     # texture-preserving GLB, so stale generated files must not be used.
