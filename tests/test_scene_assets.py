@@ -83,6 +83,11 @@ def test_packing_glb_uses_thirteen_authored_nodes_and_preserves_texture(tmp_path
     assert len(imported["parts"]) == 13
     assert sum("Cardboard" in part["node_name"] for part in imported["parts"]) == 1
     assert sum("Ramen_Bundle" in part["node_name"] for part in imported["parts"]) == 12
+    ramen = next(part for part in imported["parts"] if "Ramen_Bundle" in part["node_name"])
+    assert ramen["suggestion"]["shape"] == "box"
+    assert ramen["suggestion"]["collision_shape"] == "cylinder"
+    assert ramen["suggestion"]["collision_size"] == pytest.approx([.1329772547, .1329772547, .5866761208])
+    assert ramen["suggestion"]["collision_quaternion_xyzw"] == pytest.approx([0., 2 ** -.5, 0., 2 ** -.5])
     assert all(part["url"] == imported["url"] for part in imported["parts"])
     assert not (tmp_path / imported["asset_id"] / "parts").exists()
     # The original GLB is served intact; its embedded JPEG and material texture
@@ -105,6 +110,20 @@ def test_open_box_proxy_has_floor_and_four_walls():
     assert len(names) == 5
     assert {name.rsplit("_", 1)[-1] for name in names} == {"bottom", "left", "right", "front", "back"}
     assert sum(float(geom.get("mass")) for geom in body.findall("geom")) == pytest.approx(2.)
+
+
+def test_separate_inscribed_cylinder_proxy_uses_its_local_axis():
+    body = ET.Element("body")
+    append_collision_geoms(body, "preview", 0, {
+        "shape": "box", "size": [.586, .147, .133],
+        "collision_shape": "cylinder", "collision_size": [.133, .133, .586],
+        "collision_quaternion_xyzw": [0., 2 ** -.5, 0., 2 ** -.5],
+        "mass_kg": .5, "friction": .7,
+    })
+    geom = body.find("geom")
+    assert geom.get("type") == "cylinder"
+    assert np.fromstring(geom.get("size"), sep=" ") == pytest.approx([.0665, .293])
+    assert np.fromstring(geom.get("quat"), sep=" ") == pytest.approx([2 ** -.5, 0., 2 ** -.5, 0.])
 
 
 def test_project_validates_assets_and_rigid_scene_groups():

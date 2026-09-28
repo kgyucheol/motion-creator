@@ -141,6 +141,22 @@ test('collision-only mode shows a five-panel open box and hides visual assets', 
   assert.equal(viewer.dirty, true);
 });
 
+test('a ramen visual box can use a separate inscribed cylinder collision proxy', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  const object = { id: 'ramen', name: 'Ramen', shape: 'box', position: [0, 0, 0],
+    quaternion_xyzw: [0, 0, 0, 1], size: [.586, .147, .133], mass_kg: .5,
+    friction: .7, color: '#ffffff', opacity: 1, visible: true,
+    collision_shape: 'cylinder', collision_size: [.133, .133, .586],
+    collision_quaternion_xyzw: [0, Math.SQRT1_2, 0, Math.SQRT1_2] };
+
+  const proxy = viewer.collisionProxy(object);
+  const geometryRoot = proxy.children[0]; const mesh = geometryRoot.children[0];
+  assert.equal(mesh.geometry.type, 'CylinderGeometry');
+  assert.ok(geometryRoot.scale.distanceTo(new THREE.Vector3(.133, .133, .586)) < 1e-12);
+  assert.ok(new THREE.Vector3(0, 0, 1).applyQuaternion(geometryRoot.quaternion)
+    .distanceTo(new THREE.Vector3(1, 0, 0)) < 1e-12);
+});
+
 function fixture() {
   const viewer = Object.create(RobotScene.prototype);
   viewer.state = { handles: { left_hand: { position: [.3, .2, .8] }, right_hand: { position: [.3, -.2, .8] } } };

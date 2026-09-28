@@ -19,7 +19,7 @@ ASSET_ROOT = ROOT / "assets/imported"
 CONVERTER = ROOT / "scripts/blender/export_motioncreator_asset.py"
 MAX_ASSET_BYTES = 200 * 1024 * 1024
 SUPPORTED_SUFFIXES = {".blend", ".glb"}
-PIPELINE_VERSION = 5
+PIPELINE_VERSION = 6
 IDENTITY_XYZW = [0., 0., 0., 1.]
 Y_UP_TO_Z_UP_XYZW = [2 ** -.5, 0., 0., 2 ** -.5]
 Y_UP_TO_Z_UP = np.array([
@@ -56,6 +56,37 @@ def _part_id(index: int, name: str) -> str:
     return f"part-{index + 1:02d}-{slug}"
 
 
+def _inscribed_cylinder(dimensions: list[float]) -> dict:
+    """Build a Z-axis MuJoCo cylinder rotated onto the longest asset axis."""
+    axis = int(np.argmax(dimensions))
+    cross = [dimensions[index] for index in range(3) if index != axis]
+    diameter = float(min(cross))
+    rotations = {
+        0: [0., 2 ** -.5, 0., 2 ** -.5],       # local Z -> X
+        1: [-(2 ** -.5), 0., 0., 2 ** -.5],    # local Z -> Y
+        2: IDENTITY_XYZW,
+    }
+    return {
+        "collision_shape": "cylinder",
+        "collision_size": [diameter, diameter, float(dimensions[axis])],
+        "collision_quaternion_xyzw": rotations[axis],
+    }
+
+
+def _import_suggestion(filename: str, dimensions: list[float], properties: dict) -> dict:
+    suggestion = _suggestion(filename, dimensions, properties)
+    if suggestion["shape"] != "cylinder":
+        return suggestion
+    collision = _inscribed_cylinder(dimensions)
+    if int(np.argmax(dimensions)) == 2:
+        return {**suggestion, **collision}
+    # Keep the authored visual extents, but use a separately oriented
+    # inscribed cylinder for a bundle already lying along X or Y.
+    return {"shape": "box", "fixed": False, "size": dimensions,
+            "mass_kg": suggestion["mass_kg"], "friction": suggestion["friction"],
+            "color": suggestion["color"], **collision}
+
+
 def _asset_parts(folder: Path, source_format: str, properties: dict) -> list[dict]:
     """Describe authored GLB nodes without re-exporting or splitting their meshes.
 
@@ -78,13 +109,7 @@ def _asset_parts(folder: Path, source_format: str, properties: dict) -> list[dic
         identifier = _part_id(index, name)
         lower, upper = _mesh_bounds(mesh, axis)
         dimensions = [upper[component] - lower[component] for component in range(3)]
-        suggestion = _suggestion(name, dimensions, properties)
-        if suggestion['shape'] == 'cylinder' and not np.isclose(dimensions[0], dimensions[1], rtol=.15):
-            # A packed bundle may already be lying along X or Y. Keep its exact
-            # authored extents; a Z-axis cylinder proxy would stretch the mesh.
-            suggestion = {"shape": "box", "fixed": False, "size": dimensions,
-                          "mass_kg": suggestion['mass_kg'], "friction": suggestion['friction'],
-                          "color": suggestion['color']}
+        suggestion = _import_suggestion(name, dimensions, properties)
         parts.append({
             "part_id": identifier, "node_name": name, "name": name,
             "url": f"/api/scene-assets/{folder.name}.glb",
@@ -113,7 +138,7 @@ def _write_metadata(folder: Path, identifier: str, name: str, source_format: str
         "bounds_min": lower,
         "bounds_max": upper,
         "dimensions": dimensions,
-        "suggestion": _suggestion(name, dimensions, properties),
+        "suggestion": _import_suggestion(name, dimensions, properties),
     }
     # v4 wrote one lossy GLB per part. Parts now reference nodes in the original
     # texture-preserving GLB, so stale generated files must not be used.

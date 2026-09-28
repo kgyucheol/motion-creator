@@ -264,6 +264,10 @@ def validate_project(robot: Robot, project):
                 item['asset_bounds_min'] = (part or metadata)['bounds_min']
                 item['asset_bounds_max'] = (part or metadata)['bounds_max']
                 item['asset_axis_transform_xyzw'] = metadata['axis_transform_xyzw']
+                suggestion = (part or metadata).get('suggestion', {})
+                for field in ('collision_shape', 'collision_size', 'collision_quaternion_xyzw'):
+                    if field in suggestion:
+                        item[field] = suggestion[field]
         for field, length in (('position', 3), ('quaternion_xyzw', 4), ('size', 3)):
             value = np.asarray(item.get(field), dtype=float)
             if value.shape != (length,) or not np.isfinite(value).all():
@@ -300,6 +304,20 @@ def validate_project(robot: Robot, project):
             axis_transform = np.asarray(item.get('asset_axis_transform_xyzw', [0., 0., 0., 1.]), dtype=float)
             if axis_transform.shape != (4,) or not np.isfinite(axis_transform).all() or abs(np.linalg.norm(axis_transform) - 1.) > 1e-4:
                 raise ValueError('Scene object asset axis transform must be a normalized xyzw quaternion')
+        collision_shape = item.get('collision_shape')
+        if collision_shape is not None:
+            if collision_shape not in ('box', 'sphere', 'cylinder'):
+                raise ValueError('Scene object collision shape must be box, sphere or cylinder')
+            collision_size = np.asarray(item.get('collision_size'), dtype=float)
+            if collision_size.shape != (3,) or not np.isfinite(collision_size).all() or np.min(collision_size) < .001 or np.max(collision_size) > 5:
+                raise ValueError('Scene object collision size must contain three values between 0.001–5 m')
+            if collision_shape == 'sphere' and not np.allclose(collision_size, collision_size[0], atol=1e-6, rtol=0):
+                raise ValueError('Sphere collision size must use one uniform diameter')
+            if collision_shape == 'cylinder' and abs(collision_size[0] - collision_size[1]) > 1e-6:
+                raise ValueError('Cylinder collision X/Y sizes must use one diameter')
+            collision_quaternion = np.asarray(item.get('collision_quaternion_xyzw', [0., 0., 0., 1.]), dtype=float)
+            if collision_quaternion.shape != (4,) or not np.isfinite(collision_quaternion).all() or abs(np.linalg.norm(collision_quaternion) - 1.) > 1e-4:
+                raise ValueError('Scene object collision quaternion must be normalized (xyzw)')
         mass = float(item.get('mass_kg', 1.))
         friction = float(item.get('friction', .7))
         opacity = float(item.get('opacity', 1.))

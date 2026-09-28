@@ -583,6 +583,19 @@ export class RobotScene {
       });
     });
   }
+  private collisionProxy(object: SceneObject) {
+    const descriptor = {
+      ...object,
+      shape: object.collision_shape ?? object.shape,
+      size: object.collision_size ?? object.size,
+    } as SceneObject;
+    const root = new THREE.Group();
+    const geometry = this.primitiveSceneObject(descriptor);
+    geometry.quaternion.fromArray(object.collision_quaternion_xyzw ?? [0, 0, 0, 1]);
+    geometry.scale.fromArray(normalizedObjectSize(descriptor.shape, descriptor.size));
+    root.add(geometry);
+    return root;
+  }
   private primitiveSceneObject(object: SceneObject) {
     const root = new THREE.Group();
     const material = () => new THREE.MeshStandardMaterial({ roughness: .82, metalness: .04 });
@@ -685,16 +698,19 @@ export class RobotScene {
       mesh.visible = object.visible && !this.collisionProxiesVisible;
       this.styleSceneObject(mesh, object);
       let proxy = this.collisionProxies[object.id];
-      if (!proxy || proxy.userData.shape !== object.shape) {
+      const proxyShape = object.collision_shape ?? object.shape;
+      const proxySize = object.collision_size ?? object.size;
+      const proxySignature = `${proxyShape}:${proxySize.join(',')}:${(object.collision_quaternion_xyzw ?? [0, 0, 0, 1]).join(',')}`;
+      if (!proxy || proxy.userData.signature !== proxySignature) {
         if (proxy) { this.scene.remove(proxy); this.disposeSceneObject(proxy); }
-        proxy = this.primitiveSceneObject(object);
-        proxy.userData.shape = object.shape;
+        proxy = this.collisionProxy(object);
+        proxy.userData.signature = proxySignature;
         this.collisionProxies[object.id] = proxy;
         this.scene.add(proxy);
         this.styleCollisionProxy(proxy, object);
       }
       proxy.userData.objectVisible = object.visible;
-      proxy.position.copy(mesh.position); proxy.quaternion.copy(mesh.quaternion); proxy.scale.copy(mesh.scale);
+      proxy.position.copy(mesh.position); proxy.quaternion.copy(mesh.quaternion); proxy.scale.set(1, 1, 1);
       proxy.visible = object.visible && this.collisionProxiesVisible;
     }
     if (this.selectedSceneObject && !incoming.has(this.selectedSceneObject)) this.selectedSceneObject = null;

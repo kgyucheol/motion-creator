@@ -26,6 +26,9 @@ export type SceneObject = {
   asset_axis_transform_xyzw?: number[];
   asset_part_id?: string;
   asset_node_name?: string;
+  collision_shape?: Exclude<SceneObjectShape, 'open_box'>;
+  collision_size?: number[];
+  collision_quaternion_xyzw?: number[];
   wall_thickness_m?: number;
 };
 
@@ -56,6 +59,9 @@ type SceneAssetSuggestion = {
   color: string;
   fixed: boolean;
   wall_thickness_m?: number;
+  collision_shape?: Exclude<SceneObjectShape, 'open_box'>;
+  collision_size?: number[];
+  collision_quaternion_xyzw?: number[];
 };
 
 export type SceneAssetImport = {
@@ -254,6 +260,11 @@ export function createImportedSceneObject(asset: SceneAssetImport, index = 1): S
     asset_bounds_min: [...asset.bounds_min],
     asset_bounds_max: [...asset.bounds_max],
     asset_axis_transform_xyzw: [...asset.axis_transform_xyzw],
+    ...(asset.suggestion.collision_shape ? {
+      collision_shape: asset.suggestion.collision_shape,
+      collision_size: [...asset.suggestion.collision_size!],
+      collision_quaternion_xyzw: [...asset.suggestion.collision_quaternion_xyzw!],
+    } : {}),
     ...(asset.suggestion.wall_thickness_m ? { wall_thickness_m: asset.suggestion.wall_thickness_m } : {}),
   };
 }
@@ -278,6 +289,11 @@ export function createImportedSceneObjects(asset: SceneAssetImport, startIndex =
       asset_node_name: part.node_name,
       asset_bounds_min: [...part.bounds_min], asset_bounds_max: [...part.bounds_max],
       asset_axis_transform_xyzw: [...asset.axis_transform_xyzw],
+      ...(part.suggestion.collision_shape ? {
+        collision_shape: part.suggestion.collision_shape,
+        collision_size: [...part.suggestion.collision_size!],
+        collision_quaternion_xyzw: [...part.suggestion.collision_quaternion_xyzw!],
+      } : {}),
       ...(part.suggestion.wall_thickness_m ? { wall_thickness_m: part.suggestion.wall_thickness_m } : {}),
     };
   });
