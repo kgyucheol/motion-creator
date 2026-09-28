@@ -59,6 +59,20 @@ export type ScenePlacementOptions = { preventOverlap: boolean; surfaceSnap: bool
 
 const DEFAULT_PLACEMENT: SceneObjectPlacement = { prevent_overlap: true, surface_snap: false, ground_lock: true };
 
+export function normalizedSceneAsset(template: THREE.Object3D, boundsMin: number[], boundsMax: number[]) {
+  const minimum = new THREE.Vector3().fromArray(boundsMin);
+  const maximum = new THREE.Vector3().fromArray(boundsMax);
+  const dimensions = maximum.clone().sub(minimum);
+  const center = minimum.add(maximum).multiplyScalar(.5);
+  const normalized = new THREE.Group();
+  normalized.scale.set(1 / dimensions.x, 1 / dimensions.y, 1 / dimensions.z);
+  const centered = new THREE.Group();
+  centered.position.copy(center).multiplyScalar(-1);
+  centered.add(template);
+  normalized.add(centered);
+  return normalized;
+}
+
 export function scenePlacementOptions(object?: SceneObject): ScenePlacementOptions {
   const placement = object?.placement ?? DEFAULT_PLACEMENT;
   return {

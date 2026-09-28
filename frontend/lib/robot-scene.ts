@@ -4,7 +4,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { controlKey, controlSelection } from './body-groups.ts';
 import { canMirrorSelection } from './pose-transforms.ts';
-import { normalizedObjectSize, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
+import { normalizedObjectSize, normalizedSceneAsset, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
 
 export type PoseState = {
   model_id?: string;
@@ -609,13 +609,9 @@ export class RobotScene {
         node.geometry = node.geometry.clone();
         node.material = Array.isArray(node.material) ? node.material.map(material => material.clone()) : node.material.clone();
       });
-      const minimum = new THREE.Vector3().fromArray(object.asset_bounds_min!);
-      const maximum = new THREE.Vector3().fromArray(object.asset_bounds_max!);
-      const dimensions = maximum.clone().sub(minimum);
-      clone.position.copy(minimum.clone().add(maximum).multiplyScalar(-.5));
-      clone.scale.set(1 / dimensions.x, 1 / dimensions.y, 1 / dimensions.z);
+      const normalized = normalizedSceneAsset(clone, object.asset_bounds_min!, object.asset_bounds_max!);
       this.disposeSceneObject(root);
-      root.clear(); root.add(clone);
+      root.clear(); root.add(normalized);
       this.styleSceneObject(root, object);
       this.dirty = true;
     }).catch(() => this.callbacks.error(`3D 모델(${object.name})을 불러오지 못했습니다.`));

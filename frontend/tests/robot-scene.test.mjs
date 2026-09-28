@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap, transformSceneObjectGroup } from '../lib/scene-objects.ts';
+import { createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
@@ -69,6 +69,16 @@ test('scene group rotation keeps child spacing and rotates each child orientatio
   assert.ok(new THREE.Vector3(...transformed[0].position).distanceTo(new THREE.Vector3(0, 2, .5)) < 1e-10);
   assert.ok(new THREE.Vector3(...transformed[1].position).distanceTo(new THREE.Vector3(0, 0, .5)) < 1e-10);
   assert.ok(Math.abs(eulerDegrees(transformed[0].quaternion_xyzw)[2] - 90) < 1e-10);
+});
+
+test('imported scene assets are centered even when their source origin is far away', () => {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(2, 4, 6));
+  mesh.position.set(101, -48, 23);
+  const normalized = normalizedSceneAsset(mesh, [100, -50, 20], [102, -46, 26]);
+  normalized.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(normalized);
+  assert.ok(bounds.min.distanceTo(new THREE.Vector3(-.5, -.5, -.5)) < 1e-10);
+  assert.ok(bounds.max.distanceTo(new THREE.Vector3(.5, .5, .5)) < 1e-10);
 });
 
 function fixture() {
