@@ -26,6 +26,13 @@ centers are evenly distributed within the 55 cm internal length with slight
 overlap. Three layer-axis diameters total about 39.9 cm and fit the 40 cm internal
 height. Collision response is intentionally not configured in this first layout.
 
+Each working file also has a self-contained GLB export for direct use by the
+motion-validation project:
+
+- `ramen_container_scan.glb`
+- `cardboard_box_72x55x40cm.glb`
+- `ramen_box_packing_4x3.glb`
+
 The raw scan folder and generated `.blend`/report files are intentionally ignored
 by Git. Only this note and the reproducible preparation script are tracked.
 
@@ -45,6 +52,14 @@ blender --background --python scripts/blender/build_ramen_packaging_assets.py --
   --box-output assets/ramen_scan/cardboard_box_72x55x40cm.blend \
   --packing-output assets/ramen_scan/ramen_box_packing_4x3.blend \
   --report assets/ramen_scan/ramen_packaging_assets_report.json
+```
+
+```bash
+blender --background --python scripts/blender/export_blend_assets_glb.py -- \
+  --asset assets/ramen_scan/ramen_container_scan.blend assets/ramen_scan/ramen_container_scan.glb \
+  --asset assets/ramen_scan/cardboard_box_72x55x40cm.blend assets/ramen_scan/cardboard_box_72x55x40cm.glb \
+  --asset assets/ramen_scan/ramen_box_packing_4x3.blend assets/ramen_scan/ramen_box_packing_4x3.glb \
+  --report assets/ramen_scan/glb_export_report.json
 ```
 
 The raw scan, generated Blender files, reports, and previews are local assets and

@@ -20,5 +20,6 @@ assets/g1/robot-g1-tools.glb
 # Local photogrammetry inputs and generated Blender working files.
 /assets/ramen_scan/source/
 /assets/ramen_scan/*.blend*
+/assets/ramen_scan/*.glb
 /assets/ramen_scan/*.png
 /assets/ramen_scan/*.json
