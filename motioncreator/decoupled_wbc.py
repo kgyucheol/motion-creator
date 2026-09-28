@@ -351,8 +351,15 @@ class DecoupledSimulation:
         self.data = mujoco.MjData(self.model)
         self.object_bodies = {item["id"]: self.model.body(f"wbc_object_{index}").id
                               for index, item in enumerate(self.scene_objects)}
-        self.object_geoms = {item["id"]: self.model.geom(f"wbc_object_geom_{index}").id
-                             for index, item in enumerate(self.scene_objects)}
+        # A primitive usually owns one collision geom, while an open box owns
+        # five (floor + four walls). Resolve geoms from the object's body instead
+        # of assuming the single-geom name exists.
+        self.object_geoms = {}
+        for item in self.scene_objects:
+            body = self.object_bodies[item["id"]]
+            first = int(self.model.body_geomadr[body])
+            count = int(self.model.body_geomnum[body])
+            self.object_geoms[item["id"]] = set(range(first, first + count))
         self.hand_geoms = {
             side: {self.model.geom(f"{side}_physical_hand_{index}").id for index in range(6)}
             for side in ("left", "right")
@@ -417,12 +424,12 @@ class DecoupledSimulation:
     def _grasp_contact_forces(self) -> dict[str, float]:
         if not self.grasp_control:
             return {}
-        target = self.object_geoms[self.grasp_control["object_id"]]
+        targets = self.object_geoms[self.grasp_control["object_id"]]
         forces = {side: 0. for side in ("left", "right")}
         for index in range(self.data.ncon):
             contact = self.data.contact[index]
             pair = {contact.geom1, contact.geom2}
-            if target not in pair:
+            if not pair & targets:
                 continue
             wrench = np.zeros(6)
             mujoco.mj_contactForce(self.model, self.data, index, wrench)

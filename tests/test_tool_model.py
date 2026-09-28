@@ -5,7 +5,7 @@ import pytest
 from motioncreator.robot import Robot
 from motioncreator.motion import new_project, validate_project
 from motioncreator.policy_preview import build_model, simulate
-from motioncreator.decoupled_wbc import build_environment_model
+from motioncreator.decoupled_wbc import DecoupledSimulation, build_environment_model, verify_assets
 
 
 def test_tool_urdf_joint_mapping_and_tcp_ik(monkeypatch):
@@ -72,3 +72,25 @@ def test_tool_collision_and_fixed_carton_physics(monkeypatch, backend):
     assert data.xpos[bundle, 2] == pytest.approx(.46, abs=.01)
     # Both tools participate in object contact, including the scoop convex pieces.
     assert model.npair > 100
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_tool_wbc_session_accepts_open_box_multi_geom_object(monkeypatch):
+    monkeypatch.setenv('MOTIONCREATOR_MODEL', 'g1-tools')
+    robot = Robot()
+    project = new_project(robot)
+    project['keyframes'][0]['duration'] = .1
+    project['scene_objects'] = [{
+        'id': 'carton', 'name': 'Carton', 'shape': 'open_box',
+        'position': [1.5, 0, .2], 'quaternion_xyzw': [0, 0, 0, 1],
+        'size': [.72, .55, .4], 'wall_thickness_m': .02,
+        'mass_kg': 2., 'friction': .7, 'color': '#9b6b3c',
+        'opacity': 1., 'visible': True, 'fixed': True,
+    }]
+
+    simulation = DecoupledSimulation(robot, project, autostart=False)
+    try:
+        assert len(simulation.object_geoms['carton']) == 5
+        assert simulation.snapshot()['state']['model_id'] == 'g1-tools'
+    finally:
+        simulation.close()
