@@ -35,11 +35,13 @@ def test_gripper_fingerprint_is_stable_and_pd_physics_runs(monkeypatch):
     project['keyframes'][0]['duration'] = .1
     worker_robot = Robot()
     assert worker_robot.fingerprint == editor_robot.fingerprint
-    assert len(editor_robot.compatible_fingerprints) == 2
+    assert len(editor_robot.compatible_fingerprints) == 3
     legacy_project = new_project(editor_robot)
     legacy_project['model_sha256'] = next(value for value in editor_robot.compatible_fingerprints
-                                          if value != editor_robot.fingerprint)
+                                          if value not in (editor_robot.fingerprint, Robot('g1').fingerprint))
     assert validate_project(worker_robot, legacy_project)['model_sha256'] == worker_robot.fingerprint
+    base_project = new_project(Robot('g1'))
+    assert validate_project(worker_robot, base_project)['model_sha256'] == worker_robot.fingerprint
     result = simulate(project, controller='pd')
     assert result['physics'] is True
     assert result['controller'] == 'pd'

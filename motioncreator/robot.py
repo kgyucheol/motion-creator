@@ -139,6 +139,10 @@ class Robot:
         self.fingerprint = hashlib.sha256(fingerprint_source).hexdigest()
         self.compatible_fingerprints = {self.fingerprint}
         if self.model_id == 'g1-tools':
+            # The gripper model changes only fixed end-effector links. Its 29
+            # actuated joints, order and qpos layout are identical to base G1,
+            # so authored base-model motion references are directly portable.
+            self.compatible_fingerprints.add(hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest())
             # Projects created by the first gripper-model load in older builds
             # may contain MuJoCo's inferred STL content_type attributes.
             legacy_xml = copy.deepcopy(fingerprint_xml)
