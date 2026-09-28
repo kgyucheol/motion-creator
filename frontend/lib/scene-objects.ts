@@ -24,6 +24,7 @@ export type SceneObject = {
   asset_bounds_min?: number[];
   asset_bounds_max?: number[];
   asset_axis_transform_xyzw?: number[];
+  asset_part_id?: string;
   wall_thickness_m?: number;
 };
 
@@ -33,6 +34,26 @@ export type SceneObjectGroup = {
   member_ids: string[];
   position: number[];
   quaternion_xyzw: number[];
+};
+
+export type SceneAssetPart = {
+  part_id: string;
+  name: string;
+  url: string;
+  bounds_min: number[];
+  bounds_max: number[];
+  dimensions: number[];
+  suggestion: SceneAssetSuggestion;
+};
+
+type SceneAssetSuggestion = {
+  shape: SceneObjectShape;
+  size: number[];
+  mass_kg: number;
+  friction: number;
+  color: string;
+  fixed: boolean;
+  wall_thickness_m?: number;
 };
 
 export type SceneAssetImport = {
@@ -45,15 +66,8 @@ export type SceneAssetImport = {
   bounds_max: number[];
   dimensions: number[];
   axis_transform_xyzw: number[];
-  suggestion: {
-    shape: SceneObjectShape;
-    size: number[];
-    mass_kg: number;
-    friction: number;
-    color: string;
-    fixed: boolean;
-    wall_thickness_m?: number;
-  };
+  suggestion: SceneAssetSuggestion;
+  parts?: SceneAssetPart[];
 };
 
 export type SceneObjectPose = { position: number[]; quaternion_xyzw: number[] };
@@ -240,6 +254,30 @@ export function createImportedSceneObject(asset: SceneAssetImport, index = 1): S
     asset_axis_transform_xyzw: [...asset.axis_transform_xyzw],
     ...(asset.suggestion.wall_thickness_m ? { wall_thickness_m: asset.suggestion.wall_thickness_m } : {}),
   };
+}
+
+export function createImportedSceneObjects(asset: SceneAssetImport, startIndex = 1): SceneObject[] {
+  if (!asset.parts?.length) return [createImportedSceneObject(asset, startIndex)];
+  const origin = [.4, 0, -asset.bounds_min[2]];
+  const stamp = Date.now().toString(36);
+  return asset.parts.map((part, offset) => {
+    const size = normalizedObjectSize(part.suggestion.shape, part.suggestion.size ?? part.dimensions);
+    const center = part.bounds_min.map((value, axis) => (value + part.bounds_max[axis]) / 2);
+    return {
+      id: `asset-${asset.asset_id}-${stamp}-${startIndex + offset}`,
+      name: part.name,
+      shape: part.suggestion.shape,
+      position: center.map((value, axis) => value + origin[axis]),
+      quaternion_xyzw: [0, 0, 0, 1], size,
+      mass_kg: part.suggestion.mass_kg, friction: part.suggestion.friction,
+      color: part.suggestion.color, opacity: 1, visible: true, fixed: part.suggestion.fixed,
+      placement: { prevent_overlap: false, surface_snap: false, ground_lock: false },
+      asset_id: asset.asset_id, asset_part_id: part.part_id,
+      asset_bounds_min: [...part.bounds_min], asset_bounds_max: [...part.bounds_max],
+      asset_axis_transform_xyzw: [...asset.axis_transform_xyzw],
+      ...(part.suggestion.wall_thickness_m ? { wall_thickness_m: part.suggestion.wall_thickness_m } : {}),
+    };
+  });
 }
 
 export function createSceneObjectGroup(objects: SceneObject[], memberIds: string[], index = 1): SceneObjectGroup {

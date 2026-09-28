@@ -8,7 +8,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
-import { createImportedSceneObject, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
@@ -361,12 +361,19 @@ export default function Editor() {
       throw new Error(typeof failure.detail === 'string' ? failure.detail : `3D 모델 가져오기 실패 (${response.status})`);
     }
     const imported = await response.json() as SceneAssetImport;
+    const created = createImportedSceneObjects(imported, current.current.objects.length + 1);
+    if (current.current.objects.length + created.length > 32) throw new Error(`이 파일은 ${created.length}개 오브젝트를 포함합니다. 장면의 최대 32개 제한을 초과합니다.`);
     checkpoint();
-    const created = createImportedSceneObject(imported, current.current.objects.length + 1);
-    const placed = placeSceneObject(created, current.current.objects, scenePlacementOptions(created));
-    commitObjects([...current.current.objects, placed]);
-    selectObject(placed.id);
-    setMessage(`${source.name}을(를) 장면 모델로 가져왔습니다. ${extension === '.blend' ? '편집용 BLEND를 런타임 GLB로 변환했습니다.' : 'GLB를 그대로 등록했습니다.'}`);
+    if (created.length === 1) {
+      const placed = placeSceneObject(created[0], current.current.objects, scenePlacementOptions(created[0]));
+      commitObjects([...current.current.objects, placed]); selectObject(placed.id);
+    } else {
+      commitObjects([...current.current.objects, ...created], false);
+      const group = { ...createSceneObjectGroup(created, created.map(object => object.id), current.current.objectGroups.length + 1), name: imported.name };
+      commitObjectGroups([...current.current.objectGroups, group]);
+      setSelectedObjectGroupId(null); selectObject(created[0].id);
+    }
+    setMessage(`${source.name}에서 ${created.length}개 장면 오브젝트를 가져왔습니다. ${extension === '.blend' ? '편집용 BLEND를 런타임 GLB로 변환했습니다.' : 'GLB 좌표축을 URDF 기준으로 변환했습니다.'}`);
   }
   function createObjectGroup(memberIds: string[], name: string) {
     const available = memberIds.filter(id => current.current.objects.some(object => object.id === id)
@@ -564,6 +571,7 @@ export default function Editor() {
           jointAngle: (key, angle) => actions.current.jointAngle(key, angle),
           history: redo => actions.current.history(redo),
           selectObject,
+          deleteObject: removeObject,
           objectTransformBegin: () => { objectDragCheckpointed.current = false; },
           transformObject: (id, patch) => {
             if (!objectDragCheckpointed.current) { checkpoint(); objectDragCheckpointed.current = true; }

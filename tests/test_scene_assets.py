@@ -53,6 +53,29 @@ def test_asset_import_rejects_invalid_input(tmp_path, monkeypatch, filename, con
         scene_assets.import_scene_asset(content, filename)
 
 
+def test_joined_cardboard_glb_is_split_into_five_editable_panels(tmp_path, monkeypatch):
+    monkeypatch.setattr(scene_assets, "ASSET_ROOT", tmp_path)
+    panels = []
+    for extents, translation in [
+        ([.76, .02, .59], [0, .01, 0]),
+        ([.02, .4, .55], [-.37, .2, 0]), ([.02, .4, .55], [.37, .2, 0]),
+        ([.76, .4, .02], [0, .2, -.285]), ([.76, .4, .02], [0, .2, .285]),
+    ]:
+        panel = trimesh.creation.box(extents=extents)
+        panel.apply_translation(translation)
+        panels.append(panel)
+    joined = trimesh.util.concatenate(panels)
+    content = trimesh.exchange.gltf.export_glb(trimesh.Scene(joined))
+
+    imported = scene_assets.import_scene_asset(content, "cardboard_box_72x55x40cm.glb")
+    assert len(imported["parts"]) == 5
+    assert all(part["suggestion"]["shape"] == "box" for part in imported["parts"])
+    assert all(part["suggestion"]["fixed"] for part in imported["parts"])
+    assert sum(part["suggestion"]["mass_kg"] for part in imported["parts"]) == pytest.approx(2.)
+    assert all(scene_assets.asset_part_path(imported["asset_id"], part["part_id"]).is_file()
+               for part in imported["parts"])
+
+
 def test_open_box_proxy_has_floor_and_four_walls():
     body = ET.Element("body")
     names = append_collision_geoms(body, "preview", 0, {

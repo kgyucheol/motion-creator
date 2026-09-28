@@ -241,6 +241,10 @@ def validate_project(robot: Robot, project):
             except FileNotFoundError:
                 metadata = None
             if metadata is not None:
+                part_id = item.get('asset_part_id')
+                part = next((value for value in metadata.get('parts', []) if value['part_id'] == part_id), None)
+                if part_id is not None and part is None:
+                    raise ValueError('Scene object asset part does not exist')
                 if 'asset_axis_transform_xyzw' not in item and metadata['source_format'] == 'glb':
                     old_size = np.asarray(item.get('size'), dtype=float)
                     old_lower = np.asarray(item.get('asset_bounds_min'), dtype=float)
@@ -255,8 +259,8 @@ def validate_project(robot: Robot, project):
                             height_scale = old_size[2] / old_dimensions[2]
                             diameter = max(new_dimensions[0], new_dimensions[1]) * radial_scale
                             item['size'] = [diameter, diameter, new_dimensions[2] * height_scale]
-                item['asset_bounds_min'] = metadata['bounds_min']
-                item['asset_bounds_max'] = metadata['bounds_max']
+                item['asset_bounds_min'] = (part or metadata)['bounds_min']
+                item['asset_bounds_max'] = (part or metadata)['bounds_max']
                 item['asset_axis_transform_xyzw'] = metadata['axis_transform_xyzw']
         for field, length in (('position', 3), ('quaternion_xyzw', 4), ('size', 3)):
             value = np.asarray(item.get(field), dtype=float)
@@ -279,6 +283,9 @@ def validate_project(robot: Robot, project):
             if not np.isfinite(thickness) or not .001 <= thickness < min(size) / 3:
                 raise ValueError('Open-box wall thickness must fit inside its dimensions')
         if asset_id is not None:
+            part_id = item.get('asset_part_id')
+            if part_id is not None and (not isinstance(part_id, str) or not re.fullmatch(r'part-[0-9]{2}-[a-z0-9-]{1,32}', part_id)):
+                raise ValueError('Scene object asset part ID is invalid')
             for field in ('asset_bounds_min', 'asset_bounds_max'):
                 value = np.asarray(item.get(field), dtype=float)
                 if value.shape != (3,) or not np.isfinite(value).all():

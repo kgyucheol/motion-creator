@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap, transformSceneObjectGroup } from '../lib/scene-objects.ts';
+import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
@@ -91,6 +91,35 @@ test('standard Y-up glTF assets are converted to the editor Z-up frame before sc
   assert.ok(bounds.min.distanceTo(new THREE.Vector3(-.5, -.5, -.5)) < 1e-10);
   assert.ok(bounds.max.distanceTo(new THREE.Vector3(.5, .5, .5)) < 1e-10);
   assert.ok(sourceTop.getWorldPosition(new THREE.Vector3()).distanceTo(new THREE.Vector3(0, 0, .5)) < 1e-10);
+});
+
+test('a multi-part GLB becomes independently positioned scene objects', () => {
+  const suggestion = { shape: 'box', size: [1, 1, .1], mass_kg: .4, friction: .7, color: '#ffffff', fixed: true };
+  const objects = createImportedSceneObjects({ asset_id: '0123456789abcdef01234567', name: 'Carton', source_name: 'carton.glb', source_format: 'glb', url: '',
+    bounds_min: [-.5, -.5, 0], bounds_max: [.5, .5, 1], dimensions: [1, 1, 1], axis_transform_xyzw: [Math.SQRT1_2, 0, 0, Math.SQRT1_2], suggestion,
+    parts: [
+      { part_id: 'part-01-floor', name: 'Floor', url: '', bounds_min: [-.5, -.5, 0], bounds_max: [.5, .5, .1], dimensions: [1, 1, .1], suggestion },
+      { part_id: 'part-02-wall', name: 'Wall', url: '', bounds_min: [-.5, -.5, .1], bounds_max: [-.4, .5, 1], dimensions: [.1, 1, .9], suggestion: { ...suggestion, size: [.1, 1, .9] } },
+    ] }, 3);
+  assert.equal(objects.length, 2);
+  assert.equal(objects[0].asset_part_id, 'part-01-floor');
+  assert.ok(new THREE.Vector3(...objects[0].position).distanceTo(new THREE.Vector3(.4, 0, .05)) < 1e-12);
+  assert.ok(new THREE.Vector3(...objects[1].position).distanceTo(new THREE.Vector3(-.05, 0, .55)) < 1e-12);
+  assert.ok(objects.every(object => object.placement?.ground_lock === false));
+});
+
+test('Delete removes a selected scene object but does not target robot controls', () => {
+  const viewer = fixture();
+  let deleted = null; let prevented = false;
+  viewer.keyboardEnabled = true; viewer.selectedSceneObject = 'carton-wall';
+  viewer.callbacks = { deleteObject: id => { deleted = id; } };
+  viewer.handleKeyDown({ code: 'Delete', repeat: false, isComposing: false, altKey: false, ctrlKey: false, metaKey: false,
+    target: null, preventDefault: () => { prevented = true; } });
+  assert.equal(deleted, 'carton-wall'); assert.equal(prevented, true);
+  deleted = null; viewer.selectedSceneObject = null;
+  viewer.handleKeyDown({ code: 'Delete', repeat: false, isComposing: false, altKey: false, ctrlKey: false, metaKey: false,
+    target: null, preventDefault() {} });
+  assert.equal(deleted, null);
 });
 
 function fixture() {

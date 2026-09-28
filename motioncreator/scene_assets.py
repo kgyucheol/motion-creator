@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import time
@@ -18,7 +19,7 @@ ASSET_ROOT = ROOT / "assets/imported"
 CONVERTER = ROOT / "scripts/blender/export_motioncreator_asset.py"
 MAX_ASSET_BYTES = 200 * 1024 * 1024
 SUPPORTED_SUFFIXES = {".blend", ".glb"}
-PIPELINE_VERSION = 2
+PIPELINE_VERSION = 4
 IDENTITY_XYZW = [0., 0., 0., 1.]
 Y_UP_TO_Z_UP_XYZW = [2 ** -.5, 0., 0., 2 ** -.5]
 Y_UP_TO_Z_UP = np.array([
@@ -42,6 +43,71 @@ def _bounds(path: Path, transform: np.ndarray | None = None) -> tuple[list[float
     return bounds[0].tolist(), bounds[1].tolist()
 
 
+def _mesh_bounds(mesh: trimesh.Trimesh, transform: np.ndarray | None = None) -> tuple[list[float], list[float]]:
+    aligned = mesh.copy()
+    if transform is not None:
+        aligned.apply_transform(transform)
+    bounds = np.asarray(aligned.bounds, dtype=float)
+    return bounds[0].tolist(), bounds[1].tolist()
+
+
+def _part_id(index: int, name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", name.casefold()).strip("-")[:32] or "mesh"
+    return f"part-{index + 1:02d}-{slug}"
+
+
+def _asset_parts(folder: Path, filename: str, source_format: str, properties: dict) -> list[dict]:
+    """Export each GLB node, and known joined carton panels, as editable objects."""
+    scene = trimesh.load(folder / "model.glb", force="scene")
+    axis = Y_UP_TO_Z_UP if source_format == "glb" else None
+    candidates: list[tuple[str, trimesh.Trimesh, bool]] = []
+    for node_name in scene.graph.nodes_geometry:
+        transform, geometry_name = scene.graph[node_name]
+        mesh = scene.geometry[geometry_name].copy()
+        mesh.apply_transform(transform)
+        lowered = f"{filename} {node_name}".casefold()
+        pieces = [mesh]
+        split_carton = "cardboard_box" in lowered
+        if split_carton:
+            merged = mesh.copy()
+            merged.merge_vertices()
+            components = trimesh.graph.connected_components(
+                merged.face_adjacency, nodes=np.arange(len(merged.faces)), min_len=1, engine="scipy")
+            if 2 <= len(components) <= 16 and all(len(component) >= 4 for component in components):
+                pieces = [merged.submesh([component], repair=False)[0] for component in components]
+        for piece_index, piece in enumerate(pieces):
+            label = str(node_name) if len(pieces) == 1 else f"{node_name} {piece_index + 1}"
+            candidates.append((label, piece, split_carton))
+    if len(candidates) <= 1:
+        return []
+    parts = []
+    parts_folder = folder / "parts"
+    parts_folder.mkdir(parents=True, exist_ok=True)
+    for index, (name, mesh, carton_panel) in enumerate(candidates):
+        identifier = _part_id(index, name)
+        path = parts_folder / f"{identifier}.glb"
+        path.write_bytes(trimesh.exchange.gltf.export_glb(trimesh.Scene(mesh)))
+        lower, upper = _mesh_bounds(mesh, axis)
+        dimensions = [upper[component] - lower[component] for component in range(3)]
+        suggestion = _suggestion(name, dimensions, properties)
+        if suggestion['shape'] == 'cylinder' and not np.isclose(dimensions[0], dimensions[1], rtol=.15):
+            # A packed bundle may already be lying along X or Y. Keep its exact
+            # authored extents; a Z-axis cylinder proxy would stretch the mesh.
+            suggestion = {"shape": "box", "fixed": False, "size": dimensions,
+                          "mass_kg": suggestion['mass_kg'], "friction": suggestion['friction'],
+                          "color": suggestion['color']}
+        if carton_panel:
+            suggestion = {"shape": "box", "fixed": True, "size": dimensions,
+                          "mass_kg": .4, "friction": .7, "color": "#9b6b3c"}
+        parts.append({
+            "part_id": identifier, "name": name,
+            "url": f"/api/scene-assets/{folder.name}/parts/{identifier}.glb",
+            "bounds_min": lower, "bounds_max": upper, "dimensions": dimensions,
+            "suggestion": suggestion,
+        })
+    return parts
+
+
 def _write_metadata(folder: Path, identifier: str, name: str, source_format: str, properties: dict) -> dict:
     glb = folder / "model.glb"
     direct_glb = source_format == "glb"
@@ -63,6 +129,9 @@ def _write_metadata(folder: Path, identifier: str, name: str, source_format: str
         "dimensions": dimensions,
         "suggestion": _suggestion(name, dimensions, properties),
     }
+    parts = _asset_parts(folder, name, source_format, properties)
+    if parts:
+        metadata["parts"] = parts
     (folder / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return metadata
 
@@ -170,4 +239,14 @@ def asset_path(identifier: str) -> Path:
     path = ASSET_ROOT / identifier / "model.glb"
     if not path.is_file():
         raise FileNotFoundError(identifier)
+    return path
+
+
+def asset_part_path(identifier: str, part_id: str) -> Path:
+    _validate_identifier(identifier)
+    if not re.fullmatch(r"part-[0-9]{2}-[a-z0-9-]{1,32}", part_id):
+        raise ValueError("Invalid scene asset part identifier")
+    path = ASSET_ROOT / identifier / "parts" / f"{part_id}.glb"
+    if not path.is_file():
+        raise FileNotFoundError(part_id)
     return path

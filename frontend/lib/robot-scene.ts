@@ -53,6 +53,7 @@ type Callbacks = {
   error: (message: string) => void;
   history?: (redo: boolean) => void;
   selectObject?: (id: string | null) => void;
+  deleteObject?: (id: string) => void;
   transformObject?: (id: string, patch: Partial<SceneObject>) => void;
   objectTransformBegin?: () => void;
   objectTransformEnd?: () => void;
@@ -364,6 +365,10 @@ export class RobotScene {
     if (key === 'KeyF' || key === 'f') {
       event.preventDefault();
       this.focusSelection();
+    } else if (this.editable && this.selectedSceneObject && !this.sceneObjects?.[this.selectedSceneObject]?.userData.graspGhost
+        && ['Delete', 'Backspace'].includes(key)) {
+      event.preventDefault();
+      this.callbacks.deleteObject?.(this.selectedSceneObject);
     } else if (this.editable && this.selectedSceneObject && ['KeyW', 'KeyE', 'KeyR', 'w', 'e', 'r'].includes(key)) {
       event.preventDefault();
       this.callbacks.objectTransformMode?.(key === 'KeyW' || key === 'w' ? 'translate' : key === 'KeyE' || key === 'e' ? 'rotate' : 'scale');
@@ -587,21 +592,25 @@ export class RobotScene {
     }
     return root;
   }
-  private loadSceneAsset(assetId: string) {
-    let pending = this.sceneAssetLoads.get(assetId);
+  private loadSceneAsset(assetId: string, partId?: string) {
+    const cacheKey = partId ? `${assetId}/${partId}` : assetId;
+    let pending = this.sceneAssetLoads.get(cacheKey);
     if (!pending) {
+      const url = partId
+        ? `/api/scene-assets/${encodeURIComponent(assetId)}/parts/${encodeURIComponent(partId)}.glb`
+        : `/api/scene-assets/${encodeURIComponent(assetId)}.glb`;
       pending = new Promise((resolve, reject) => new GLTFLoader().load(
-        `/api/scene-assets/${encodeURIComponent(assetId)}.glb`,
+        url,
         gltf => resolve(gltf.scene), undefined, reject,
       ));
-      this.sceneAssetLoads.set(assetId, pending);
+      this.sceneAssetLoads.set(cacheKey, pending);
     }
     return pending;
   }
   private installSceneAsset(object: SceneObject, root: THREE.Object3D) {
     if (!object.asset_id || !object.asset_bounds_min || !object.asset_bounds_max) return;
     const expectedId = object.asset_id;
-    void this.loadSceneAsset(expectedId).then(template => {
+    void this.loadSceneAsset(expectedId, object.asset_part_id).then(template => {
       if (this.destroyed || this.sceneObjects[object.id] !== root || root.userData.assetId !== expectedId) return;
       const clone = template.clone(true);
       clone.traverse(node => {
