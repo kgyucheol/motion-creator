@@ -609,7 +609,7 @@ export class RobotScene {
         node.geometry = node.geometry.clone();
         node.material = Array.isArray(node.material) ? node.material.map(material => material.clone()) : node.material.clone();
       });
-      const normalized = normalizedSceneAsset(clone, object.asset_bounds_min!, object.asset_bounds_max!);
+      const normalized = normalizedSceneAsset(clone, object.asset_bounds_min!, object.asset_bounds_max!, object.asset_axis_transform_xyzw);
       this.disposeSceneObject(root);
       root.clear(); root.add(normalized);
       this.styleSceneObject(root, object);

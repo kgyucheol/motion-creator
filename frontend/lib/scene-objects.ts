@@ -23,6 +23,7 @@ export type SceneObject = {
   asset_id?: string;
   asset_bounds_min?: number[];
   asset_bounds_max?: number[];
+  asset_axis_transform_xyzw?: number[];
   wall_thickness_m?: number;
 };
 
@@ -43,6 +44,7 @@ export type SceneAssetImport = {
   bounds_min: number[];
   bounds_max: number[];
   dimensions: number[];
+  axis_transform_xyzw: number[];
   suggestion: {
     shape: SceneObjectShape;
     size: number[];
@@ -59,7 +61,7 @@ export type ScenePlacementOptions = { preventOverlap: boolean; surfaceSnap: bool
 
 const DEFAULT_PLACEMENT: SceneObjectPlacement = { prevent_overlap: true, surface_snap: false, ground_lock: true };
 
-export function normalizedSceneAsset(template: THREE.Object3D, boundsMin: number[], boundsMax: number[]) {
+export function normalizedSceneAsset(template: THREE.Object3D, boundsMin: number[], boundsMax: number[], axisTransform = [0, 0, 0, 1]) {
   const minimum = new THREE.Vector3().fromArray(boundsMin);
   const maximum = new THREE.Vector3().fromArray(boundsMax);
   const dimensions = maximum.clone().sub(minimum);
@@ -68,7 +70,10 @@ export function normalizedSceneAsset(template: THREE.Object3D, boundsMin: number
   normalized.scale.set(1 / dimensions.x, 1 / dimensions.y, 1 / dimensions.z);
   const centered = new THREE.Group();
   centered.position.copy(center).multiplyScalar(-1);
-  centered.add(template);
+  const aligned = new THREE.Group();
+  aligned.quaternion.fromArray(axisTransform).normalize();
+  aligned.add(template);
+  centered.add(aligned);
   normalized.add(centered);
   return normalized;
 }
@@ -232,6 +237,7 @@ export function createImportedSceneObject(asset: SceneAssetImport, index = 1): S
     asset_id: asset.asset_id,
     asset_bounds_min: [...asset.bounds_min],
     asset_bounds_max: [...asset.bounds_max],
+    asset_axis_transform_xyzw: [...asset.axis_transform_xyzw],
     ...(asset.suggestion.wall_thickness_m ? { wall_thickness_m: asset.suggestion.wall_thickness_m } : {}),
   };
 }

@@ -15,15 +15,30 @@ import xml.etree.ElementTree as ET
 
 def test_glb_import_is_content_addressed_and_reports_dimensions(tmp_path, monkeypatch):
     monkeypatch.setattr(scene_assets, "ASSET_ROOT", tmp_path)
-    mesh = trimesh.creation.box(extents=[.72, .55, .4])
+    # A standard glTF is +Y-up: X width, Y height, Z depth.
+    mesh = trimesh.creation.box(extents=[.72, .4, .55])
     content = trimesh.exchange.gltf.export_glb(trimesh.Scene(mesh))
 
     imported = scene_assets.import_scene_asset(content, "tray.glb")
     assert imported["asset_id"] == scene_assets.import_scene_asset(content, "tray.glb")["asset_id"]
     assert np.allclose(imported["dimensions"], [.72, .55, .4])
+    assert np.allclose(imported["axis_transform_xyzw"], [2 ** -.5, 0, 0, 2 ** -.5])
     assert imported["suggestion"]["shape"] == "box"
     assert scene_assets.asset_path(imported["asset_id"]).read_bytes() == content
     assert json.loads((tmp_path / imported["asset_id"] / "metadata.json").read_text())["source_name"] == "tray.glb"
+
+    robot = Robot()
+    project = new_project(robot)
+    project["scene_objects"] = [{
+        "id": "legacy-glb", "name": "Legacy GLB", "shape": "box", "position": [0, 0, .2],
+        "quaternion_xyzw": [0, 0, 0, 1], "size": [.72, .4, .55], "mass_kg": 1.,
+        "friction": .7, "color": "#ffffff", "opacity": 1., "visible": True,
+        "asset_id": imported["asset_id"], "asset_bounds_min": [-.36, -.2, -.275],
+        "asset_bounds_max": [.36, .2, .275],
+    }]
+    migrated = validate_project(robot, project)["scene_objects"][0]
+    assert np.allclose(migrated["size"], [.72, .55, .4])
+    assert migrated["asset_axis_transform_xyzw"] == imported["axis_transform_xyzw"]
 
 
 @pytest.mark.parametrize("filename, content", [

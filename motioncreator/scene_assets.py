@@ -18,10 +18,21 @@ ASSET_ROOT = ROOT / "assets/imported"
 CONVERTER = ROOT / "scripts/blender/export_motioncreator_asset.py"
 MAX_ASSET_BYTES = 200 * 1024 * 1024
 SUPPORTED_SUFFIXES = {".blend", ".glb"}
+PIPELINE_VERSION = 2
+IDENTITY_XYZW = [0., 0., 0., 1.]
+Y_UP_TO_Z_UP_XYZW = [2 ** -.5, 0., 0., 2 ** -.5]
+Y_UP_TO_Z_UP = np.array([
+    [1., 0., 0., 0.],
+    [0., 0., -1., 0.],
+    [0., 1., 0., 0.],
+    [0., 0., 0., 1.],
+])
 
 
-def _bounds(path: Path) -> tuple[list[float], list[float]]:
+def _bounds(path: Path, transform: np.ndarray | None = None) -> tuple[list[float], list[float]]:
     loaded = trimesh.load(path, force="scene")
+    if transform is not None:
+        loaded.apply_transform(transform)
     bounds = np.asarray(loaded.bounds, dtype=float)
     if bounds.shape != (2, 3) or not np.isfinite(bounds).all():
         raise ValueError("3D model bounds could not be determined")
@@ -29,6 +40,31 @@ def _bounds(path: Path) -> tuple[list[float], list[float]]:
     if np.any(dimensions <= 1e-6) or np.any(dimensions > 20):
         raise ValueError("3D model dimensions must be between 1 µm and 20 m")
     return bounds[0].tolist(), bounds[1].tolist()
+
+
+def _write_metadata(folder: Path, identifier: str, name: str, source_format: str, properties: dict) -> dict:
+    glb = folder / "model.glb"
+    direct_glb = source_format == "glb"
+    axis_transform = Y_UP_TO_Z_UP_XYZW if direct_glb else IDENTITY_XYZW
+    lower, upper = _bounds(glb, Y_UP_TO_Z_UP if direct_glb else None)
+    dimensions = [upper[index] - lower[index] for index in range(3)]
+    metadata = {
+        "pipeline_version": PIPELINE_VERSION,
+        "asset_id": identifier,
+        "name": Path(name).stem,
+        "source_name": name,
+        "source_format": source_format,
+        "source_coordinate_system": "right-handed, +Y up (glTF)" if direct_glb else "right-handed, +Z up (Blender)",
+        "project_coordinate_system": "right-handed, +X forward, +Y left, +Z up",
+        "axis_transform_xyzw": axis_transform,
+        "url": f"/api/scene-assets/{identifier}.glb",
+        "bounds_min": lower,
+        "bounds_max": upper,
+        "dimensions": dimensions,
+        "suggestion": _suggestion(name, dimensions, properties),
+    }
+    (folder / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return metadata
 
 
 def _suggestion(filename: str, dimensions: list[float], properties: dict) -> dict:
@@ -67,7 +103,7 @@ def import_scene_asset(content: bytes, filename: str) -> dict:
     report_path = folder / "conversion.json"
     metadata_path = folder / "metadata.json"
     if metadata_path.is_file() and glb.is_file():
-        return json.loads(metadata_path.read_text(encoding="utf-8"))
+        return asset_metadata(identifier)
     source.write_bytes(content)
     properties = {}
     if suffix == ".blend":
@@ -101,27 +137,36 @@ def import_scene_asset(content: bytes, filename: str) -> dict:
         properties = json.loads(report_path.read_text(encoding="utf-8")).get("properties", {})
     else:
         glb.write_bytes(content)
-    lower, upper = _bounds(glb)
-    dimensions = [upper[index] - lower[index] for index in range(3)]
-    suggestion = _suggestion(name, dimensions, properties)
-    metadata = {
-        "asset_id": identifier,
-        "name": Path(name).stem,
-        "source_name": name,
-        "source_format": suffix[1:],
-        "url": f"/api/scene-assets/{identifier}.glb",
-        "bounds_min": lower,
-        "bounds_max": upper,
-        "dimensions": dimensions,
-        "suggestion": suggestion,
-    }
-    metadata_path.write_text(json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    return metadata
+    return _write_metadata(folder, identifier, name, suffix[1:], properties)
+
+
+def _validate_identifier(identifier: str) -> None:
+    if len(identifier) != 24 or any(character not in "0123456789abcdef" for character in identifier):
+        raise ValueError("Invalid scene asset identifier")
+
+
+def asset_metadata(identifier: str) -> dict:
+    """Return current axis-aware metadata, upgrading assets imported before v2."""
+    _validate_identifier(identifier)
+    folder = ASSET_ROOT / identifier
+    path = folder / "metadata.json"
+    glb = folder / "model.glb"
+    if not path.is_file() or not glb.is_file():
+        raise FileNotFoundError(identifier)
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    if metadata.get("pipeline_version") == PIPELINE_VERSION:
+        return metadata
+    source_name = str(metadata.get("source_name", "model.glb"))
+    source_format = str(metadata.get("source_format", Path(source_name).suffix.lstrip(".") or "glb"))
+    properties = {}
+    report = folder / "conversion.json"
+    if source_format == "blend" and report.is_file():
+        properties = json.loads(report.read_text(encoding="utf-8")).get("properties", {})
+    return _write_metadata(folder, identifier, source_name, source_format, properties)
 
 
 def asset_path(identifier: str) -> Path:
-    if len(identifier) != 24 or any(character not in "0123456789abcdef" for character in identifier):
-        raise ValueError("Invalid scene asset identifier")
+    _validate_identifier(identifier)
     path = ASSET_ROOT / identifier / "model.glb"
     if not path.is_file():
         raise FileNotFoundError(identifier)

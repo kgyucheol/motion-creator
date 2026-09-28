@@ -231,6 +231,33 @@ def validate_project(robot: Robot, project):
         shape = item.get('shape')
         if shape not in SCENE_SHAPES:
             raise ValueError('Scene object shape must be box, sphere, cylinder or open_box')
+        asset_id = item.get('asset_id')
+        if asset_id is not None:
+            if not isinstance(asset_id, str) or not re.fullmatch(r'[0-9a-f]{24}', asset_id):
+                raise ValueError('Scene object asset ID is invalid')
+            try:
+                from .scene_assets import asset_metadata
+                metadata = asset_metadata(asset_id)
+            except FileNotFoundError:
+                metadata = None
+            if metadata is not None:
+                if 'asset_axis_transform_xyzw' not in item and metadata['source_format'] == 'glb':
+                    old_size = np.asarray(item.get('size'), dtype=float)
+                    old_lower = np.asarray(item.get('asset_bounds_min'), dtype=float)
+                    old_upper = np.asarray(item.get('asset_bounds_max'), dtype=float)
+                    old_dimensions = old_upper - old_lower
+                    new_dimensions = np.asarray(metadata['dimensions'], dtype=float)
+                    if old_size.shape == (3,) and old_dimensions.shape == (3,) and np.all(old_dimensions > 0):
+                        if shape in ('box', 'open_box'):
+                            item['size'] = old_size[[0, 2, 1]].tolist()
+                        elif shape == 'cylinder':
+                            radial_scale = old_size[0] / max(old_dimensions[0], old_dimensions[1])
+                            height_scale = old_size[2] / old_dimensions[2]
+                            diameter = max(new_dimensions[0], new_dimensions[1]) * radial_scale
+                            item['size'] = [diameter, diameter, new_dimensions[2] * height_scale]
+                item['asset_bounds_min'] = metadata['bounds_min']
+                item['asset_bounds_max'] = metadata['bounds_max']
+                item['asset_axis_transform_xyzw'] = metadata['axis_transform_xyzw']
         for field, length in (('position', 3), ('quaternion_xyzw', 4), ('size', 3)):
             value = np.asarray(item.get(field), dtype=float)
             if value.shape != (length,) or not np.isfinite(value).all():
@@ -251,16 +278,16 @@ def validate_project(robot: Robot, project):
             thickness = float(item.get('wall_thickness_m', .02))
             if not np.isfinite(thickness) or not .001 <= thickness < min(size) / 3:
                 raise ValueError('Open-box wall thickness must fit inside its dimensions')
-        asset_id = item.get('asset_id')
         if asset_id is not None:
-            if not isinstance(asset_id, str) or not re.fullmatch(r'[0-9a-f]{24}', asset_id):
-                raise ValueError('Scene object asset ID is invalid')
             for field in ('asset_bounds_min', 'asset_bounds_max'):
                 value = np.asarray(item.get(field), dtype=float)
                 if value.shape != (3,) or not np.isfinite(value).all():
                     raise ValueError(f'Scene object {field} must contain three finite numbers')
             if np.any(np.asarray(item['asset_bounds_max']) <= np.asarray(item['asset_bounds_min'])):
                 raise ValueError('Scene object asset bounds must have positive dimensions')
+            axis_transform = np.asarray(item.get('asset_axis_transform_xyzw', [0., 0., 0., 1.]), dtype=float)
+            if axis_transform.shape != (4,) or not np.isfinite(axis_transform).all() or abs(np.linalg.norm(axis_transform) - 1.) > 1e-4:
+                raise ValueError('Scene object asset axis transform must be a normalized xyzw quaternion')
         mass = float(item.get('mass_kg', 1.))
         friction = float(item.get('friction', .7))
         opacity = float(item.get('opacity', 1.))

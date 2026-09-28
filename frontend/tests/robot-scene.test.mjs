@@ -81,6 +81,18 @@ test('imported scene assets are centered even when their source origin is far aw
   assert.ok(bounds.max.distanceTo(new THREE.Vector3(.5, .5, .5)) < 1e-10);
 });
 
+test('standard Y-up glTF assets are converted to the editor Z-up frame before scaling', () => {
+  const source = new THREE.Group();
+  source.add(new THREE.Mesh(new THREE.BoxGeometry(2, 6, 4)));
+  const sourceTop = new THREE.Object3D(); sourceTop.position.set(0, 3, 0); source.add(sourceTop);
+  const aligned = normalizedSceneAsset(source, [-1, -2, -3], [1, 2, 3], [Math.SQRT1_2, 0, 0, Math.SQRT1_2]);
+  aligned.updateMatrixWorld(true);
+  const bounds = new THREE.Box3().setFromObject(aligned);
+  assert.ok(bounds.min.distanceTo(new THREE.Vector3(-.5, -.5, -.5)) < 1e-10);
+  assert.ok(bounds.max.distanceTo(new THREE.Vector3(.5, .5, .5)) < 1e-10);
+  assert.ok(sourceTop.getWorldPosition(new THREE.Vector3()).distanceTo(new THREE.Vector3(0, 0, .5)) < 1e-10);
+});
+
 function fixture() {
   const viewer = Object.create(RobotScene.prototype);
   viewer.state = { handles: { left_hand: { position: [.3, .2, .8] }, right_hand: { position: [.3, -.2, .8] } } };
