@@ -19,7 +19,7 @@ FORMAT = 'motioncreator.g1.v1'
 ENVIRONMENT_FORMAT = 'motioncreator.environment.v1'
 MAX_KEYFRAMES = 100
 MAX_MOTION_SAMPLES = 3000
-SCENE_SHAPES = {'box', 'sphere', 'cylinder'}
+SCENE_SHAPES = {'box', 'sphere', 'cylinder', 'open_box'}
 PROJECT_ID_PATTERN = re.compile(r'[0-9a-f]{32}')
 PROJECT_ID_NAMESPACE = uuid.UUID('e0ad0f86-1a30-4e2f-a20f-67ad84175df8')
 LEGACY_AUTO_PROJECT_NAMES = {'g1 reference', 'g1_reference'}
@@ -145,6 +145,7 @@ def environment_snapshot(project):
             },
         },
         'scene_objects': project_scene_objects(project),
+        'scene_groups': project.get('scene_groups', []),
     }
 
 
@@ -229,7 +230,7 @@ def validate_project(robot: Robot, project):
             raise ValueError('Scene object names must contain 1–80 characters')
         shape = item.get('shape')
         if shape not in SCENE_SHAPES:
-            raise ValueError('Scene object shape must be box, sphere or cylinder')
+            raise ValueError('Scene object shape must be box, sphere, cylinder or open_box')
         for field, length in (('position', 3), ('quaternion_xyzw', 4), ('size', 3)):
             value = np.asarray(item.get(field), dtype=float)
             if value.shape != (length,) or not np.isfinite(value).all():
@@ -246,6 +247,20 @@ def validate_project(robot: Robot, project):
             raise ValueError('Sphere size must use one uniform diameter')
         if shape == 'cylinder' and abs(size[0] - size[1]) > 1e-6:
             raise ValueError('Cylinder X/Y sizes must use one diameter')
+        if shape == 'open_box':
+            thickness = float(item.get('wall_thickness_m', .02))
+            if not np.isfinite(thickness) or not .001 <= thickness < min(size) / 3:
+                raise ValueError('Open-box wall thickness must fit inside its dimensions')
+        asset_id = item.get('asset_id')
+        if asset_id is not None:
+            if not isinstance(asset_id, str) or not re.fullmatch(r'[0-9a-f]{24}', asset_id):
+                raise ValueError('Scene object asset ID is invalid')
+            for field in ('asset_bounds_min', 'asset_bounds_max'):
+                value = np.asarray(item.get(field), dtype=float)
+                if value.shape != (3,) or not np.isfinite(value).all():
+                    raise ValueError(f'Scene object {field} must contain three finite numbers')
+            if np.any(np.asarray(item['asset_bounds_max']) <= np.asarray(item['asset_bounds_min'])):
+                raise ValueError('Scene object asset bounds must have positive dimensions')
         mass = float(item.get('mass_kg', 1.))
         friction = float(item.get('friction', .7))
         opacity = float(item.get('opacity', 1.))
@@ -266,6 +281,31 @@ def validate_project(robot: Robot, project):
             for key in ('prevent_overlap', 'surface_snap', 'ground_lock'):
                 if not isinstance(placement.get(key), bool):
                     raise ValueError(f'Scene object placement {key} must be a boolean')
+    scene_groups = project.get('scene_groups', [])
+    if not isinstance(scene_groups, list) or len(scene_groups) > 16:
+        raise ValueError('Scene groups must be a list with at most 16 entries')
+    grouped_members = set()
+    group_ids = set()
+    for group in scene_groups:
+        if not isinstance(group, dict) or not isinstance(group.get('id'), str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', group['id']):
+            raise ValueError('Scene group IDs must use 1–64 letters, numbers, underscores or hyphens')
+        if group['id'] in group_ids:
+            raise ValueError('Scene group IDs must be unique')
+        group_ids.add(group['id'])
+        if not isinstance(group.get('name'), str) or not 1 <= len(group['name']) <= 80:
+            raise ValueError('Scene group names must contain 1–80 characters')
+        members = group.get('member_ids')
+        if not isinstance(members, list) or len(members) < 2 or any(member not in identifiers for member in members):
+            raise ValueError('Scene groups require at least two existing objects')
+        if len(set(members)) != len(members) or grouped_members.intersection(members):
+            raise ValueError('A scene object can belong to only one group')
+        grouped_members.update(members)
+        for field, length in (('position', 3), ('quaternion_xyzw', 4)):
+            value = np.asarray(group.get(field), dtype=float)
+            if value.shape != (length,) or not np.isfinite(value).all():
+                raise ValueError(f'Scene group {field} must contain {length} finite numbers')
+        if abs(np.linalg.norm(group['quaternion_xyzw']) - 1.) > 1e-4:
+            raise ValueError('Scene group quaternion must be normalized')
     from .grasp import validate_grasp_event
     for frame in frames:
         grasp = frame.get('grasp')

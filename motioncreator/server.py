@@ -188,6 +188,23 @@ async def import_motion(request: Request, filename: str, fps: int = Query(30, ge
     return checked(lambda: project_from_motion_bytes(robot, content, filename, fps))
 
 
+@app.post('/api/scene-assets/import')
+async def import_scene_model(request: Request, filename: str):
+    from .scene_assets import import_scene_asset
+    content = await request.body()
+    return checked(lambda: import_scene_asset(content, filename))
+
+
+@app.get('/api/scene-assets/{identifier}.glb')
+def scene_model(identifier: str):
+    from .scene_assets import asset_path
+    try:
+        path = asset_path(identifier)
+    except (ValueError, FileNotFoundError):
+        raise HTTPException(404, detail='3D model asset not found')
+    return FileResponse(path, media_type='model/gltf-binary', headers={'Cache-Control': 'public, max-age=31536000, immutable'})
+
+
 @app.post('/api/solve-group')
 def solve_group(payload: GroupSolveInput):
     def run():

@@ -24,6 +24,7 @@ from scipy.spatial.transform import Rotation
 from .grip_geometry import (grip_pad_center, grip_pad_contact_anchor, grip_pad_half_size,
                             grip_pad_quaternion_wxyz, grip_pad_rotation)
 from .hand_collision import physical_hand_geom_names
+from .scene_geometry import append_collision_geoms, grounded_position
 from .motion import compile_motion, project_scene_objects, validate_project
 from .robot import ROOT, Robot
 
@@ -75,23 +76,6 @@ def _numbers(values) -> str:
     return " ".join(str(float(value)) for value in values)
 
 
-def _grounded_position(item: dict) -> np.ndarray:
-    position = np.asarray(item["position"], dtype=float).copy()
-    size = np.asarray(item["size"], dtype=float)
-    if item["shape"] == "sphere":
-        extent = size[0] / 2
-    else:
-        x, y, z, w = np.asarray(item["quaternion_xyzw"], dtype=float)
-        r20 = 2 * (x * z - w * y)
-        r21 = 2 * (y * z + w * x)
-        r22 = 1 - 2 * (x * x + y * y)
-        extent = (size[0] / 2 * np.hypot(r20, r21) + size[2] / 2 * abs(r22)
-                  if item["shape"] == "cylinder" else
-                  abs(r20) * size[0] / 2 + abs(r21) * size[1] / 2 + abs(r22) * size[2] / 2)
-    position[2] = max(position[2], extent)
-    return position
-
-
 def build_environment_model(project: dict) -> mujoco.MjModel:
     """Load the WBC MJCF and add fully dynamic authored scene objects."""
     tool_model = os.environ.get('MOTIONCREATOR_MODEL') == 'g1-tools'
@@ -117,7 +101,7 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
         object_geoms = []
         for index, item in enumerate(objects):
             body = ET.SubElement(world, "body", name=f"wbc_object_{index}",
-                                 pos=_numbers(_grounded_position(item)),
+                                 pos=_numbers(grounded_position(item)),
                                  quat=_numbers(np.asarray(item["quaternion_xyzw"])[[3, 0, 1, 2]]))
             ET.SubElement(body, "freejoint", name=f"wbc_object_joint_{index}")
             if item.get('fixed', False):
@@ -125,34 +109,28 @@ def build_environment_model(project: dict) -> mujoco.MjModel:
                 if equality is None:
                     equality = ET.SubElement(root, 'equality')
                 ET.SubElement(equality, 'weld', body1='world', body2=f'wbc_object_{index}', solref='.005 1')
-            size = np.asarray(item["size"], dtype=float)
-            mj_size = (size / 2 if item["shape"] == "box" else [size[0] / 2]
-                       if item["shape"] == "sphere" else [size[0] / 2, size[2] / 2])
-            geom_name = f"wbc_object_geom_{index}"
-            ET.SubElement(body, "geom", name=geom_name, type=item["shape"], size=_numbers(mj_size),
-                          mass=str(float(item["mass_kg"])),
-                          friction=_numbers([item["friction"], .005, .0001]),
-                          # Keep scene objects out of MuJoCo's broad robot collision
-                          # mask.  The explicit pairs below are the complete contact
-                          # allow-list: authored hand links, floor and other objects.
-                          # Without this, unlisted links (notably the thumb tips) can
-                          # push an object before the visible grasp reaches it.
-                          contype="0", conaffinity="0")
-            object_geoms.append(geom_name)
+            # Scene objects stay out of MuJoCo's broad robot collision mask.
+            # Explicit pairs below are the complete contact allow-list.
+            geom_names = append_collision_geoms(body, 'wbc', index, item)
+            object_geoms.append(geom_names)
             for side in ("left", "right"):
                 names = ([g.get('name') for g in root.find(f".//body[@name='{side}_wrist_yaw_link']").iter('geom')
                           if g.get('contype', '1') != '0'] if tool_model
                          else [f'{side}_physical_hand_{i}' for i in range(6)])
                 for name in names:
-                    ET.SubElement(contact, "pair", geom1=name, geom2=geom_name,
-                                  condim="3",
-                                  friction=_numbers([item["friction"], item["friction"], 0, 0, 0]),
-                                  solref=".01 1", solimp=".95 .99 .001")
-            ET.SubElement(contact, "pair", geom1="floor", geom2=geom_name, condim="3",
-                          friction=_numbers([item["friction"], item["friction"], 0, 0, 0]))
-        for first, geom1 in enumerate(object_geoms):
-            for geom2 in object_geoms[first + 1:]:
-                ET.SubElement(contact, "pair", geom1=geom1, geom2=geom2, condim="3")
+                    for geom_name in geom_names:
+                        ET.SubElement(contact, "pair", geom1=name, geom2=geom_name,
+                                      condim="3",
+                                      friction=_numbers([item["friction"], item["friction"], 0, 0, 0]),
+                                      solref=".01 1", solimp=".95 .99 .001")
+            for geom_name in geom_names:
+                ET.SubElement(contact, "pair", geom1="floor", geom2=geom_name, condim="3",
+                              friction=_numbers([item["friction"], item["friction"], 0, 0, 0]))
+        for first, first_geoms in enumerate(object_geoms):
+            for second_geoms in object_geoms[first + 1:]:
+                for geom1 in first_geoms:
+                    for geom2 in second_geoms:
+                        ET.SubElement(contact, "pair", geom1=geom1, geom2=geom2, condim="3")
     model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding="unicode"))
     if model.nq != 36 + 7 * len(objects) or model.nv != 35 + 6 * len(objects) or model.nu != 29:
         raise ValueError("Unexpected decoupled-WBC environment model")

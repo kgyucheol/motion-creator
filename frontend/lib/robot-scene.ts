@@ -89,7 +89,8 @@ export class RobotScene {
   ray = new THREE.Raycaster();
   pointer = new THREE.Vector2();
   box: THREE.Mesh;
-  sceneObjects: Record<string, THREE.Mesh> = {};
+  sceneObjects: Record<string, THREE.Object3D> = {};
+  sceneAssetLoads = new Map<string, Promise<THREE.Object3D>>();
   selectedSceneObject: string | null = null;
   objectTransformMode: ObjectTransformMode = 'translate';
   com: THREE.Mesh;
@@ -293,14 +294,17 @@ export class RobotScene {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
     this.ray.setFromCamera(this.pointer, this.camera);
-    return this.ray.intersectObjects(Object.values(this.sceneObjects).filter(object => object.visible), false)[0]?.object.userData.sceneObjectId as string | undefined;
+    const hit = this.ray.intersectObjects(Object.values(this.sceneObjects).filter(object => object.visible), true)[0]?.object;
+    let node: THREE.Object3D | null = hit ?? null;
+    while (node && !node.userData.sceneObjectId) node = node.parent;
+    return node?.userData.sceneObjectId as string | undefined;
   }
   private pickSceneObjectSurface(event: PointerEvent) {
     const rect = this.renderer.domElement.getBoundingClientRect();
     this.pointer.set((event.clientX - rect.left) / rect.width * 2 - 1, -(event.clientY - rect.top) / rect.height * 2 + 1);
     this.ray.setFromCamera(this.pointer, this.camera);
     return this.ray.intersectObjects(Object.values(this.sceneObjects)
-      .filter(object => object.visible && !object.userData.graspGhost), false)[0];
+      .filter(object => object.visible && !object.userData.graspGhost && object.userData.shape === 'box' && !object.userData.assetId), true)[0];
   }
   hover = (event: PointerEvent) => {
     if (!this.editable || event.buttons || event.shiftKey || event.altKey || this.selectionLocked || this.members.length > 1 || this.gizmo.dragging || this.gizmo.axis) return;
@@ -314,8 +318,10 @@ export class RobotScene {
       if (hit?.face) {
         event.preventDefault(); event.stopImmediatePropagation();
         const mesh = hit.object as THREE.Mesh;
-        const localPoint = mesh.worldToLocal(hit.point.clone()).toArray();
-        this.callbacks.pickObjectSurface?.(mesh.userData.sceneObjectId as string, localPoint, hit.face.normal.toArray());
+        let root: THREE.Object3D | null = mesh;
+        while (root && !root.userData.sceneObjectId) root = root.parent;
+        const localPoint = (root ?? mesh).worldToLocal(hit.point.clone()).toArray();
+        this.callbacks.pickObjectSurface?.(root?.userData.sceneObjectId as string, localPoint, hit.face.normal.toArray());
       }
       return;
     }
@@ -532,44 +538,117 @@ export class RobotScene {
     this.box.scale.set(size[0] / .3, size[1] / .32, size[2] / .24);
     this.dirty = true;
   }
+  private disposeSceneObject(object: THREE.Object3D) {
+    object.traverse(node => {
+      if (!(node instanceof THREE.Mesh || node instanceof THREE.LineSegments)) return;
+      node.geometry?.dispose();
+      const materials = Array.isArray(node.material) ? node.material : [node.material];
+      materials.forEach(material => material?.dispose());
+    });
+  }
+  private styleSceneObject(root: THREE.Object3D, object: SceneObject) {
+    root.traverse(node => {
+      node.userData.sceneObjectId = object.id;
+      if (!(node instanceof THREE.Mesh)) return;
+      const materials = (Array.isArray(node.material) ? node.material : [node.material]) as THREE.MeshStandardMaterial[];
+      materials.forEach(material => {
+        material.transparent = object.opacity < 1 || !!object.ghost;
+        material.opacity = object.opacity;
+        material.depthWrite = object.opacity >= .98 && !object.ghost;
+        material.wireframe = !!object.ghost;
+        if (!object.asset_id) material.color?.set(object.color);
+        if ('emissive' in material) material.emissive.set(this.selectedSceneObject === object.id ? '#254e43' : object.ghost ? '#174c55' : '#000000');
+      });
+    });
+  }
+  private primitiveSceneObject(object: SceneObject) {
+    const root = new THREE.Group();
+    const material = () => new THREE.MeshStandardMaterial({ roughness: .82, metalness: .04 });
+    if (object.shape === 'open_box') {
+      const thickness = Math.max(.001, Math.min(object.wall_thickness_m ?? .02, Math.min(...object.size) / 3));
+      const [x, y, z] = object.size;
+      const parts: [number[], number[]][] = [
+        [[1, 1, thickness / z], [0, 0, -.5 + thickness / z / 2]],
+        [[thickness / x, Math.max(.01, 1 - 2 * thickness / y), Math.max(.01, 1 - thickness / z)], [-.5 + thickness / x / 2, 0, thickness / z / 2]],
+        [[thickness / x, Math.max(.01, 1 - 2 * thickness / y), Math.max(.01, 1 - thickness / z)], [.5 - thickness / x / 2, 0, thickness / z / 2]],
+        [[1, thickness / y, Math.max(.01, 1 - thickness / z)], [0, -.5 + thickness / y / 2, thickness / z / 2]],
+        [[1, thickness / y, Math.max(.01, 1 - thickness / z)], [0, .5 - thickness / y / 2, thickness / z / 2]],
+      ];
+      parts.forEach(([scale, position]) => {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material());
+        mesh.scale.fromArray(scale); mesh.position.fromArray(position); root.add(mesh);
+      });
+    } else {
+      const geometry = object.shape === 'box' ? new THREE.BoxGeometry(1, 1, 1)
+        : object.shape === 'sphere' ? new THREE.SphereGeometry(.5, 32, 20)
+        : new THREE.CylinderGeometry(.5, .5, 1, 32);
+      if (object.shape === 'cylinder') geometry.rotateX(Math.PI / 2);
+      root.add(new THREE.Mesh(geometry, material()));
+    }
+    return root;
+  }
+  private loadSceneAsset(assetId: string) {
+    let pending = this.sceneAssetLoads.get(assetId);
+    if (!pending) {
+      pending = new Promise((resolve, reject) => new GLTFLoader().load(
+        `/api/scene-assets/${encodeURIComponent(assetId)}.glb`,
+        gltf => resolve(gltf.scene), undefined, reject,
+      ));
+      this.sceneAssetLoads.set(assetId, pending);
+    }
+    return pending;
+  }
+  private installSceneAsset(object: SceneObject, root: THREE.Object3D) {
+    if (!object.asset_id || !object.asset_bounds_min || !object.asset_bounds_max) return;
+    const expectedId = object.asset_id;
+    void this.loadSceneAsset(expectedId).then(template => {
+      if (this.destroyed || this.sceneObjects[object.id] !== root || root.userData.assetId !== expectedId) return;
+      const clone = template.clone(true);
+      clone.traverse(node => {
+        if (!(node instanceof THREE.Mesh)) return;
+        node.geometry = node.geometry.clone();
+        node.material = Array.isArray(node.material) ? node.material.map(material => material.clone()) : node.material.clone();
+      });
+      const minimum = new THREE.Vector3().fromArray(object.asset_bounds_min!);
+      const maximum = new THREE.Vector3().fromArray(object.asset_bounds_max!);
+      const dimensions = maximum.clone().sub(minimum);
+      clone.position.copy(minimum.clone().add(maximum).multiplyScalar(-.5));
+      clone.scale.set(1 / dimensions.x, 1 / dimensions.y, 1 / dimensions.z);
+      this.disposeSceneObject(root);
+      root.clear(); root.add(clone);
+      this.styleSceneObject(root, object);
+      this.dirty = true;
+    }).catch(() => this.callbacks.error(`3D 모델(${object.name})을 불러오지 못했습니다.`));
+  }
   setSceneObjects(objects: SceneObject[]) {
     this.box.visible = false;
     const incoming = new Set(objects.map(object => object.id));
     for (const [id, mesh] of Object.entries(this.sceneObjects)) {
       if (incoming.has(id)) continue;
       this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.Material).dispose();
+      this.disposeSceneObject(mesh);
       delete this.sceneObjects[id];
     }
     for (const object of objects) {
       let mesh = this.sceneObjects[object.id];
-      if (!mesh || mesh.userData.shape !== object.shape) {
+      if (!mesh || mesh.userData.shape !== object.shape || mesh.userData.assetId !== object.asset_id) {
         if (mesh) {
-          this.scene.remove(mesh); mesh.geometry.dispose(); (mesh.material as THREE.Material).dispose();
+          this.scene.remove(mesh); this.disposeSceneObject(mesh);
         }
-        const geometry = object.shape === 'box' ? new THREE.BoxGeometry(1, 1, 1)
-          : object.shape === 'sphere' ? new THREE.SphereGeometry(.5, 32, 20)
-          : new THREE.CylinderGeometry(.5, .5, 1, 32);
-        if (object.shape === 'cylinder') geometry.rotateX(Math.PI / 2);
-        mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ roughness: .82, metalness: .04 }));
+        mesh = this.primitiveSceneObject(object);
         mesh.userData.sceneObjectId = object.id;
         mesh.userData.shape = object.shape;
+        mesh.userData.assetId = object.asset_id;
         this.sceneObjects[object.id] = mesh;
         this.scene.add(mesh);
+        this.installSceneAsset(object, mesh);
       }
       mesh.userData.graspGhost = !!object.ghost;
       mesh.position.fromArray(object.position);
       mesh.quaternion.fromArray(object.quaternion_xyzw);
       mesh.scale.fromArray(normalizedObjectSize(object.shape, object.size));
       mesh.visible = object.visible;
-      const material = mesh.material as THREE.MeshStandardMaterial;
-      material.color.set(object.color);
-      material.opacity = object.opacity;
-      material.transparent = object.opacity < 1 || !!object.ghost;
-      material.depthWrite = object.opacity >= .98 && !object.ghost;
-      material.wireframe = !!object.ghost;
-      material.emissive.set(this.selectedSceneObject === object.id ? '#254e43' : object.ghost ? '#174c55' : '#000000');
+      this.styleSceneObject(mesh, object);
     }
     if (this.selectedSceneObject && !incoming.has(this.selectedSceneObject)) this.selectedSceneObject = null;
     if (this.selectedSceneObject) this.selectSceneObject(this.selectedSceneObject, this.objectTransformMode);
@@ -604,8 +683,14 @@ export class RobotScene {
     this.selectionLocked = !!this.selectedSceneObject;
     this.objectTransformMode = mode;
     Object.entries(this.sceneObjects).forEach(([key, mesh]) => {
-      (mesh.material as THREE.MeshStandardMaterial).emissive.set(key === this.selectedSceneObject
-        ? '#254e43' : mesh.userData.graspGhost ? '#174c55' : '#000000');
+      mesh.traverse(node => {
+        if (!(node instanceof THREE.Mesh)) return;
+        const materials = (Array.isArray(node.material) ? node.material : [node.material]) as THREE.MeshStandardMaterial[];
+        materials.forEach(material => {
+          if ('emissive' in material) material.emissive.set(key === this.selectedSceneObject
+            ? '#254e43' : mesh.userData.graspGhost ? '#174c55' : '#000000');
+        });
+      });
     });
     const object = this.selectedSceneObject ? this.sceneObjects[this.selectedSceneObject] : undefined;
     if (object && this.editable) {

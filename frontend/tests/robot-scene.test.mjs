@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { RobotScene, canRotateSelection, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap } from '../lib/scene-objects.ts';
+import { createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
@@ -57,6 +57,18 @@ test('surface snapping closes a small gap without requiring an overlap', () => {
   const placed = placeSceneObject(candidate, [fixed], { preventOverlap: true, surfaceSnap: true, groundLock: true });
   assert.ok(Math.abs(placed.position[0] + 1) < 1e-12);
   assert.equal(sceneObjectsOverlap(placed, fixed), false);
+});
+
+test('scene group rotation keeps child spacing and rotates each child orientation', () => {
+  const base = { name: 'item', shape: 'box', size: [.2, .2, .2], quaternion_xyzw: [0, 0, 0, 1],
+    mass_kg: 1, friction: .7, color: '#ffffff', opacity: 1, visible: true };
+  const objects = [{ ...base, id: 'a', position: [1, 0, .5] }, { ...base, id: 'b', position: [-1, 0, .5] }];
+  const group = createSceneObjectGroup(objects, ['a', 'b']);
+  const next = { ...group, position: [0, 1, .5], quaternion_xyzw: quaternionFromDegrees([0, 0, 90]) };
+  const transformed = transformSceneObjectGroup(objects, group, next);
+  assert.ok(new THREE.Vector3(...transformed[0].position).distanceTo(new THREE.Vector3(0, 2, .5)) < 1e-10);
+  assert.ok(new THREE.Vector3(...transformed[1].position).distanceTo(new THREE.Vector3(0, 0, .5)) < 1e-10);
+  assert.ok(Math.abs(eulerDegrees(transformed[0].quaternion_xyzw)[2] - 90) < 1e-10);
 });
 
 function fixture() {

@@ -22,6 +22,7 @@ from .hand_collision import physical_hand_geom_names
 from .robot import MODEL_PATH, ROOT, Robot
 from .sonic import KP, KD, Reference, SonicCPU
 from .task_jobs import atomic_json
+from .scene_geometry import append_collision_geoms, grounded_position
 
 MAX_SECONDS = 60
 
@@ -78,24 +79,6 @@ def compile_preview_motion(robot, project, fps=50):
     return motion['time'], motion['qpos'], grasp
 
 
-def _grounded_position(item):
-    position = np.asarray(item['position'], dtype=float).copy()
-    size = np.asarray(item['size'], dtype=float)
-    if item['shape'] == 'sphere':
-        extent = size[0] / 2
-    else:
-        x, y, z, w = np.asarray(item['quaternion_xyzw'], dtype=float)
-        r20 = 2 * (x * z - w * y)
-        r21 = 2 * (y * z + w * x)
-        r22 = 1 - 2 * (x * x + y * y)
-        if item['shape'] == 'cylinder':
-            extent = size[0] / 2 * np.hypot(r20, r21) + size[2] / 2 * abs(r22)
-        else:
-            extent = abs(r20) * size[0] / 2 + abs(r21) * size[1] / 2 + abs(r22) * size[2] / 2
-    position[2] = max(position[2], extent)
-    return position
-
-
 def build_model(robot, project=None):
     root = robot.xml_root()
     option = root.find('option')
@@ -124,7 +107,7 @@ def build_model(robot, project=None):
         object_geoms = []
         for index, item in enumerate(objects):
             body = ET.SubElement(world, 'body', name=f'preview_object_{index}',
-                                 pos=_numbers(_grounded_position(item)),
+                                 pos=_numbers(grounded_position(item)),
                                  quat=_numbers(np.asarray(item['quaternion_xyzw'])[[3, 0, 1, 2]]))
             ET.SubElement(body, 'freejoint', name=f'preview_object_joint_{index}')
             if item.get('fixed', False):
@@ -132,26 +115,25 @@ def build_model(robot, project=None):
                 if equality is None:
                     equality = ET.SubElement(root, 'equality')
                 ET.SubElement(equality, 'weld', body1='world', body2=f'preview_object_{index}', solref='.005 1')
-            size = np.asarray(item['size'], dtype=float)
-            mj_size = size / 2 if item['shape'] == 'box' else [size[0] / 2] if item['shape'] == 'sphere' else [size[0] / 2, size[2] / 2]
-            geom_name = f'preview_object_geom_{index}'
-            ET.SubElement(body, 'geom', name=geom_name, type=item['shape'], size=_numbers(mj_size),
-                          mass=str(float(item['mass_kg'])), friction=_numbers([item['friction'], .005, .0001]),
-                          contype='0', conaffinity='0')
-            object_geoms.append(geom_name)
+            geom_names = append_collision_geoms(body, 'preview', index, item)
+            object_geoms.append(geom_names)
             for side in ('left', 'right'):
                 names = ([g.get('name') for g in root.find(f".//body[@name='{side}_wrist_yaw_link']").iter('geom')
                           if g.get('contype', '1') != '0'] if robot.model_id == 'g1-tools'
                          else [f'{side}_physical_hand_{i}' for i in range(2)])
                 for name in names:
-                    ET.SubElement(contact, 'pair', geom1=name, geom2=geom_name,
-                                  condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
-                                  solref='.01 1', solimp='.95 .99 .001')
-            ET.SubElement(contact, 'pair', geom1='floor', geom2=geom_name, condim='3',
-                          friction=_numbers([item['friction'], item['friction'], 0, 0, 0]))
-        for first, geom1 in enumerate(object_geoms):
-            for geom2 in object_geoms[first + 1:]:
-                ET.SubElement(contact, 'pair', geom1=geom1, geom2=geom2, condim='3')
+                    for geom_name in geom_names:
+                        ET.SubElement(contact, 'pair', geom1=name, geom2=geom_name,
+                                      condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
+                                      solref='.01 1', solimp='.95 .99 .001')
+            for geom_name in geom_names:
+                ET.SubElement(contact, 'pair', geom1='floor', geom2=geom_name, condim='3',
+                              friction=_numbers([item['friction'], item['friction'], 0, 0, 0]))
+        for first, first_geoms in enumerate(object_geoms):
+            for second_geoms in object_geoms[first + 1:]:
+                for geom1 in first_geoms:
+                    for geom2 in second_geoms:
+                        ET.SubElement(contact, 'pair', geom1=geom1, geom2=geom2, condim='3')
     model = mujoco.MjModel.from_xml_string(ET.tostring(root, encoding='unicode'))
     if model.nq != 36 + 7 * len(objects) or model.nu != 29:
         raise ValueError('Unexpected G1 physics model')

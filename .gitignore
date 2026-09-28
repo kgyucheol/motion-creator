@@ -15,6 +15,7 @@ frontend/.vinext/
 tasks/
 assets/g1/robot-g1.glb
 assets/g1/robot-g1-tools.glb
+/assets/imported/
 
 # Local photogrammetry inputs and generated Blender working files.
 /assets/ramen_scan/source/

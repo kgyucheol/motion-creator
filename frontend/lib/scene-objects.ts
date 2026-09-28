@@ -1,4 +1,6 @@
-export type SceneObjectShape = 'box' | 'sphere' | 'cylinder';
+import * as THREE from 'three';
+
+export type SceneObjectShape = 'box' | 'open_box' | 'sphere' | 'cylinder';
 export type ObjectTransformMode = 'translate' | 'rotate' | 'scale';
 export type SceneObjectPlacement = { prevent_overlap: boolean; surface_snap: boolean; ground_lock: boolean };
 
@@ -18,6 +20,38 @@ export type SceneObject = {
   /** Editor-only visualization; never persisted as a physical scene object. */
   ghost?: boolean;
   fixed?: boolean;
+  asset_id?: string;
+  asset_bounds_min?: number[];
+  asset_bounds_max?: number[];
+  wall_thickness_m?: number;
+};
+
+export type SceneObjectGroup = {
+  id: string;
+  name: string;
+  member_ids: string[];
+  position: number[];
+  quaternion_xyzw: number[];
+};
+
+export type SceneAssetImport = {
+  asset_id: string;
+  name: string;
+  source_name: string;
+  source_format: string;
+  url: string;
+  bounds_min: number[];
+  bounds_max: number[];
+  dimensions: number[];
+  suggestion: {
+    shape: SceneObjectShape;
+    size: number[];
+    mass_kg: number;
+    friction: number;
+    color: string;
+    fixed: boolean;
+    wall_thickness_m?: number;
+  };
 };
 
 export type SceneObjectPose = { position: number[]; quaternion_xyzw: number[] };
@@ -151,7 +185,7 @@ export function createSceneObject(index = 1, shape: SceneObjectShape = 'box'): S
   const position = [.4, 0, base[2] / 2];
   return {
     id: `object-${Date.now().toString(36)}-${index}`,
-    name: `${shape === 'box' ? '박스' : shape === 'sphere' ? '구' : '원통'} ${index}`,
+    name: `${shape === 'box' || shape === 'open_box' ? '박스' : shape === 'sphere' ? '구' : '원통'} ${index}`,
     shape,
     position,
     quaternion_xyzw: [0, 0, 0, 1],
@@ -163,6 +197,55 @@ export function createSceneObject(index = 1, shape: SceneObjectShape = 'box'): S
     visible: true,
     placement: { ...DEFAULT_PLACEMENT },
   };
+}
+
+export function createImportedSceneObject(asset: SceneAssetImport, index = 1): SceneObject {
+  const size = normalizedObjectSize(asset.suggestion.shape, asset.suggestion.size ?? asset.dimensions);
+  return {
+    id: `asset-${asset.asset_id}-${Date.now().toString(36)}-${index}`,
+    name: asset.name || asset.source_name.replace(/\.[^.]+$/, ''),
+    shape: asset.suggestion.shape,
+    position: [.4, 0, size[2] / 2],
+    quaternion_xyzw: [0, 0, 0, 1],
+    size,
+    mass_kg: asset.suggestion.mass_kg,
+    friction: asset.suggestion.friction,
+    color: asset.suggestion.color,
+    opacity: 1,
+    visible: true,
+    fixed: asset.suggestion.fixed,
+    placement: { prevent_overlap: true, surface_snap: false, ground_lock: true },
+    asset_id: asset.asset_id,
+    asset_bounds_min: [...asset.bounds_min],
+    asset_bounds_max: [...asset.bounds_max],
+    ...(asset.suggestion.wall_thickness_m ? { wall_thickness_m: asset.suggestion.wall_thickness_m } : {}),
+  };
+}
+
+export function createSceneObjectGroup(objects: SceneObject[], memberIds: string[], index = 1): SceneObjectGroup {
+  const members = objects.filter(object => memberIds.includes(object.id));
+  const position = [0, 1, 2].map(axis => members.reduce((sum, object) => sum + object.position[axis], 0) / Math.max(1, members.length));
+  return {
+    id: `group-${Date.now().toString(36)}-${index}`,
+    name: `오브젝트 그룹 ${index}`,
+    member_ids: members.map(object => object.id),
+    position,
+    quaternion_xyzw: [0, 0, 0, 1],
+  };
+}
+
+export function transformSceneObjectGroup(objects: SceneObject[], previous: SceneObjectGroup, next: SceneObjectGroup) {
+  const beforePosition = new THREE.Vector3().fromArray(previous.position);
+  const afterPosition = new THREE.Vector3().fromArray(next.position);
+  const beforeRotation = new THREE.Quaternion().fromArray(previous.quaternion_xyzw).normalize();
+  const afterRotation = new THREE.Quaternion().fromArray(next.quaternion_xyzw).normalize();
+  const delta = afterRotation.clone().multiply(beforeRotation.clone().invert());
+  return objects.map(object => {
+    if (!previous.member_ids.includes(object.id)) return object;
+    const position = new THREE.Vector3().fromArray(object.position).sub(beforePosition).applyQuaternion(delta).add(afterPosition);
+    const rotation = delta.clone().multiply(new THREE.Quaternion().fromArray(object.quaternion_xyzw)).normalize();
+    return { ...object, position: position.toArray(), quaternion_xyzw: rotation.toArray() };
+  });
 }
 
 export function objectsFromProject(project: { scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } }) {

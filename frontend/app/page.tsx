@@ -8,16 +8,16 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
-import { createSceneObject, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, withScenePlacement, type ObjectTransformMode, type SceneObject, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { createImportedSceneObject, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
-type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } };
+type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
-type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; keyframes: Keyframe[]; poseDirty: boolean };
+type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; objectGroups: SceneObjectGroup[]; keyframes: Keyframe[]; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
 const GRASP_GHOST_ID = '__grasp_keyframe_ghost__';
 const genericFrameNames = new Set(['stand', 'standing', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip', '서기', '서있기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세']);
@@ -73,6 +73,7 @@ export default function Editor() {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<RobotScene | null>(null);
   const file = useRef<HTMLInputElement>(null);
+  const assetFile = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<PoseState | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [modelId, setModelId] = useState('g1');
@@ -134,6 +135,8 @@ export default function Editor() {
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
   const [objects, setObjects] = useState<SceneObject[]>(() => objectsFromProject({}));
+  const [objectGroups, setObjectGroups] = useState<SceneObjectGroup[]>([]);
+  const [selectedObjectGroupId, setSelectedObjectGroupId] = useState<string | null>(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [objectTransformMode, setObjectTransformMode] = useState<ObjectTransformMode>('translate');
   const [preventObjectOverlap, setPreventObjectOverlap] = useState(true);
@@ -147,8 +150,8 @@ export default function Editor() {
   const [saveMenuOpen, setSaveMenuOpen] = useState(false);
   const [historyCount, setHistoryCount] = useState(0);
   const [futureCount, setFutureCount] = useState(0);
-  const current = useRef({ state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty, frameIndex });
-  current.current = { state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty, frameIndex };
+  const current = useRef({ state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, objectGroups, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty, frameIndex });
+  current.current = { state, project, pins, anglePins, mode, resistance, selected, members, transformMode, mirror, busy, playing, solving, objects, objectGroups, selectedObjectId, objectTransformMode, preventObjectOverlap, objectSurfaceSnap, objectGroundLock, poseDirty, frameIndex };
   const history = useRef<EditorSnapshot[]>([]);
   const future = useRef<EditorSnapshot[]>([]);
   const objectDragCheckpointed = useRef(false);
@@ -186,7 +189,7 @@ export default function Editor() {
   }
   function editorSnapshot(): EditorSnapshot | null {
     const value = current.current;
-    return value.state && value.project ? { qpos: [...value.state.qpos], pins: [...value.pins], anglePins: [...value.anglePins], objects: structuredClone(value.objects), keyframes: structuredClone(value.project.keyframes), poseDirty: value.poseDirty } : null;
+    return value.state && value.project ? { qpos: [...value.state.qpos], pins: [...value.pins], anglePins: [...value.anglePins], objects: structuredClone(value.objects), objectGroups: structuredClone(value.objectGroups), keyframes: structuredClone(value.project.keyframes), poseDirty: value.poseDirty } : null;
   }
   function checkpoint() {
     const snapshot = editorSnapshot();
@@ -197,8 +200,8 @@ export default function Editor() {
     setHistoryCount(history.current.length); setFutureCount(0);
   }
   function invalidate() { setPreview(null); setSample(0); setPlaying(false); }
-  function commitObjects(next: SceneObject[]) {
-    const grounded = next.map(groundedSceneObject);
+  function commitObjects(next: SceneObject[], ground = true) {
+    const grounded = ground ? next.map(groundedSceneObject) : next;
     current.current.objects = grounded;
     setObjects(grounded);
     const activeProject = current.current.project;
@@ -209,6 +212,17 @@ export default function Editor() {
     }
     invalidate();
     return grounded;
+  }
+  function commitObjectGroups(next: SceneObjectGroup[]) {
+    current.current.objectGroups = next;
+    setObjectGroups(next);
+    const activeProject = current.current.project;
+    if (activeProject) {
+      const nextProject = { ...activeProject, scene_groups: next };
+      current.current.project = nextProject;
+      setProject(nextProject);
+    }
+    invalidate();
   }
   function scheduleGraspFollow(object: SceneObject) {
     const c = current.current;
@@ -325,12 +339,58 @@ export default function Editor() {
     checkpoint();
     const added = ramenScene(`ramen-${Date.now()}`);
     commitObjects([...current.current.objects, ...added]);
+    const group = { ...createSceneObjectGroup(added, added.map(object => object.id), current.current.objectGroups.length + 1), name: '라면 상자 묶음' };
+    commitObjectGroups([...current.current.objectGroups, group]);
     selectObject(added[5].id);
   }
   function removeObject(id: string) {
     checkpoint();
     commitObjects(current.current.objects.filter(object => object.id !== id));
+    commitObjectGroups(current.current.objectGroups.map(group => ({ ...group, member_ids: group.member_ids.filter(member => member !== id) }))
+      .filter(group => group.member_ids.length >= 2));
     selectObject(null);
+  }
+  async function importSceneAsset(source: File) {
+    const extension = source.name.slice(source.name.lastIndexOf('.')).toLowerCase();
+    if (!['.blend', '.glb'].includes(extension)) throw new Error('.blend 또는 .glb 파일만 가져올 수 있습니다.');
+    const response = await fetch(`/api/scene-assets/import?filename=${encodeURIComponent(source.name)}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: source,
+    });
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({})) as { detail?: unknown };
+      throw new Error(typeof failure.detail === 'string' ? failure.detail : `3D 모델 가져오기 실패 (${response.status})`);
+    }
+    const imported = await response.json() as SceneAssetImport;
+    checkpoint();
+    const created = createImportedSceneObject(imported, current.current.objects.length + 1);
+    const placed = placeSceneObject(created, current.current.objects, scenePlacementOptions(created));
+    commitObjects([...current.current.objects, placed]);
+    selectObject(placed.id);
+    setMessage(`${source.name}을(를) 장면 모델로 가져왔습니다. ${extension === '.blend' ? '편집용 BLEND를 런타임 GLB로 변환했습니다.' : 'GLB를 그대로 등록했습니다.'}`);
+  }
+  function createObjectGroup(memberIds: string[], name: string) {
+    const available = memberIds.filter(id => current.current.objects.some(object => object.id === id)
+      && !current.current.objectGroups.some(group => group.member_ids.includes(id)));
+    if (available.length < 2) { setError('그룹에는 아직 다른 그룹에 속하지 않은 물체가 2개 이상 필요합니다.'); return; }
+    checkpoint();
+    const group = { ...createSceneObjectGroup(current.current.objects, available, current.current.objectGroups.length + 1), ...(name.trim() ? { name: name.trim() } : {}) };
+    commitObjects(current.current.objects.map(object => available.includes(object.id)
+      ? withScenePlacement(object, { preventOverlap: false, surfaceSnap: false, groundLock: false }) : object), false);
+    commitObjectGroups([...current.current.objectGroups, group]);
+    setSelectedObjectGroupId(group.id); selectObject(null); setError('');
+  }
+  function changeObjectGroup(id: string, patch: Partial<SceneObjectGroup>) {
+    const previous = current.current.objectGroups.find(group => group.id === id);
+    if (!previous) return;
+    checkpoint();
+    const next = { ...previous, ...patch };
+    const transformChanged = !!patch.position || !!patch.quaternion_xyzw;
+    if (transformChanged) commitObjects(transformSceneObjectGroup(current.current.objects, previous, next), false);
+    commitObjectGroups(current.current.objectGroups.map(group => group.id === id ? next : group));
+  }
+  function removeObjectGroup(id: string) {
+    checkpoint(); commitObjectGroups(current.current.objectGroups.filter(group => group.id !== id));
+    setSelectedObjectGroupId(null);
   }
   function changeObjectPlacement(patch: Partial<ScenePlacementOptions>) {
     const id = current.current.selectedObjectId;
@@ -540,6 +600,8 @@ export default function Editor() {
       const nextObjects = objectsFromProject(nextProject);
       nextProject = withLegacyGraspGhosts({ ...nextProject, scene_objects: nextObjects }, nextObjects);
       setObjects(nextObjects); current.current.objects = nextObjects;
+      const nextObjectGroups = nextProject.scene_groups ?? [];
+      setObjectGroups(nextObjectGroups); current.current.objectGroups = nextObjectGroups;
       setProject(nextProject); current.current.project = nextProject;
       setPins(initialPins); current.current.pins = initialPins;
       setAnglePins(initialAnglePins); current.current.anglePins = initialAnglePins;
@@ -585,11 +647,11 @@ export default function Editor() {
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
-      try { localStorage.setItem(draftKey.current, JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects })); }
+      try { localStorage.setItem(draftKey.current, JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups })); }
       catch { setMessage('브라우저 자동 저장 공간이 부족합니다. 파일 저장을 사용하세요.'); }
     }, 500);
     return () => clearTimeout(timer);
-  }, [project, state, pins, anglePins, objects, playing, preview]);
+  }, [project, state, pins, anglePins, objects, objectGroups, playing, preview]);
   useEffect(() => {
     if (!playing || !preview) return;
     const start = performance.now() - preview.time[sample] * 1000;
@@ -629,6 +691,8 @@ export default function Editor() {
     const normalized = withLegacyGraspGhosts({ ...valid, scene_objects: nextObjects }, nextObjects);
     setProject(normalized); current.current.project = normalized; setFrameIndex(0);
     setObjects(nextObjects); current.current.objects = nextObjects; selectObject(null);
+    const nextObjectGroups = normalized.scene_groups ?? [];
+    setObjectGroups(nextObjectGroups); current.current.objectGroups = nextObjectGroups; setSelectedObjectGroupId(null);
     setPins(valid.pins ?? valid.keyframes[0].pins);
     setAnglePins(valid.angle_pins ?? valid.keyframes[0].angle_pins ?? []);
     applyState(pose); invalidate(); setPoseDirty(false); setInfo(null);
@@ -726,10 +790,12 @@ export default function Editor() {
       from.pop();
       to.push(currentSnapshot);
       const restoredObjects = structuredClone(value.objects);
+      const restoredGroups = structuredClone(value.objectGroups);
       applyState(restored); current.current.pins = [...value.pins]; setPins([...value.pins]);
       current.current.anglePins = [...value.anglePins]; setAnglePins([...value.anglePins]); setInfo(null);
       current.current.objects = restoredObjects; setObjects(restoredObjects);
-      setProject(projectValue => projectValue ? { ...projectValue, scene_objects: restoredObjects, keyframes: structuredClone(value.keyframes) } : projectValue);
+      current.current.objectGroups = restoredGroups; setObjectGroups(restoredGroups);
+      setProject(projectValue => projectValue ? { ...projectValue, scene_objects: restoredObjects, scene_groups: restoredGroups, keyframes: structuredClone(value.keyframes) } : projectValue);
       if (current.current.selectedObjectId) {
         selectObject(restoredObjects.some(object => object.id === current.current.selectedObjectId)
           ? current.current.selectedObjectId : null);
@@ -767,7 +833,7 @@ export default function Editor() {
     if (!project || !state) return;
     void run(async () => {
       const result = await api<{ files: string[]; directory: string; project: Project; display_name: string; reused: boolean; warnings?: string[]; metadata: { samples: number; validation: { max_pin_error_mm: number } } }>(saveAs ? 'save-as' : 'save', {
-        project: { ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects }, fps, protomotions: exportProto,
+        project: { ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups }, fps, protomotions: exportProto,
       });
       setProject(result.project); current.current.project = result.project;
       setFiles(result.files); setSaved(await api<string[]>('saved'));
@@ -881,6 +947,7 @@ export default function Editor() {
       <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="비워 두면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onChange={e => setProject({ ...project, name: e.target.value, name_mode: e.target.value.trim() ? 'manual' : 'auto' })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
       <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button></div>}</div></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
+      <input ref={assetFile} type="file" accept=".blend,.glb" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => importSceneAsset(source)); e.target.value = ''; }}/>
     </header>
     <aside className="left-panel panel">
       <div className="panel-heading"><span>BODY GROUPS</span><small>29자유도</small></div>
@@ -992,7 +1059,9 @@ export default function Editor() {
       </>}
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>
       <div className="section-divider"/>
-      <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock} onSelect={selectObject} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}/>
+      <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock}
+        groups={objectGroups} selectedGroupId={selectedObjectGroupId} onSelect={id => { setSelectedObjectGroupId(null); selectObject(id); }} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}
+        onImport={() => assetFile.current?.click()} onCreateGroup={createObjectGroup} onSelectGroup={id => { setSelectedObjectGroupId(id); if (id) selectObject(null); }} onChangeGroup={changeObjectGroup} onRemoveGroup={removeObjectGroup}/>
       <button className="wide" disabled={disabled} onClick={addRamenScene}>라면용기 4열 × 3층 + 열린 상자 생성</button>
       <p className="hint">원기둥은 겹친 용기 묶음 1개를 나타냅니다. 생성 후 크기·질량·위치를 편집할 수 있습니다. 상자의 다섯 면은 물리 시뮬레이션에서 고정됩니다.</p>
       <div className="section-divider"/>
