@@ -105,7 +105,9 @@ class RamenSequenceSettings(BaseModel):
     model_config = {'extra': 'forbid'}
     approach_clearance_m: float = Field(.08, ge=.01, le=.30)
     lift_height_m: float = Field(.18, ge=.02, le=.60)
-    carry_offset_m: list[float] = Field(default_factory=lambda: [-.20, 0., 0.], min_length=3, max_length=3)
+    extraction_distance_m: float = Field(.20, ge=.02, le=.80)
+    extraction_cycles: int = Field(3, ge=2, le=6)
+    carry_tilt_deg: float = Field(18., ge=0., le=45.)
     phase_seconds: float = Field(2., ge=.2, le=10.)
     insertion_seconds: float = Field(3., ge=.2, le=15.)
     hold_seconds: float = Field(1., ge=.1, le=10.)

@@ -771,7 +771,7 @@ export default function Editor() {
     const object = objects.find(value => value.id === objectId);
     if (!object) return;
     await run(async () => {
-      const result = await api<{ keyframes: Keyframe[]; diagnostics: { target_error_mm: number; angle_error_deg: number }[] }>('ramen-sequence', {
+      const result = await api<{ keyframes: Keyframe[]; diagnostics: { target_error_mm: number; angle_error_deg: number }[]; object_reference: { center_world: number[]; diameter_m: number } }>('ramen-sequence', {
         qpos: state.qpos, pins, angle_pins: anglePins, object, settings,
       });
       const retained = project.keyframes.filter(frame => frame.interaction?.task !== 'ramen_extract');
@@ -786,7 +786,8 @@ export default function Editor() {
       setFrameIndex(firstIndex); setPoseDirty(false); setInfo(null); invalidate();
       const maxPosition = Math.max(...result.diagnostics.map(value => value.target_error_mm));
       const maxAngle = Math.max(...result.diagnostics.map(value => value.angle_error_deg));
-      setMessage(`${object.name} 기준 라면 꺼내기 7단계를 생성했습니다 · TCP 오차 최대 ${maxPosition.toFixed(1)} mm / ${maxAngle.toFixed(1)}°`);
+      const center = result.object_reference.center_world.map(value => value.toFixed(3)).join(', ');
+      setMessage(`${object.name} 중심 (${center}) 기준 ${result.keyframes.length}단계를 생성했습니다 · 지름 ${(result.object_reference.diameter_m * 1000).toFixed(0)} mm · TCP 오차 최대 ${maxPosition.toFixed(1)} mm / ${maxAngle.toFixed(1)}°`);
     });
   }
   function addFrame() {

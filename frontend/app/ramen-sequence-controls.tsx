@@ -6,7 +6,9 @@ import type { SceneObject } from '../lib/scene-objects';
 export type RamenSequenceSettings = {
   approach_clearance_m: number;
   lift_height_m: number;
-  carry_offset_m: number[];
+  extraction_distance_m: number;
+  extraction_cycles: number;
+  carry_tilt_deg: number;
   phase_seconds: number;
   insertion_seconds: number;
   hold_seconds: number;
@@ -22,7 +24,9 @@ export type RamenSequenceSettings = {
 const defaults: RamenSequenceSettings = {
   approach_clearance_m: .08,
   lift_height_m: .18,
-  carry_offset_m: [-.20, 0, 0],
+  extraction_distance_m: .20,
+  extraction_cycles: 3,
+  carry_tilt_deg: 18,
   phase_seconds: 2,
   insertion_seconds: 3,
   hold_seconds: 1,
@@ -48,9 +52,14 @@ type Props = {
 
 export default function RamenSequenceControls(props: Props) {
   const [settings, setSettings] = useState<RamenSequenceSettings>(() => structuredClone(defaults));
-  const candidates = props.objects.filter(object => object.visible && !object.fixed);
+  const candidates = props.objects.filter(object => object.visible && !object.fixed
+    && (object.shape === 'cylinder' || object.collision_shape === 'cylinder'));
   const targetId = candidates.some(object => object.id === props.selectedObjectId)
     ? props.selectedObjectId! : candidates[0]?.id ?? '';
+  const target = candidates.find(object => object.id === targetId);
+  const targetSize = target?.collision_shape === 'cylinder' && target.collision_size?.length === 3
+    ? target.collision_size : target?.size;
+  const targetDiameter = targetSize ? Math.max(targetSize[0], targetSize[1]) : 0;
   const sequence = props.keyframes.map((frame, index) => ({ frame, index }))
     .filter(value => value.frame.interaction?.task === 'ramen_extract');
   const updateNumber = (key: keyof RamenSequenceSettings, value: number) => {
@@ -59,17 +68,19 @@ export default function RamenSequenceControls(props: Props) {
   };
   return <section className="ramen-sequence-controls">
     <div className="panel-heading"><span>라면 꺼내기</span><small>물체 상대 TCP</small></div>
-    <p className="hint">먼저 왼 주걱과 오른 받침 TCP를 라면 묶음을 안정적으로 지지할 최종 삽입 위치·각도로 맞추세요. 현재 자세가 삽입 완료 기준으로 저장됩니다.</p>
+    <p className="hint">대상 중심·충돌 지름·회전으로 양쪽 파지점과 상자 기울기를 계산합니다. 현재 TCP는 각 도구의 장착 방향을 판별하는 기준으로만 사용하며, 생성 경로는 G1 기본자세에서 시작합니다.</p>
     <div className="inspector-label">대상 라면 묶음</div>
     <select aria-label="라면 꺼내기 대상" value={targetId} disabled={props.disabled || !candidates.length} onChange={event => props.onTargetChange(event.target.value)}>
       {!candidates.length && <option value="">움직일 수 있는 오브젝트 없음</option>}
       {candidates.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}
     </select>
+    {target && <p className="ramen-object-reference">물체 중심 <b>X {target.position[0].toFixed(3)} · Y {target.position[1].toFixed(3)} · Z {target.position[2].toFixed(3)} m</b><br/>충돌 지름 <b>{(targetDiameter * 1000).toFixed(0)} mm</b> · 현재 회전을 상자 기울기로 사용</p>}
     <div className="ramen-sequence-grid">
-      <label>접근 거리 <span><input type="number" min="10" max="300" defaultValue={settings.approach_clearance_m * 1000} disabled={props.disabled} onChange={event => updateNumber('approach_clearance_m', +event.target.value / 1000)}/> mm</span></label>
-      <label>인양 높이 <span><input type="number" min="20" max="600" defaultValue={settings.lift_height_m * 1000} disabled={props.disabled} onChange={event => updateNumber('lift_height_m', +event.target.value / 1000)}/> mm</span></label>
-      <label>꺼내기 X <span><input type="number" min="-1000" max="1000" defaultValue={settings.carry_offset_m[0] * 1000} disabled={props.disabled} onChange={event => { const value = +event.target.value / 1000; if (Number.isFinite(value)) setSettings(current => ({ ...current, carry_offset_m: [value, current.carry_offset_m[1], current.carry_offset_m[2]] })); }}/> mm</span></label>
-      <label>꺼내기 Y <span><input type="number" min="-1000" max="1000" defaultValue={settings.carry_offset_m[1] * 1000} disabled={props.disabled} onChange={event => { const value = +event.target.value / 1000; if (Number.isFinite(value)) setSettings(current => ({ ...current, carry_offset_m: [current.carry_offset_m[0], value, current.carry_offset_m[2]] })); }}/> mm</span></label>
+      <label>삽입 시작 높이 <span><input type="number" min="10" max="300" defaultValue={settings.approach_clearance_m * 1000} disabled={props.disabled} onChange={event => updateNumber('approach_clearance_m', +event.target.value / 1000)}/> mm</span></label>
+      <label>총 인양 높이 <span><input type="number" min="20" max="600" defaultValue={settings.lift_height_m * 1000} disabled={props.disabled} onChange={event => updateNumber('lift_height_m', +event.target.value / 1000)}/> mm</span></label>
+      <label>몸쪽 꺼내기 <span><input type="number" min="20" max="800" defaultValue={settings.extraction_distance_m * 1000} disabled={props.disabled} onChange={event => updateNumber('extraction_distance_m', +event.target.value / 1000)}/> mm</span></label>
+      <label>반복 횟수 <span><input type="number" min="2" max="6" step="1" defaultValue={settings.extraction_cycles} disabled={props.disabled} onChange={event => updateNumber('extraction_cycles', Math.round(+event.target.value))}/> 회</span></label>
+      <label>운반 기울기 <span><input type="number" min="0" max="45" step="1" defaultValue={settings.carry_tilt_deg} disabled={props.disabled} onChange={event => updateNumber('carry_tilt_deg', +event.target.value)}/> °</span></label>
       <label>삽입 시간 <span><input type="number" min=".2" max="15" step=".1" defaultValue={settings.insertion_seconds} disabled={props.disabled} onChange={event => updateNumber('insertion_seconds', +event.target.value)}/> s</span></label>
       <label>힘 상한 <span><input type="number" min="1" max="200" step="1" defaultValue={settings.force_limit_n} disabled={props.disabled} onChange={event => updateNumber('force_limit_n', +event.target.value)}/> N</span></label>
     </div>
@@ -83,7 +94,7 @@ export default function RamenSequenceControls(props: Props) {
       </div>
     </details>
     <button className="wide primary" disabled={props.disabled || !targetId} onClick={() => props.onGenerate(targetId, structuredClone(settings))}><Route size={15}/>현재 TCP로 시퀀스 생성</button>
-    {!sequence.length ? <p className="hint"><Crosshair size={13}/> 생성하면 접근 → 왼 주걱 삽입 → 오른 받침 삽입 → 지지 → 인양 → 꺼내기 단계가 키프레임에 추가됩니다.</p> : <>
+    {!sequence.length ? <p className="hint"><Crosshair size={13}/> 기본자세에서 시작해 물체 중심 위 정렬 → 양쪽 수직 삽입 → 접촉 확인 → 각도 완화·소폭 인양·몸쪽 꺼내기 반복 → 운반자세가 생성됩니다. 삽입·인양 거리는 물체 지름 이상으로 자동 보정됩니다.</p> : <>
       <div className="ramen-sequence-steps">{sequence.map(({ frame, index }, order) => <button key={index} disabled={props.disabled} onClick={() => props.onSelectFrame(index)}><span>{order + 1}</span>{frame.name}</button>)}</div>
       <button className="wide" disabled={props.disabled} onClick={() => props.onRun(sequence[0].index)}><Play size={15}/>이 시퀀스 물리 실행</button>
       <p className="ramen-safety-note"><ShieldCheck size={14}/> 힘 상한이 10 ms 이상 계속되면 물리 실행을 중단합니다.</p>

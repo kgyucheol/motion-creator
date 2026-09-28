@@ -28,6 +28,15 @@ export type ToolInteraction = {
   mode: 'pose' | 'insertion' | 'hold' | 'carry';
   tcp_targets: Record<'left' | 'right', { position: number[]; quaternion_xyzw: number[] }>;
   insertion_axes_world: Record<'left' | 'right', number[]>;
+  object_reference?: {
+    center_world: number[];
+    bundle_axis_world: number[];
+    box_up_world: number[];
+    side_axis_world: number[];
+    bodyward_world: number[];
+    diameter_m: number;
+    length_m: number;
+  };
   control: {
     lateral_stiffness_n_per_m: number;
     insertion_stiffness_n_per_m: number;

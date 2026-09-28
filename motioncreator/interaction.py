@@ -29,6 +29,18 @@ def validate_interaction(value, object_ids=()):
             raise ValueError('Interaction TCP orientation is invalid')
         if axis.shape != (3,) or not np.isfinite(axis).all() or abs(np.linalg.norm(axis) - 1) > 1e-4:
             raise ValueError('Interaction insertion axis is invalid')
+    reference = value.get('object_reference')
+    if reference is not None:
+        for key in ('center_world', 'bundle_axis_world', 'box_up_world', 'side_axis_world', 'bodyward_world'):
+            vector = np.asarray(reference.get(key), dtype=float)
+            if vector.shape != (3,) or not np.isfinite(vector).all():
+                raise ValueError(f'Interaction object reference {key} is invalid')
+            if key != 'center_world' and abs(np.linalg.norm(vector) - 1) > 1e-4:
+                raise ValueError(f'Interaction object reference {key} must be normalized')
+        for key in ('diameter_m', 'length_m'):
+            number = reference.get(key)
+            if not isinstance(number, (int, float)) or isinstance(number, bool) or not np.isfinite(number) or not 0 < number <= 5:
+                raise ValueError(f'Interaction object reference {key} is invalid')
     control = value.get('control')
     required = {
         'lateral_stiffness_n_per_m': (0., 3000.),
