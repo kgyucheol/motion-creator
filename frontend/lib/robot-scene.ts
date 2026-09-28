@@ -91,6 +91,8 @@ export class RobotScene {
   pointer = new THREE.Vector2();
   box: THREE.Mesh;
   sceneObjects: Record<string, THREE.Object3D> = {};
+  collisionProxies: Record<string, THREE.Object3D> = {};
+  collisionProxiesVisible = false;
   sceneAssetLoads = new Map<string, Promise<THREE.Object3D>>();
   selectedSceneObject: string | null = null;
   objectTransformMode: ObjectTransformMode = 'translate';
@@ -566,6 +568,21 @@ export class RobotScene {
       });
     });
   }
+  private styleCollisionProxy(root: THREE.Object3D, object: SceneObject) {
+    root.traverse(node => {
+      if (!(node instanceof THREE.Mesh)) return;
+      const materials = (Array.isArray(node.material) ? node.material : [node.material]) as THREE.MeshStandardMaterial[];
+      materials.forEach(material => {
+        material.color.set(object.shape === 'open_box' ? '#ffb45f' : '#55d9ff');
+        material.emissive.set(object.shape === 'open_box' ? '#4f2508' : '#07394d');
+        material.emissiveIntensity = .45;
+        material.transparent = true;
+        material.opacity = .72;
+        material.depthWrite = false;
+        material.wireframe = true;
+      });
+    });
+  }
   private primitiveSceneObject(object: SceneObject) {
     const root = new THREE.Group();
     const material = () => new THREE.MeshStandardMaterial({ roughness: .82, metalness: .04 });
@@ -638,6 +655,11 @@ export class RobotScene {
       this.scene.remove(mesh);
       this.disposeSceneObject(mesh);
       delete this.sceneObjects[id];
+      const proxy = this.collisionProxies[id];
+      if (proxy) {
+        this.scene.remove(proxy); this.disposeSceneObject(proxy);
+        delete this.collisionProxies[id];
+      }
     }
     for (const object of objects) {
       let mesh = this.sceneObjects[object.id];
@@ -656,15 +678,38 @@ export class RobotScene {
         this.installSceneAsset(object, mesh);
       }
       mesh.userData.graspGhost = !!object.ghost;
+      mesh.userData.objectVisible = object.visible;
       mesh.position.fromArray(object.position);
       mesh.quaternion.fromArray(object.quaternion_xyzw);
       mesh.scale.fromArray(normalizedObjectSize(object.shape, object.size));
-      mesh.visible = object.visible;
+      mesh.visible = object.visible && !this.collisionProxiesVisible;
       this.styleSceneObject(mesh, object);
+      let proxy = this.collisionProxies[object.id];
+      if (!proxy || proxy.userData.shape !== object.shape) {
+        if (proxy) { this.scene.remove(proxy); this.disposeSceneObject(proxy); }
+        proxy = this.primitiveSceneObject(object);
+        proxy.userData.shape = object.shape;
+        this.collisionProxies[object.id] = proxy;
+        this.scene.add(proxy);
+        this.styleCollisionProxy(proxy, object);
+      }
+      proxy.userData.objectVisible = object.visible;
+      proxy.position.copy(mesh.position); proxy.quaternion.copy(mesh.quaternion); proxy.scale.copy(mesh.scale);
+      proxy.visible = object.visible && this.collisionProxiesVisible;
     }
     if (this.selectedSceneObject && !incoming.has(this.selectedSceneObject)) this.selectedSceneObject = null;
     if (this.selectedSceneObject) this.selectSceneObject(this.selectedSceneObject, this.objectTransformMode);
     this.refreshGripMarkers();
+    this.dirty = true;
+  }
+  setCollisionProxiesVisible(visible: boolean) {
+    this.collisionProxiesVisible = visible;
+    Object.values(this.sceneObjects).forEach(object => {
+      object.visible = !!object.userData.objectVisible && !visible;
+    });
+    Object.values(this.collisionProxies).forEach(proxy => {
+      proxy.visible = !!proxy.userData.objectVisible && visible;
+    });
     this.dirty = true;
   }
   setSurfacePickMode(enabled: boolean) {
@@ -720,6 +765,8 @@ export class RobotScene {
     Object.entries(poses).forEach(([id, pose]) => {
       const object = this.sceneObjects[id];
       if (object) { object.position.fromArray(pose.position); object.quaternion.fromArray(pose.quaternion_xyzw); }
+      const proxy = this.collisionProxies[id];
+      if (proxy) { proxy.position.fromArray(pose.position); proxy.quaternion.fromArray(pose.quaternion_xyzw); }
     });
     this.dirty = true;
   }

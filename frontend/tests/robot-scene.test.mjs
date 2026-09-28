@@ -123,6 +123,24 @@ test('Delete removes a selected scene object but does not target robot controls'
   assert.equal(deleted, null);
 });
 
+test('collision-only mode shows a five-panel open box and hides visual assets', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  const object = { id: 'carton', name: 'Carton', shape: 'open_box', position: [0, 0, .2],
+    quaternion_xyzw: [0, 0, 0, 1], size: [.72, .55, .4], wall_thickness_m: .02,
+    mass_kg: 2, friction: .7, color: '#9b6b3c', opacity: 1, visible: true };
+  const visual = new THREE.Group(); visual.userData.objectVisible = true;
+  const proxy = viewer.primitiveSceneObject(object); proxy.userData.objectVisible = true;
+  viewer.styleCollisionProxy(proxy, object);
+  viewer.sceneObjects = { carton: visual }; viewer.collisionProxies = { carton: proxy }; viewer.dirty = false;
+
+  viewer.setCollisionProxiesVisible(true);
+
+  assert.equal(visual.visible, false); assert.equal(proxy.visible, true);
+  assert.equal(proxy.children.length, 5);
+  assert.ok(proxy.children.every(mesh => mesh.material.wireframe));
+  assert.equal(viewer.dirty, true);
+});
+
 function fixture() {
   const viewer = Object.create(RobotScene.prototype);
   viewer.state = { handles: { left_hand: { position: [.3, .2, .8] }, right_hand: { position: [.3, -.2, .8] } } };

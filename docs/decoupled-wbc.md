@@ -10,6 +10,9 @@ reference with NVIDIA's decoupled whole-body controller.
   changes body height and `Z` clears all teleoperation commands.
 - Play starts both simulation and recording. Stop pauses and clears locomotion
   velocity. Reset restores the initial simulation and clears the recording.
+- `오브젝트 콜리전` hides imported scene meshes and shows the exact primitive
+  proxies used by WBC physics: one oriented box per ramen bundle and five box
+  panels for an open carton.
 - Saved recordings contain `motion.npz`, `motion.csv`, `commands.csv`, and
   `metadata.json` under `motions/Decoupled_WBC_*`.
 

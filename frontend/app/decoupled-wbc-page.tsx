@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, ArrowLeft, Download, Eye, EyeOff, FolderOpen, Play, RotateCcw, Save, Square } from 'lucide-react';
+import { Activity, ArrowLeft, Boxes, Download, Eye, EyeOff, FolderOpen, Play, RotateCcw, Save, Square } from 'lucide-react';
 import { RobotScene, type PoseState } from '../lib/robot-scene';
 import type { SceneObject, SceneObjectPose } from '../lib/scene-objects';
 
@@ -65,6 +65,7 @@ export default function DecoupledWbcPage() {
   const [error, setError] = useState('');
   const [result, setResult] = useState<SaveResult | null>(null);
   const [showReference, setShowReference] = useState(true);
+  const [showCollisions, setShowCollisions] = useState(false);
 
   const renderSnapshot = useCallback((next: Snapshot) => {
     controlMode.current = next.control_mode;
@@ -110,6 +111,7 @@ export default function DecoupledWbcPage() {
   }, []);
 
   useEffect(() => { scene.current?.setReferenceVisible(showReference); }, [showReference]);
+  useEffect(() => { scene.current?.setCollisionProxiesVisible(showCollisions); }, [showCollisions]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -255,6 +257,10 @@ export default function DecoupledWbcPage() {
         <button type="button" className="wbc-reference-toggle" aria-pressed={showReference}
           onClick={() => setShowReference(value => !value)} title="편집기에서 컴파일된 원본 모션을 반투명하게 겹쳐 표시합니다.">
           {showReference ? <Eye size={13}/> : <EyeOff size={13}/>} 편집기 기준
+        </button>
+        <button type="button" className="wbc-reference-toggle" aria-pressed={showCollisions}
+          onClick={() => setShowCollisions(value => !value)} title="장면 오브젝트의 GLB 외형을 숨기고 WBC가 사용하는 물리 충돌체만 표시합니다.">
+          <Boxes size={13}/> 오브젝트 콜리전
         </button>
       </div>
       <div className="wbc-hud">
