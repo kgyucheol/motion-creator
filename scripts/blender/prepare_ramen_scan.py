@@ -5,6 +5,7 @@ Run with Blender, for example:
     blender --background --python scripts/blender/prepare_ramen_scan.py -- \
         --source assets/ramen_scan/source/3DModel.obj \
         --output assets/ramen_scan/ramen_container_scan.blend \
+        --target-diameter 0.14 \
         --report assets/ramen_scan/ramen_container_scan_report.json
 """
 
@@ -23,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--target-diameter", type=float, default=0.14)
     parser.add_argument("--report", type=Path, required=True)
     return parser.parse_args(sys.argv[sys.argv.index("--") + 1 :])
 
@@ -93,6 +95,18 @@ def clean_normals(obj: bpy.types.Object) -> None:
         polygon.use_smooth = True
 
 
+def scale_uniformly_to_diameter(obj: bpy.types.Object, target_diameter: float) -> float:
+    lower, upper = world_bounds(obj)
+    current = upper - lower
+    mean_horizontal_diameter = (current.x + current.y) / 2
+    factor = target_diameter / mean_horizontal_diameter
+    obj.scale = (factor, factor, factor)
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+    return factor
+
+
 def main() -> None:
     args = parse_args()
     for path in (args.output, args.report):
@@ -102,10 +116,14 @@ def main() -> None:
     meshes = import_scan(args.source.resolve())
     scan = join_meshes(meshes)
     lower, upper = put_pivot_at_ground_center(scan)
+    source_dimensions = upper - lower
+    applied_uniform_scale = scale_uniformly_to_diameter(scan, args.target_diameter)
+    lower, upper = world_bounds(scan)
     dimensions = upper - lower
     clean_normals(scan)
     scan["asset_role"] = "motion_validation_prop"
     scan["source_scan"] = str(args.source.resolve())
+    scan["scaling_priority"] = "0.14m_x_0.14m_cross_section"
 
     scene = bpy.context.scene
     scene.unit_settings.system = "METRIC"
@@ -134,6 +152,10 @@ def main() -> None:
         "polygons": source_polygons,
         "uv_layers": uv_layers,
         "materials": material_names,
+        "source_dimensions": [round(value, 6) for value in source_dimensions],
+        "target_mean_horizontal_diameter": round(args.target_diameter, 6),
+        "scaling_priority": "x_y_cross_section",
+        "applied_uniform_scale": round(applied_uniform_scale, 6),
         "bounds_min": [round(value, 6) for value in lower],
         "bounds_max": [round(value, 6) for value in upper],
         "dimensions": [round(value, 6) for value in dimensions],
