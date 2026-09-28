@@ -710,6 +710,13 @@ export class RobotScene {
       mesh.visible = object.visible && !this.collisionProxiesVisible;
       this.styleSceneObject(mesh, object);
       let proxy = this.collisionProxies[object.id];
+      if (object.ghost) {
+        if (proxy) {
+          this.scene.remove(proxy); this.disposeSceneObject(proxy);
+          delete this.collisionProxies[object.id];
+        }
+        continue;
+      }
       const proxyShape = object.collision_shape ?? object.shape;
       const proxySize = object.collision_size ?? object.size;
       const proxySignature = JSON.stringify([proxyShape, proxySize, object.collision_quaternion_xyzw,

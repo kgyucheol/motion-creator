@@ -5,7 +5,7 @@ import { ramenScene } from '../lib/ramen-scene';
 import GraspControls, { type GraspPickMode } from './grasp-controls';
 import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
-import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle } from 'lucide-react';
+import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
 import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
@@ -134,6 +134,7 @@ export default function Editor() {
   const [fps, setFps] = useState(30);
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
+  const [showCollisions, setShowCollisions] = useState(false);
   const [objects, setObjects] = useState<SceneObject[]>(() => objectsFromProject({}));
   const [objectGroups, setObjectGroups] = useState<SceneObjectGroup[]>([]);
   const [selectedObjectGroupId, setSelectedObjectGroupId] = useState<string | null>(null);
@@ -639,6 +640,7 @@ export default function Editor() {
   }, [transformMode, space, mirror]);
   useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !preview?.physics); scene.current.keyboardEnabled = !preview?.physics; } }, [busy, playing, preview]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
+  useEffect(() => { scene.current?.setCollisionProxiesVisible(showCollisions); }, [showCollisions]);
   useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
   useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
   useEffect(() => {
@@ -1002,7 +1004,7 @@ export default function Editor() {
     </aside>
     <main className="viewport">
       <div ref={host} className="canvas-host"/>
-      <div className="viewport-top"><div className="view-title"><span className="status-dot"/>POSE WORKSPACE<span>m · rad · Z-up</span></div><div className="view-buttons">{(['perspective', 'front', 'side'] as const).map((v, i) => <button key={v} onClick={() => scene.current?.setView(v)}>{['자유', '정면', '측면'][i]}</button>)}</div></div>
+      <div className="viewport-top"><div className="view-title"><span className="status-dot"/>POSE WORKSPACE<span>m · rad · Z-up</span></div><div className="view-buttons"><button className={showCollisions ? 'chosen' : ''} aria-pressed={showCollisions} title="원본 메시를 숨기고 Physics/WBC에서 사용하는 오브젝트 충돌체만 표시합니다." onClick={() => setShowCollisions(value => !value)}><Boxes size={13}/>콜리전</button>{(['perspective', 'front', 'side'] as const).map((v, i) => <button key={v} onClick={() => scene.current?.setView(v)}>{['자유', '정면', '측면'][i]}</button>)}</div></div>
       <div className={`simulation-status ${physicsEnabled ? 'enabled' : ''}`}>
         <span>Physics <b data-active={physicsEnabled}>{physicsEnabled ? 'ON' : 'OFF'}</b></span>
         <span>GEAR-SONIC <b data-active={policyEnabled}>{policyEnabled ? 'ON' : 'OFF'}</b></span>
