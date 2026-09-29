@@ -30,6 +30,8 @@ type Props = {
   graspCoefficients: RamenGraspCoefficients;
   onGraspCoefficientsChange: (side: 'left' | 'right', field: keyof GraspPointCoefficients, value: number) => void;
   onResetGraspCoefficients: () => void;
+  onApplyGraspPreview: () => void;
+  canApplyGraspPreview: boolean;
   onToggleGraspPreview: (id: string) => void;
 };
 
@@ -129,6 +131,7 @@ export default function SceneObjectControls(props: Props) {
             <div className="candidate-grasp-fields">{([['lateral', '좌우 거리'], ['clearance', '앞쪽 여유'], ['height', '높이 보정'], ['roll', 'Roll'], ['pitch', 'Pitch'], ['yaw', 'Yaw']] as const).map(([field, label]) => <label key={field}>{label}<span><NumericInput aria-label={`${side === 'left' ? '왼손' : '오른손'} ${label}`}  step={['roll', 'pitch', 'yaw'].includes(field) ? '1' : '0.01'} min={field === 'height' || ['roll', 'pitch', 'yaw'].includes(field) ? undefined : '0'} value={props.graspCoefficients[side][field]} disabled={props.disabled} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && (['roll', 'pitch', 'yaw', 'height'].includes(field) || value >= 0)) props.onGraspCoefficientsChange(side, field, value); }}/><small>{['roll', 'pitch', 'yaw'].includes(field) ? '°' : 'm'}</small></span></label>)}</div>
             <code>XYZ: {props.graspPreview?.[side].map(value => value.toFixed(3)).join(', ')} m</code>
           </div>)}
+          <button type="button" className="wide primary" disabled={props.disabled || !props.canApplyGraspPreview} onClick={props.onApplyGraspPreview}>양손 TCP를 파지점에 적용 · 선택 키프레임</button>
           <button type="button" className="wide" disabled={props.disabled} onClick={props.onResetGraspCoefficients}>기본값 복원 · 좌우 0.25 m, 앞쪽 0.10 m</button>
         </>}
       </div>}

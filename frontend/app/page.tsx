@@ -694,6 +694,31 @@ export default function Editor() {
       ? candidateRamenGraspPoints(object, pelvis.position, pelvis.quaternion, graspCoefficients) : null;
   }, [graspPreviewId, selectedObjectId, objects, state, playing, preview?.physics, graspCoefficients]);
   useEffect(() => { scene.current?.setCandidateGraspMarkers(graspPreview); }, [graspPreview]);
+  function applyCandidateGraspToFrame() {
+    const frame = project?.keyframes[frameIndex];
+    if (!frame || !graspPreview || !selectedObjectId || busy || solving || playing || preview?.physics || frame.samples) return;
+    const target = structuredClone(graspPreview);
+    const selectedFrameIndex = frameIndex;
+    void run(async () => {
+      const result = await api<{ state: PoseState; solver: SolveInfo }>('solve-group', {
+        qpos: frame.qpos, anchor: frame.qpos,
+        targets: { left_hand: target.left, right_hand: target.right },
+        orientations: { left_hand: target.orientation.left, right_hand: target.orientation.right },
+        pins: frame.pins, angle_pins: frame.angle_pins ?? [], mode, resistance,
+      });
+      if (!alive.current || current.current.frameIndex !== selectedFrameIndex) return;
+      setInfo(result.solver);
+      if (!result.solver.converged || result.solver.rejected) {
+        throw new Error(`양손 TCP가 파지점에 도달하지 못했습니다 · 위치 ${result.solver.target_error_mm.toFixed(1)} mm / 방향 ${(result.solver.angle_error_deg ?? 0).toFixed(1)}°. 키프레임은 변경하지 않았습니다.`);
+      }
+      checkpoint();
+      applyState(result.state);
+      setPins([...frame.pins]); setAnglePins([...(frame.angle_pins ?? [])]);
+      editFrame(selectedFrameIndex, { qpos: [...result.state.qpos] });
+      setPoseDirty(false);
+      setMessage(`선택 키프레임의 양손 TCP를 파지점에 적용했습니다 · 위치 ${result.solver.target_error_mm.toFixed(1)} mm / 방향 ${(result.solver.angle_error_deg ?? 0).toFixed(1)}°`);
+    });
+  }
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
@@ -1193,6 +1218,7 @@ export default function Editor() {
       <div className="section-divider"/>
       <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock}
         graspPreview={graspPreview} graspCoefficients={graspCoefficients}
+        canApplyGraspPreview={!!activeFrame && !motionClip} onApplyGraspPreview={applyCandidateGraspToFrame}
         onGraspCoefficientsChange={(side, field, value) => setGraspCoefficients(current => ({ ...current, [side]: { ...current[side], [field]: value } }))}
         onResetGraspCoefficients={() => setGraspCoefficients(DEFAULT_RAMEN_GRASP_COEFFICIENTS)}
         onToggleGraspPreview={id => setGraspPreviewId(current => current === id ? null : id)}
