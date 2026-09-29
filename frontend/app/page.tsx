@@ -23,6 +23,8 @@ type GroupPreset = { id: string; name: string; members: string[] };
 type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; objectGroups: SceneObjectGroup[]; keyframes: Keyframe[]; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
 const GRASP_GHOST_ID = '__grasp_keyframe_ghost__';
+// Keep the experimental planner available in code while users author each phase manually.
+const SHOW_AUTOMATIC_RAMEN_SEQUENCE = false;
 const genericFrameNames = new Set(['stand', 'standing', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip', '서기', '서있기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세']);
 function objectAtGraspPose(frame: Keyframe | undefined, objects: SceneObject[]) {
   const grasp = frame?.grasp;
@@ -1131,11 +1133,11 @@ export default function Editor() {
       <p className="hint">원기둥은 겹친 용기 묶음 1개를 나타냅니다. 생성 후 크기·질량·위치를 편집할 수 있습니다. 상자의 다섯 면은 물리 시뮬레이션에서 고정됩니다.</p>
       <div className="section-divider"/>
       {state?.handles.left_hand?.label.includes('TCP')
-        ? <><p className="hint">G1 그리퍼 작업점: 왼손 주걱 · 오른손 받침. 손 조작점을 선택해 위치·회전을 편집하세요. Physics에서는 두 도구의 실제 충돌 형상·질량·관성이 적용됩니다.</p>
-          <RamenSequenceControls objects={objects} selectedObjectId={selectedObjectId} keyframes={project?.keyframes ?? []} disabled={disabled || !!motionClip}
+        ? <><p className="hint">G1 그리퍼 작업점: 왼손 주걱 · 오른손 받침. 타임라인에서 자세를 하나씩 추가하고 양쪽 TCP를 조정한 뒤 선택 프레임에 반영하세요. Physics에서는 두 도구의 실제 충돌 형상·질량·관성이 적용됩니다.</p>
+          {SHOW_AUTOMATIC_RAMEN_SEQUENCE && <RamenSequenceControls objects={objects} selectedObjectId={selectedObjectId} keyframes={project?.keyframes ?? []} disabled={disabled || !!motionClip}
             attentionPoseSaved={!!project?.attention_pose}
             onTargetChange={id => { setSelectedObjectGroupId(null); selectObject(id); }} onGenerate={(id, settings) => void generateRamenSequence(id, settings)}
-            onSelectFrame={index => void chooseFrame(index)} onRun={index => { setPhysicsEnabled(true); void play(true, index); }}/></>
+            onSelectFrame={index => void chooseFrame(index)} onRun={index => { setPhysicsEnabled(true); void play(true, index); }}/>}</>
         : <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={graspPickMode => void changeGraspPickMode(graspPickMode)} onFit={() => void fitGrasp()} onEditGhost={editGraspGhost} onValidate={() => void validateGraspPhysics()}/>}
       <div className="section-divider"/>
       <div className="panel-heading"><span>최근 저장한 프로젝트</span><small>서버 저장</small></div>
