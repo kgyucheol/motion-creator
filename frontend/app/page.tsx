@@ -9,7 +9,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
-import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
@@ -285,9 +285,9 @@ export default function Editor() {
     const updated = current.current.objects.map(object => object.id === id ? next : object);
     commitObjects(transformChanged ? transformSceneObjectChildren(updated, before, next) : updated, false);
   }
-  function changeObjectParent(id: string, parentId: string | null) {
+  function changeObjectParent(ids: string[], parentId: string | null) {
     const before = current.current.objects;
-    const after = reparentSceneObject(before, id, parentId);
+    const after = reparentSceneObjects(before, ids, parentId);
     if (after === before || before.every((object, index) => object.parent_id === after[index].parent_id)) return;
     checkpoint(); commitObjects(after, false);
     setMessage(parentId ? '부모-자식 관계를 만들었습니다. 부모의 이동·회전에 자식이 함께 따라갑니다.' : '부모 연결을 해제했습니다. 현재 월드 위치는 유지됩니다.');

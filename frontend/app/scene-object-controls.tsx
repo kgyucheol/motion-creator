@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Boxes, Plus, Trash2, Upload } from 'lucide-react';
 import { eulerDegrees, quaternionFromDegrees } from '../lib/pose-transforms';
-import { normalizedObjectSize, sceneObjectDescendantIds, type ObjectTransformMode, type SceneObject, type SceneObjectGroup, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { normalizedObjectSize, reparentSceneObjects, selectSceneObjectRows, type ObjectTransformMode, type SceneObject, type SceneObjectGroup, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 
 type Props = {
   objects: SceneObject[];
@@ -20,7 +20,7 @@ type Props = {
   onModeChange: (mode: ObjectTransformMode) => void;
   onPlacementChange: (patch: Partial<ScenePlacementOptions>) => void;
   onImport: () => void;
-  onParentChange: (id: string, parentId: string | null) => void;
+  onParentChange: (ids: string[], parentId: string | null) => void;
   onCreateGroup: (ids: string[], name: string) => void;
   onSelectGroup: (id: string | null) => void;
   onChangeGroup: (id: string, patch: Partial<SceneObjectGroup>) => void;
@@ -33,8 +33,13 @@ const SHOW_LEGACY_OBJECT_GROUPS = false;
 export default function SceneObjectControls(props: Props) {
   const [groupMembers, setGroupMembers] = useState<string[]>([]);
   const [groupName, setGroupName] = useState('');
-  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [treeSelection, setTreeSelection] = useState({ ids: props.selectedId ? [props.selectedId] : [] as string[],
+    anchorId: props.selectedId, primaryId: props.selectedId });
+  const [draggedIds, setDraggedIds] = useState<string[]>([]);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
+  const selectedIds = props.selectedId === treeSelection.primaryId ? treeSelection.ids
+    : props.selectedId ? [props.selectedId] : [];
+  const anchorId = props.selectedId === treeSelection.primaryId ? treeSelection.anchorId : props.selectedId;
   const selected = props.objects.find(object => object.id === props.selectedId) ?? null;
   const selectedGroup = props.groups.find(group => group.id === props.selectedGroupId) ?? null;
   const grouped = new Set(props.groups.flatMap(group => group.member_ids));
@@ -44,18 +49,37 @@ export default function SceneObjectControls(props: Props) {
     props.onChange(selected.id, { [field]: field === 'size' ? normalizedObjectSize(selected.shape, vector, 'XYZ'[index]) : vector });
   };
   const rotation = selected ? eulerDegrees(selected.quaternion_xyzw) : [0, 0, 0];
-  const canParent = (childId: string | null, parentId: string) => !!childId && childId !== parentId
-    && !sceneObjectDescendantIds(props.objects, childId).has(parentId);
   const roots = props.objects.filter(object => !object.parent_id || !props.objects.some(parent => parent.id === object.parent_id));
+  const orderedIds: string[] = [];
+  const collectIds = (object: SceneObject) => {
+    orderedIds.push(object.id);
+    props.objects.filter(child => child.parent_id === object.id).forEach(collectIds);
+  };
+  roots.forEach(collectIds);
+  const activeIds = selectedIds.filter(id => props.objects.some(object => object.id === id));
+  const canParent = (ids: string[], parentId: string | null) => ids.length > 0
+    && reparentSceneObjects(props.objects, ids, parentId) !== props.objects;
+  const selectRow = (id: string, toggle: boolean, range: boolean) => {
+    const next = selectSceneObjectRows(activeIds, anchorId, id, orderedIds, toggle, range);
+    const primaryId = next.ids.includes(id) ? id : next.ids.at(-1) ?? null;
+    setTreeSelection({ ...next, primaryId });
+    props.onSelect(primaryId);
+  };
   const renderObjectRow = (object: SceneObject, depth: number) => <div key={object.id}>
-    <button className={`scene-tree-row ${props.selectedId === object.id ? 'selected' : ''} ${dropTarget === object.id ? 'drop-target' : ''}`}
+    <button className={`scene-tree-row ${activeIds.includes(object.id) ? 'selected' : ''} ${dropTarget === object.id ? 'drop-target' : ''}`}
       style={{ paddingLeft: `${8 + depth * 16}px` }} disabled={props.disabled} draggable={!props.disabled}
-      onClick={() => props.onSelect(object.id)}
-      onDragStart={event => { event.dataTransfer.setData('text/plain', object.id); event.dataTransfer.effectAllowed = 'move'; setDraggedId(object.id); }}
-      onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
-      onDragOver={event => { if (canParent(draggedId, object.id)) { event.preventDefault(); setDropTarget(object.id); } }}
+      aria-pressed={activeIds.includes(object.id)}
+      onClick={event => selectRow(object.id, event.ctrlKey || event.metaKey, event.shiftKey)}
+      onDragStart={event => {
+        const ids = activeIds.includes(object.id) ? activeIds : [object.id];
+        if (!activeIds.includes(object.id)) selectRow(object.id, false, false);
+        event.dataTransfer.setData('text/plain', object.name);
+        event.dataTransfer.effectAllowed = 'move'; setDraggedIds(ids);
+      }}
+      onDragEnd={() => { setDraggedIds([]); setDropTarget(null); }}
+      onDragOver={event => { if (canParent(draggedIds, object.id)) { event.preventDefault(); setDropTarget(object.id); } }}
       onDragLeave={() => setDropTarget(value => value === object.id ? null : value)}
-      onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || draggedId; if (canParent(id, object.id)) props.onParentChange(id!, object.id); setDraggedId(null); setDropTarget(null); }}>
+      onDrop={event => { event.preventDefault(); if (canParent(draggedIds, object.id)) props.onParentChange(draggedIds, object.id); setDraggedIds([]); setDropTarget(null); }}>
       <span className="scene-tree-grip" aria-hidden="true">⋮⋮</span><span className="scene-tree-name">{object.name}</span><small>{shapeLabels[object.shape]}</small>
     </button>
     {props.objects.filter(child => child.parent_id === object.id).map(child => renderObjectRow(child, depth + 1))}
@@ -68,11 +92,11 @@ export default function SceneObjectControls(props: Props) {
     </div>
     <button className="wide" disabled={props.disabled || props.objects.length >= 32} onClick={props.onImport}><Upload size={14}/> 3D 모델 가져오기 (.blend / .glb)</button>
     {!props.objects.length && <p className="hint">장면 물체가 없습니다. 위 버튼으로 MuJoCo 기본 도형을 추가하세요.</p>}
-    {!!props.objects.length && <><p className="hint">물체를 다른 물체 위로 드래그하면 부모-자식 관계가 됩니다. 현재 위치는 그대로 유지됩니다.</p>
+    {!!props.objects.length && <><p className="hint">Ctrl/⌘+클릭으로 다중 선택, Shift+클릭으로 범위 선택한 뒤 드래그해 부모에 넣을 수 있습니다. 현재 위치는 유지됩니다.</p>
       <div className="scene-tree" aria-label="장면 오브젝트 계층">{roots.map(object => renderObjectRow(object, 0))}</div>
-      <button className="scene-tree-root" disabled={props.disabled || (!selected?.parent_id && !draggedId)} onClick={() => selected && props.onParentChange(selected.id, null)}
-        onDragOver={event => { if (draggedId) event.preventDefault(); }}
-        onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || draggedId; if (id) props.onParentChange(id, null); setDraggedId(null); setDropTarget(null); }}>
+      <button className="scene-tree-root" disabled={props.disabled || !canParent(draggedIds.length ? draggedIds : activeIds, null)} onClick={() => props.onParentChange(activeIds, null)}
+        onDragOver={event => { if (canParent(draggedIds, null)) event.preventDefault(); }}
+        onDrop={event => { event.preventDefault(); if (canParent(draggedIds, null)) props.onParentChange(draggedIds, null); setDraggedIds([]); setDropTarget(null); }}>
         선택 물체 부모 해제 · 여기에 놓으면 최상위로
       </button></>}
     <div className="object-placement-options">

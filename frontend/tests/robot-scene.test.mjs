@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { RobotScene, canRotateSelection, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
+import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
@@ -46,6 +46,34 @@ test('scene hierarchy reparents without teleporting and propagates parent motion
   assert.ok(new THREE.Vector3().fromArray(moved[1].position).distanceTo(new THREE.Vector3(2, 1, 0)) < 1e-10);
   assert.ok(new THREE.Vector3().fromArray(moved[2].position).distanceTo(new THREE.Vector3(1, 1, 0)) < 1e-10);
   assert.equal(reparentSceneObject(hierarchy, 'cup', null)[1].parent_id, null);
+});
+
+test('scene tree supports toggle and ordered range selection', () => {
+  const order = ['box', 'first', 'second', 'third', 'other'];
+  const first = selectSceneObjectRows([], null, 'first', order, false, false);
+  const toggled = selectSceneObjectRows(first.ids, first.anchorId, 'other', order, true, false);
+  assert.deepEqual(toggled.ids, ['first', 'other']);
+  assert.equal(toggled.anchorId, 'first');
+  const range = selectSceneObjectRows(toggled.ids, toggled.anchorId, 'second', order, false, true);
+  assert.deepEqual(range.ids, ['first', 'second']);
+  const removed = selectSceneObjectRows(toggled.ids, toggled.anchorId, 'first', order, true, false);
+  assert.deepEqual(removed.ids, ['other']);
+  assert.equal(removed.anchorId, 'other');
+});
+
+test('batch reparent moves selected roots together and rejects cycles atomically', () => {
+  const objects = [
+    { id: 'box', position: [0, 0, 0] },
+    { id: 'first', position: [1, 0, 0] },
+    { id: 'second', position: [2, 0, 0] },
+    { id: 'child', parent_id: 'first', position: [3, 0, 0] },
+  ];
+  const moved = reparentSceneObjects(objects, ['first', 'child', 'second'], 'box');
+  assert.deepEqual(moved.map(object => object.parent_id ?? null), [null, 'box', 'box', 'first']);
+  assert.deepEqual(moved.map(object => object.position), objects.map(object => object.position));
+  assert.equal(reparentSceneObjects(moved, ['box', 'second'], 'child'), moved);
+  const unparented = reparentSceneObjects(moved, ['first', 'child', 'second'], null);
+  assert.deepEqual(unparented.map(object => object.parent_id ?? null), [null, null, null, 'first']);
 });
 
 test('deleting a scene parent removes every descendant but preserves unrelated objects', () => {

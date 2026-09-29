@@ -364,6 +364,45 @@ export function reparentSceneObject(objects: SceneObject[], childId: string, par
   return objects.map(object => object.id === childId ? { ...object, parent_id: parentId } : object);
 }
 
+export function reparentSceneObjects(objects: SceneObject[], childIds: string[], parentId: string | null) {
+  const requested = new Set(childIds);
+  if (!requested.size || parentId && !objects.some(object => object.id === parentId)) return objects;
+  const byId = new Map(objects.map(object => [object.id, object]));
+  if ([...requested].some(id => !byId.has(id) || id === parentId
+      || parentId && sceneObjectDescendantIds(objects, id).has(parentId))) return objects;
+  // Moving a selected parent already carries its descendants. Keep their
+  // existing parent links even if they were also selected by a range click.
+  const roots = [...requested].filter(id => {
+    let ancestor = byId.get(id)?.parent_id;
+    while (ancestor) {
+      if (requested.has(ancestor)) return false;
+      ancestor = byId.get(ancestor)?.parent_id;
+    }
+    return true;
+  });
+  if (roots.every(id => (byId.get(id)?.parent_id ?? null) === parentId)) return objects;
+  const moving = new Set(roots);
+  return objects.map(object => moving.has(object.id) ? { ...object, parent_id: parentId } : object);
+}
+
+export function selectSceneObjectRows(selectedIds: string[], anchorId: string | null, clickedId: string,
+                                      orderedIds: string[], toggle: boolean, range: boolean) {
+  if (range) {
+    const anchorIndex = orderedIds.indexOf(anchorId ?? '');
+    const clickedIndex = orderedIds.indexOf(clickedId);
+    if (anchorIndex >= 0 && clickedIndex >= 0) {
+      const between = orderedIds.slice(Math.min(anchorIndex, clickedIndex), Math.max(anchorIndex, clickedIndex) + 1);
+      return { ids: toggle ? [...new Set([...selectedIds, ...between])] : between, anchorId };
+    }
+  }
+  if (toggle) {
+    const ids = selectedIds.includes(clickedId)
+      ? selectedIds.filter(id => id !== clickedId) : [...selectedIds, clickedId];
+    return { ids, anchorId: ids.includes(anchorId ?? '') ? anchorId : ids[0] ?? null };
+  }
+  return { ids: [clickedId], anchorId: clickedId };
+}
+
 export function transformSceneObjectChildren(objects: SceneObject[], previous: SceneObject, next: SceneObject) {
   const descendants = sceneObjectDescendantIds(objects, previous.id);
   if (!descendants.size) return objects;
