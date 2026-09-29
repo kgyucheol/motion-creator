@@ -1,4 +1,5 @@
 """Versioned project files and contact-aware kinematic reference exports."""
+import copy
 import hashlib
 import io
 import json
@@ -6,6 +7,7 @@ import os
 import re
 import uuid
 import zipfile
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 import numpy as np
@@ -515,7 +517,209 @@ def compile_motion_clip(robot: Robot, frame, fps):
     return motion_result(robot, qpos, times, contacts, fps)
 
 
+_COMPILE_CACHE = OrderedDict()
+_COMPILE_CACHE_SIZE = 8
+# Frames whose joint-space blend already meets every IK goal this closely keep the blend as is.
+_IK_SKIP_POSITION_M = .001
+_IK_SKIP_ANGLE_RAD = np.deg2rad(.25)
+
+
 def compile_motion(robot: Robot, project, fps=30):
+    """Compile keyframes to a dense motion, reusing the result while the project is unchanged."""
+    key = hashlib.sha256(json.dumps([robot.fingerprint, fps, project], sort_keys=True, default=str).encode()).hexdigest()
+    validate_project(robot, project)
+    if key not in _COMPILE_CACHE:
+        _COMPILE_CACHE[key] = _compile_motion(robot, project, fps)
+        while len(_COMPILE_CACHE) > _COMPILE_CACHE_SIZE:
+            _COMPILE_CACHE.popitem(last=False)
+    _COMPILE_CACHE.move_to_end(key)
+    return copy.deepcopy(_COMPILE_CACHE[key])
+
+
+def _blend_meets_goals(robot, q, qa, pa, pins, angle_pins, targets, orientations):
+    """FK-check a joint-space blend against the goals the pinned-transition IK would enforce.
+
+    Returns the pin error in mm when the blend is good enough to skip the solve, else None.
+    """
+    data = robot.data(q)
+    points = {k: robot.point(data, k) for k in HANDLES}
+
+    def angle(k, rotation):
+        return np.linalg.norm(Rotation.from_matrix(points[k][1] @ rotation.T).as_rotvec())
+
+    pin_error = max((np.linalg.norm(points[k][0] - pa[k][0]) for k in pins), default=0.)
+    if pin_error > _IK_SKIP_POSITION_M:
+        return None
+    if any(angle(k, pa[k][1]) > _IK_SKIP_ANGLE_RAD for k in FEET if k in pins):
+        return None
+    for k in angle_pins:
+        if k in HINGES:
+            address = robot.model.joint(HINGES[k]).qposadr[0]
+            if abs(q[address] - qa[address]) > _IK_SKIP_ANGLE_RAD:
+                return None
+        elif k in pa and angle(k, pa[k][1]) > _IK_SKIP_ANGLE_RAD:
+            return None
+    if any(np.linalg.norm(points[k][0] - target[0]) > _IK_SKIP_POSITION_M for k, target in targets.items()):
+        return None
+    if any(angle(k, Rotation.from_quat(quat).as_matrix()) > _IK_SKIP_ANGLE_RAD for k, quat in orientations.items()):
+        return None
+    return float(pin_error * 1000)
+
+
+_PARALLEL = {'robot': None, 'pool': None}
+_MIN_PARALLEL_SEGMENTS = 3
+
+
+def _segment_worker(frames, segment_index, qa, qb, fps):
+    return _compile_segment(_PARALLEL['robot'], frames, segment_index, qa, qb, fps)
+
+
+def enable_parallel_compile(robot: Robot, workers=None):
+    """Fork a worker pool that inherits `robot`, so keyframe segments can be compiled concurrently.
+
+    Call it once at startup, before any request threads exist: workers are forked, not spawned,
+    so the MuJoCo model is shared copy-on-write instead of being rebuilt in every process.
+    """
+    import concurrent.futures
+    import multiprocessing
+    import time
+    if 'fork' not in multiprocessing.get_all_start_methods():
+        return 0
+    count = workers or max(1, min(8, (os.cpu_count() or 2) - 1))
+    if count < 2:
+        return 0
+    _PARALLEL['robot'] = robot
+    _PARALLEL['pool'] = concurrent.futures.ProcessPoolExecutor(max_workers=count, mp_context=multiprocessing.get_context('fork'))
+    # Start every worker now; the pool would otherwise fork lazily from a busy multi-threaded server.
+    list(_PARALLEL['pool'].map(time.sleep, [.05] * count))
+    return count
+
+
+def _compile_segments(robot: Robot, frames, endpoints, fps):
+    """Yield compiled segments in order, in parallel when a worker pool holds this exact robot."""
+    pool = _PARALLEL['pool']
+    parallel = (pool is not None and _PARALLEL['robot'] is robot and len(endpoints) >= _MIN_PARALLEL_SEGMENTS)
+    if not parallel:
+        for index, (qa, qb) in enumerate(endpoints):
+            yield _compile_segment(robot, frames, index, qa, qb, fps)
+        return
+    from concurrent.futures.process import BrokenProcessPool
+    futures = [pool.submit(_segment_worker, frames, index, qa, qb, fps) for index, (qa, qb) in enumerate(endpoints)]
+    try:
+        for future in futures:
+            yield future.result()
+    except BrokenProcessPool:
+        _PARALLEL['pool'] = None  # fall back to the in-process path from now on
+        for future in futures:
+            future.cancel()
+        raise
+    finally:
+        for future in futures:
+            future.cancel()
+
+
+def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
+    """Interpolate one keyframe pair; segments are independent once the quaternion signs are fixed."""
+    a, b = frames[segment_index], frames[segment_index + 1]
+    segment_poses, segment_pin_errors = [], []
+    da, db = robot.data(qa), robot.data(qb)
+    pa = {k: robot.point(da, k) for k in HANDLES}
+    pb = {k: robot.point(db, k) for k in HANDLES}
+    pins = sorted(set(a.get('pins', [])) & set(b.get('pins', [])))
+    angle_pins = sorted(set(a.get('angle_pins', [])) & set(b.get('angle_pins', [])))
+    for k in pins:
+        move = np.linalg.norm(pa[k][0] - pb[k][0])
+        if move > .004:
+            raise ValueError(f'{HANDLES[k][2]} changes position while pinned (keyframe {segment_index + 1} → {segment_index + 2}, {move * 1000:.1f} mm). Unpin it in one endpoint before moving it.')
+        if k in FEET and np.linalg.norm(pa[k][1] - pb[k][1]) > .02:
+            raise ValueError(f'{HANDLES[k][2]} changes orientation while pinned (keyframe {segment_index + 1} → {segment_index + 2})')
+    for k in angle_pins:
+        if k in HINGES:
+            address = robot.model.joint(HINGES[k]).qposadr[0]
+            change = abs(qa[address] - qb[address])
+            if change > np.deg2rad(.5):
+                raise ValueError(f'{HANDLES[k][2]} changes joint angle while angle-pinned (keyframe {segment_index + 1} → {segment_index + 2}, {np.rad2deg(change):.1f}°). Unpin its angle in one endpoint before changing it.')
+        else:
+            change = np.linalg.norm(Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec())
+            if change > np.deg2rad(.5):
+                raise ValueError(f'{HANDLES[k][2]} changes orientation while angle-pinned (keyframe {segment_index + 1} → {segment_index + 2}, {np.rad2deg(change):.1f}°). Unpin its angle in one endpoint before changing it.')
+    # Each destination frame's duration describes travel time from its predecessor.
+    duration = float(b['duration'])
+    count = max(1, round(duration * fps))
+    duration = count / fps
+    root_rotation = quat_matrix(qa[3:7])
+    root_delta = Rotation.from_matrix(root_rotation.T @ quat_matrix(qb[3:7])).as_rotvec()
+    angular_deltas = {k: Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec() for k in ROTATABLE}
+    interaction_pair = a.get('interaction'), b.get('interaction')
+    blend = bool(a.get('generated_transition') or b.get('generated_transition'))
+    if blend:
+        def tangent(frame_index):
+            if not frames[frame_index].get('generated_transition') or frame_index == 0 or frame_index == len(frames) - 1:
+                return np.zeros_like(qa)
+            before = robot.validate_q(frames[frame_index - 1]['qpos'])
+            after = robot.validate_q(frames[frame_index + 1]['qpos'])
+            seconds = float(frames[frame_index]['duration']) + float(frames[frame_index + 1]['duration'])
+            result = 1.875 * (after - before) / seconds
+            result[3:7] = 0.
+            return result
+        start_velocity = tangent(segment_index)
+        end_velocity = tangent(segment_index + 1)
+        delta = qb - qa
+        delta[3:7] = 0.
+        squared = float(np.dot(delta, delta))
+        start_slope = float(np.dot(start_velocity, delta) * duration / squared) if squared > 1e-12 else 0.
+        end_slope = float(np.dot(end_velocity, delta) * duration / squared) if squared > 1e-12 else 0.
+    for i in range(1, count + 1):
+        u = i / count
+        if blend:
+            h00, h10 = 2*u**3 - 3*u**2 + 1, u**3 - 2*u**2 + u
+            h01, h11 = -2*u**3 + 3*u**2, u**3 - u**2
+            s = float(np.clip(h01 + h10*start_slope + h11*end_slope, 0., 1.))
+            q = h00*qa + h10*duration*start_velocity + h01*qb + h11*duration*end_velocity
+        else:
+            s = u*u*u*(10 + u*(-15 + 6*u))  # quintic easing, zero endpoint velocity/acceleration
+            q = (1-s)*qa + s*qb
+        q[3:7] = matrix_quat(root_rotation @ Rotation.from_rotvec(s*root_delta).as_matrix())
+        if np.dot(q[3:7], qa[3:7]) < 0:
+            q[3:7] *= -1
+        if i == count:
+            q = qb.copy()
+        if i != count and all(interaction_pair):
+            from .interaction import interpolate_interaction
+            interaction = interpolate_interaction(*interaction_pair, s)
+            tcp_targets = interaction['tcp_targets']
+            reference = q.copy()
+            q, info = robot.solve(
+                segment_poses[-1] if segment_poses else qa, qa, pins=pins, angle_pins=angle_pins, mode='free', resistance=0.,
+                selected_targets={f'{side}_hand': tcp_targets[side]['position'] for side in ('left', 'right')},
+                orientation_targets={f'{side}_hand': tcp_targets[side]['quaternion_xyzw'] for side in ('left', 'right')},
+                posture_reference=reference, posture_weight=.18, max_nfev=45,
+            )
+            if not info['converged']:
+                raise ValueError(f'Interaction path IK failed ({info["target_error_mm"]:.1f} mm, {info["angle_error_deg"]:.1f}°)')
+            segment_pin_errors.append(info['pin_error_mm'])
+        elif i != count and (pins or angle_pins):
+            rotations = {k: pa[k][1] @ Rotation.from_rotvec(s*angular_deltas[k]).as_matrix() for k in ROTATABLE}
+            targets = {k: ((1-s)*pa[k][0] + s*pb[k][0], rotations.get(k, pa[k][1])) for k in HANDLES}
+            # Root orientation follows SLERP exactly; only end-effector rotations need projection.
+            orientations = {k: Rotation.from_matrix(rotations[k]).as_quat() for k in ROTATABLE
+                            if k != 'pelvis' and k not in angle_pins and not (k in FEET and k in pins)
+                            and np.linalg.norm(angular_deltas[k]) > 1e-5}
+            blend_pin_error = _blend_meets_goals(robot, q, qa, pa, pins, angle_pins, targets, orientations)
+            if blend_pin_error is not None:
+                segment_pin_errors.append(blend_pin_error)
+            else:
+                q, info = robot.solve(q, qa, pins=pins, targets=targets, max_nfev=18,
+                                     posture_reference=q, posture_weight=.8, orientation_targets=orientations,
+                                     angle_pins=angle_pins)
+                if info['rejected']:
+                    raise ValueError('The transition cannot preserve its pins. Add intermediate keyframes or relax a pin.')
+                segment_pin_errors.append(info['pin_error_mm'])
+        segment_poses.append(q)
+    return segment_poses, segment_pin_errors, [k in pins for k in FEET], duration
+
+
+def _compile_motion(robot: Robot, project, fps):
     validate_project(robot, project)
     from .interaction import project_with_consistent_interactions
     project = project_with_consistent_interactions(robot, project)
@@ -526,101 +730,23 @@ def compile_motion(robot: Robot, project, fps=30):
         return compile_motion_clip(robot, frames[0], fps)
     poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
     pin_errors = []
-    elapsed = 0.
-    for segment_index, (a, b) in enumerate(zip(frames, frames[1:])):
+    # Fix the quaternion signs sequentially (cheap); after that every segment is independent.
+    endpoints, previous = [], poses[0]
+    for a, b in zip(frames, frames[1:]):
         qa, qb = robot.validate_q(a['qpos']), robot.validate_q(b['qpos'])
-        if np.dot(qa[3:7], poses[-1][3:7]) < 0:
+        if np.dot(qa[3:7], previous[3:7]) < 0:
             qa[3:7] *= -1
         if np.dot(qa[3:7], qb[3:7]) < 0:
             qb[3:7] *= -1
-        da, db = robot.data(qa), robot.data(qb)
-        pa = {k: robot.point(da, k) for k in HANDLES}
-        pb = {k: robot.point(db, k) for k in HANDLES}
-        pins = sorted(set(a.get('pins', [])) & set(b.get('pins', [])))
-        angle_pins = sorted(set(a.get('angle_pins', [])) & set(b.get('angle_pins', [])))
-        for k in pins:
-            if np.linalg.norm(pa[k][0] - pb[k][0]) > .004:
-                raise ValueError(f'{HANDLES[k][2]} changes position while pinned. Unpin it in one endpoint before moving it.')
-            if k in FEET and np.linalg.norm(pa[k][1] - pb[k][1]) > .02:
-                raise ValueError(f'{HANDLES[k][2]} changes orientation while pinned')
-        for k in angle_pins:
-            if k in HINGES:
-                address = robot.model.joint(HINGES[k]).qposadr[0]
-                if abs(qa[address] - qb[address]) > np.deg2rad(.5):
-                    raise ValueError(f'{HANDLES[k][2]} changes joint angle while angle-pinned')
-            elif np.linalg.norm(Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec()) > np.deg2rad(.5):
-                raise ValueError(f'{HANDLES[k][2]} changes orientation while angle-pinned')
-        # Each destination frame's duration describes travel time from its predecessor.
-        duration = float(b['duration'])
-        count = max(1, round(duration * fps))
-        duration = count / fps
-        root_rotation = quat_matrix(qa[3:7])
-        root_delta = Rotation.from_matrix(root_rotation.T @ quat_matrix(qb[3:7])).as_rotvec()
-        angular_deltas = {k: Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec() for k in ROTATABLE}
-        interaction_pair = a.get('interaction'), b.get('interaction')
-        blend = bool(a.get('generated_transition') or b.get('generated_transition'))
-        if blend:
-            def tangent(frame_index):
-                if not frames[frame_index].get('generated_transition') or frame_index == 0 or frame_index == len(frames) - 1:
-                    return np.zeros_like(qa)
-                before = robot.validate_q(frames[frame_index - 1]['qpos'])
-                after = robot.validate_q(frames[frame_index + 1]['qpos'])
-                seconds = float(frames[frame_index]['duration']) + float(frames[frame_index + 1]['duration'])
-                result = 1.875 * (after - before) / seconds
-                result[3:7] = 0.
-                return result
-            start_velocity = tangent(segment_index)
-            end_velocity = tangent(segment_index + 1)
-            delta = qb - qa
-            delta[3:7] = 0.
-            squared = float(np.dot(delta, delta))
-            start_slope = float(np.dot(start_velocity, delta) * duration / squared) if squared > 1e-12 else 0.
-            end_slope = float(np.dot(end_velocity, delta) * duration / squared) if squared > 1e-12 else 0.
-        for i in range(1, count + 1):
-            u = i / count
-            if blend:
-                h00, h10 = 2*u**3 - 3*u**2 + 1, u**3 - 2*u**2 + u
-                h01, h11 = -2*u**3 + 3*u**2, u**3 - u**2
-                s = float(np.clip(h01 + h10*start_slope + h11*end_slope, 0., 1.))
-                q = h00*qa + h10*duration*start_velocity + h01*qb + h11*duration*end_velocity
-            else:
-                s = u*u*u*(10 + u*(-15 + 6*u))  # quintic easing, zero endpoint velocity/acceleration
-                q = (1-s)*qa + s*qb
-            q[3:7] = matrix_quat(root_rotation @ Rotation.from_rotvec(s*root_delta).as_matrix())
-            if np.dot(q[3:7], qa[3:7]) < 0:
-                q[3:7] *= -1
-            if i == count:
-                q = qb.copy()
-            if i != count and all(interaction_pair):
-                from .interaction import interpolate_interaction
-                interaction = interpolate_interaction(*interaction_pair, s)
-                tcp_targets = interaction['tcp_targets']
-                reference = q.copy()
-                q, info = robot.solve(
-                    poses[-1], qa, pins=pins, angle_pins=angle_pins, mode='free', resistance=0.,
-                    selected_targets={f'{side}_hand': tcp_targets[side]['position'] for side in ('left', 'right')},
-                    orientation_targets={f'{side}_hand': tcp_targets[side]['quaternion_xyzw'] for side in ('left', 'right')},
-                    posture_reference=reference, posture_weight=.18, max_nfev=45,
-                )
-                if not info['converged']:
-                    raise ValueError(f'Interaction path IK failed ({info["target_error_mm"]:.1f} mm, {info["angle_error_deg"]:.1f}°)')
-                pin_errors.append(info['pin_error_mm'])
-            elif i != count and (pins or angle_pins):
-                rotations = {k: pa[k][1] @ Rotation.from_rotvec(s*angular_deltas[k]).as_matrix() for k in ROTATABLE}
-                targets = {k: ((1-s)*pa[k][0] + s*pb[k][0], rotations.get(k, pa[k][1])) for k in HANDLES}
-                # Root orientation follows SLERP exactly; only end-effector rotations need projection.
-                orientations = {k: Rotation.from_matrix(rotations[k]).as_quat() for k in ROTATABLE
-                                if k != 'pelvis' and k not in angle_pins and not (k in FEET and k in pins)
-                                and np.linalg.norm(angular_deltas[k]) > 1e-5}
-                q, info = robot.solve(q, qa, pins=pins, targets=targets, max_nfev=18,
-                                     posture_reference=q, posture_weight=.8, orientation_targets=orientations,
-                                     angle_pins=angle_pins)
-                if info['rejected']:
-                    raise ValueError('The transition cannot preserve its pins. Add intermediate keyframes or relax a pin.')
-                pin_errors.append(info['pin_error_mm'])
+        endpoints.append((qa, qb))
+        previous = qb
+    elapsed = 0.
+    for segment_poses, segment_pin_errors, segment_contact, duration in _compile_segments(robot, frames, endpoints, fps):
+        for i, q in enumerate(segment_poses, start=1):
             poses.append(q)
             times.append(elapsed + i / fps)
-            contacts.append([k in pins for k in FEET])
+            contacts.append(segment_contact)
+        pin_errors += segment_pin_errors
         elapsed += duration
     return motion_result(robot, poses, times, contacts, fps, pin_errors)
 

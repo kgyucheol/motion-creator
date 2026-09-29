@@ -385,3 +385,68 @@ def test_api_init_solve_and_bad_inputs(robot):
         assert client.post('/api/solve', json=payload).status_code == 422
         assert client.post('/api/pose', json={'qpos': [0]}).status_code == 422
         assert client.get('/api/files/no_such_file.npz').status_code == 404
+
+
+def _counting_solver(robot, monkeypatch):
+    calls = []
+    original = robot.solve
+
+    def counting(*args, **kwargs):
+        calls.append(1)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(robot, 'solve', counting)
+    return calls
+
+
+def test_compile_motion_reuses_result_until_the_project_changes(robot, monkeypatch):
+    project = crouch_demo(robot)
+    calls = _counting_solver(robot, monkeypatch)
+    first = compile_motion(robot, json.loads(json.dumps(project)), fps=30)
+    solved = len(calls)
+    second = compile_motion(robot, json.loads(json.dumps(project)), fps=30)
+    assert len(calls) == solved
+    np.testing.assert_array_equal(first['qpos'], second['qpos'])
+    second['qpos'][:] = 0  # callers get their own copy of the cached arrays
+    np.testing.assert_array_equal(compile_motion(robot, json.loads(json.dumps(project)), fps=30)['qpos'], first['qpos'])
+    changed = json.loads(json.dumps(project))
+    changed['keyframes'][-1]['duration'] += .5
+    compile_motion(robot, changed, fps=30)
+    assert len(calls) > solved
+    compile_motion(robot, json.loads(json.dumps(project)), fps=20)
+    assert len(calls) > solved
+
+
+def test_hold_between_identical_pinned_keyframes_needs_no_ik(robot, monkeypatch):
+    project = new_project(robot)
+    project['keyframes'].append({**json.loads(json.dumps(project['keyframes'][0])), 'name': 'Hold', 'duration': 1.})
+    calls = _counting_solver(robot, monkeypatch)
+    motion = compile_motion(robot, project, fps=30)
+    assert not calls
+    np.testing.assert_allclose(motion['qpos'], np.tile(robot.validate_q(project['keyframes'][0]['qpos']), (len(motion['qpos']), 1)), atol=1e-9)
+    assert motion['max_pin_error_mm'] < .01
+
+
+def test_parallel_segment_compile_matches_sequential_and_reports_errors(robot, monkeypatch):
+    from motioncreator import motion
+    project = crouch_demo(robot)
+    project['keyframes'].append({**json.loads(json.dumps(project['keyframes'][1])), 'name': 'Crouch again', 'duration': 1.})
+    monkeypatch.setattr(motion, '_MIN_PARALLEL_SEGMENTS', 1)
+    motion._COMPILE_CACHE.clear()
+    sequential = compile_motion(robot, json.loads(json.dumps(project)), fps=20)
+    assert motion.enable_parallel_compile(robot, workers=2) == 2
+    try:
+        motion._COMPILE_CACHE.clear()
+        parallel = compile_motion(robot, json.loads(json.dumps(project)), fps=20)
+        np.testing.assert_array_equal(parallel['qpos'], sequential['qpos'])
+        np.testing.assert_array_equal(parallel['time'], sequential['time'])
+        assert parallel['max_pin_error_mm'] == sequential['max_pin_error_mm']
+        broken = json.loads(json.dumps(project))
+        broken['keyframes'][2]['qpos'] = robot.home.tolist()
+        broken['keyframes'][2]['qpos'][7] += .3  # left hip pitch moves the pinned left foot
+        with pytest.raises(ValueError, match=r'keyframe [12] → [23]'):
+            compile_motion(robot, broken, fps=20)
+    finally:
+        _pool, motion._PARALLEL['pool'], motion._PARALLEL['robot'] = motion._PARALLEL['pool'], None, None
+        _pool.shutdown()
+        motion._COMPILE_CACHE.clear()

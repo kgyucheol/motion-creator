@@ -19,7 +19,7 @@ from scipy.spatial.transform import Rotation
 from .motion import compile_motion, project_scene_objects, validate_project
 from .grasp import grasp_object, object_signature
 from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_quaternion_wxyz
-from .hand_collision import physical_hand_geom_names
+from .hand_collision import body_contact_geom_names, physical_hand_geom_names
 from .robot import MODEL_PATH, ROOT, Robot
 from .sonic import KP, KD, Reference, SonicCPU
 from .task_jobs import atomic_json
@@ -105,6 +105,9 @@ def build_model(robot, project=None):
                           size=_numbers(grip_pad_half_size()),
                           contype='0', conaffinity='0', group='3', density='0',
                           rgba='.15 .9 .72 .45' if side == 'left' else '1 .62 .25 .45')
+        # Only the gripper-tool model braces objects with body links; the stock G1 grasp fit
+        # places boxes against the wrist links and relies on hand-only contact.
+        body_geoms = body_contact_geom_names(root) if robot.model_id == 'g1-tools' else []
         world = root.find('worldbody')
         object_geoms = []
         for index, item in enumerate(objects):
@@ -128,6 +131,11 @@ def build_model(robot, project=None):
                         ET.SubElement(contact, 'pair', geom1=name, geom2=geom_name,
                                       condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
                                       solref='.01 1', solimp='.95 .99 .001')
+            for name in body_geoms:
+                for geom_name in geom_names:
+                    ET.SubElement(contact, 'pair', geom1=name, geom2=geom_name,
+                                  condim='3', friction=_numbers([item['friction'], item['friction'], 0, 0, 0]),
+                                  solref='.01 1', solimp='.95 .99 .001')
             for geom_name in geom_names:
                 ET.SubElement(contact, 'pair', geom1='floor', geom2=geom_name, condim='3',
                               friction=_numbers([item['friction'], item['friction'], 0, 0, 0]))
@@ -310,8 +318,7 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
                 data.qpos[:36] = pose[0]
                 data.qvel[:35] = velocity[0]
                 data.ctrl[:] = 0
-                mujoco.mj_forward(model, data)
-                mujoco.mj_step(model, data)
+                mujoco.mj_step(model, data)  # runs its own forward pass; a separate mj_forward only doubled the cost
                 update_grasp_stats()
                 continue
             torque = KP * (target - data.qpos[qa]) - KD * data.qvel[va]

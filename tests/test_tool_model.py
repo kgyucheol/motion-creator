@@ -18,9 +18,13 @@ def test_tool_urdf_joint_mapping_and_tcp_ik(monkeypatch):
     assert [robot.model.joint(int(i)).name for i in robot.model.actuator_trnid[:, 0]] == robot.names
     assert 'scoop' in robot.handles['left_hand'][2]
     assert 'end_support' in robot.handles['right_hand'][2]
-    np.testing.assert_allclose(robot.handles['left_hand'][1], [.221805, 0, -.0380589785])
-    np.testing.assert_allclose(robot.handles['right_hand'][1], [.221805, 0, -.0380589785])
+    np.testing.assert_allclose(robot.handles['left_hand'][1], [.180305, 0, -.0380589785])
+    np.testing.assert_allclose(robot.handles['right_hand'][1], [.180305, 0, -.0380589785])
+    assert robot.model.body('right_scoop_link').id == robot.ids['left_hand']
+    assert robot.model.body('left_end_support_link').id == robot.ids['right_hand']
     home_data = robot.data(robot.home)
+    np.testing.assert_allclose(robot.point(home_data, 'left_hand')[1][:, 2], [0, -1, 0], atol=1e-3)
+    np.testing.assert_allclose(robot.point(home_data, 'right_hand')[1][:, 2], [0, 1, 0], atol=1e-3)
     left = robot.point(home_data, 'left_hand')[0]
     right = robot.point(home_data, 'right_hand')[0]
     np.testing.assert_allclose(right, left * [1, -1, 1], atol=2e-5, rtol=0)
@@ -43,7 +47,7 @@ def test_gripper_fingerprint_is_stable_and_pd_physics_runs(monkeypatch):
     project['keyframes'][0]['duration'] = .1
     worker_robot = Robot()
     assert worker_robot.fingerprint == editor_robot.fingerprint
-    assert len(editor_robot.compatible_fingerprints) == 5
+    assert len(editor_robot.compatible_fingerprints) == 6
     for old_hash in editor_robot.compatible_fingerprints - {editor_robot.fingerprint}:
         legacy_project = new_project(editor_robot)
         legacy_project['model_sha256'] = old_hash
@@ -84,6 +88,42 @@ def test_tool_collision_and_fixed_carton_physics(monkeypatch, backend):
     assert model.npair > 100
 
 
+@pytest.mark.parametrize('backend', ['preview', 'wbc'])
+def test_body_links_collide_with_scene_objects(monkeypatch, backend):
+    monkeypatch.setenv('MOTIONCREATOR_MODEL', 'g1-tools')
+    robot = Robot()
+    project = new_project(robot)
+    torso = robot.data(robot.home).xpos[robot.model.body('torso_link').id]
+    base = dict(quaternion_xyzw=[0, 0, 0, 1], mass_kg=1., friction=.7,
+                color='#ffffff', opacity=1., visible=True, fixed=False)
+    project['scene_objects'] = [dict(base, id='chest', name='Chest box', shape='box', size=[.1, .1, .1],
+                                     position=torso.tolist())]
+    model = build_model(robot, project) if backend == 'preview' else build_environment_model(project)
+    data = mujoco.MjData(model)
+    data.qpos[:36] = robot.home
+    mujoco.mj_forward(model, data)
+    hands = {int(model.body(f'{side}_wrist_yaw_link').id) for side in ('left', 'right')}
+
+    def is_hand(body):
+        while body:
+            if body in hands:
+                return True
+            body = int(model.body_parentid[body])
+        return False
+
+    prefix = 'preview' if backend == 'preview' else 'wbc'
+    object_body = model.body(f'{prefix}_object_0').id
+    touching = {model.body(int(model.geom_bodyid[g])).name
+                for c in data.contact[:data.ncon] for g in (c.geom1, c.geom2)
+                if int(model.geom_bodyid[g]) not in (0, object_body) and not is_hand(int(model.geom_bodyid[g]))}
+    assert touching
+    # A far-away object must not touch anything.
+    data.qpos[36:39] = [3, 3, .5]
+    mujoco.mj_forward(model, data)
+    assert not any(int(model.geom_bodyid[g]) == object_body and int(model.geom_bodyid[h]) != 0
+                   for c in data.contact[:data.ncon] for g, h in ((c.geom1, c.geom2), (c.geom2, c.geom1)))
+
+
 @pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
 def test_tool_wbc_session_accepts_open_box_multi_geom_object(monkeypatch):
     monkeypatch.setenv('MOTIONCREATOR_MODEL', 'g1-tools')
@@ -104,3 +144,23 @@ def test_tool_wbc_session_accepts_open_box_multi_geom_object(monkeypatch):
         assert simulation.snapshot()['state']['model_id'] == 'g1-tools'
     finally:
         simulation.close()
+
+
+def test_attention_pose_is_mirror_symmetric_and_collision_free(monkeypatch):
+    monkeypatch.setenv('MOTIONCREATOR_MODEL', 'g1-tools')
+    robot = Robot()
+    data = robot.data(robot.attention)
+    for left, right in (('left_hand', 'right_hand'), ('left_elbow', 'right_elbow'), ('left_foot', 'right_foot')):
+        np.testing.assert_allclose(robot.point(data, right)[0], robot.point(data, left)[0] * [1, -1, 1], atol=2e-5, rtol=0)
+    assert abs(min(robot.point(data, key)[0][2] for key in ('left_foot', 'right_foot'))) < 1e-9
+    lower_body = [i for i, name in enumerate(robot.names) if name.split('_')[0] in ('left', 'right') and any(
+        part in name for part in ('hip', 'knee', 'ankle')) or name.startswith('waist')]
+    address = [robot.model.joint(robot.names[i]).qposadr[0] for i in lower_body]
+    np.testing.assert_array_equal(robot.attention[:7], robot.home[:7])
+    np.testing.assert_array_equal(robot.attention[address], robot.home[address])
+    home_data = robot.data(robot.home)
+    for key in ('left_foot', 'right_foot'):
+        np.testing.assert_allclose(robot.point(data, key)[0], robot.point(home_data, key)[0], atol=1e-6)
+    bodies = {frozenset((robot.model.body(int(robot.model.geom_bodyid[c.geom1])).name,
+                         robot.model.body(int(robot.model.geom_bodyid[c.geom2])).name)) for c in data.contact[:data.ncon]}
+    assert all('world' in pair for pair in bodies)

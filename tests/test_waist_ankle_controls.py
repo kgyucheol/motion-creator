@@ -74,3 +74,27 @@ def test_waist_ankle_groups_and_export(tmp_path):
     reference, _ = load_reference(tmp_path/result['npz_file'])
     assert reference['qpos'].shape == (3, 36)
     assert len(reference['joint_names']) == 29
+
+
+def test_group_solve_retries_from_presets_only_when_requested(monkeypatch):
+    from motioncreator import server
+    robot = server.robot
+    q = robot.home.copy()
+    starts = []
+
+    def fake_solve(start, anchor, **kwargs):
+        starts.append(np.array(start))
+        ok = len(starts) >= 2
+        return start, {'target_error_mm': 0. if ok else 50., 'angle_error_deg': 0. if ok else 5.,
+                       'converged': ok, 'rejected': False, 'pin_error_mm': 0.}
+
+    monkeypatch.setattr(robot, 'solve', fake_solve)
+    body = {'qpos': q.tolist(), 'anchor': q.tolist(), 'targets': {'left_hand': [.3, .2, .9]}}
+    with TestClient(app) as client:
+        result = client.post('/api/solve-group', json=body).json()['solver']
+        assert result['restart'] == 'current' and not result['converged'] and len(starts) == 1
+        starts.clear()
+        result = client.post('/api/solve-group', json={**body, 'retry_from_presets': True}).json()['solver']
+    assert result['converged'] and result['restart'] == 'default_stand' and len(starts) == 2
+    np.testing.assert_allclose(starts[1][7:], robot.home[7:])
+    np.testing.assert_allclose(starts[1][:7], q[:7])

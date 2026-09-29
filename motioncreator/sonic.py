@@ -33,9 +33,15 @@ class Reference:
             mujoco.mj_differentiatePos(model,self.v[i],t[b]-t[a],q[a],q[b])
     def sample(self,t):
         ts=np.atleast_1d(np.clip(t,self.t[0],self.t[-1]))
-        q=np.stack([np.interp(ts,self.t,self.q[:,i]) for i in range(36)],-1)
+        # Linear interpolation of every column at once (equivalent to np.interp per column).
+        upper=np.clip(np.searchsorted(self.t,ts,side='right'),1,len(self.t)-1)
+        lower=upper-1
+        span=(self.t[upper]-self.t[lower])[:,None]
+        offset=(ts-self.t[lower])[:,None]
+        # Same arithmetic as np.interp (slope*(x-x0)+y0) so results stay bit-identical.
+        q=(self.q[upper]-self.q[lower])/span*offset+self.q[lower]
         q[:,3:7]=self.rot(ts).as_quat()[:,[3,0,1,2]]
-        vel=np.stack([np.interp(ts,self.t,self.v[:,i]) for i in range(35)],-1)
+        vel=(self.v[upper]-self.v[lower])/span*offset+self.v[lower]
         vel[np.atleast_1d(t)>self.t[-1]]=0
         return q,vel
 

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE, ANGLE_LOCKABLE
-from .motion import new_project, validate_project, compile_motion, project_from_motion_bytes, prepare_saved_project, save_bundle
+from .motion import new_project, validate_project, compile_motion, enable_parallel_compile, project_from_motion_bytes, prepare_saved_project, save_bundle
 from .presets import GroupStore
 
 robot = Robot()
@@ -85,6 +85,7 @@ class GroupSolveInput(PoseInput):
     angle_pins: list[str] = Field(default_factory=list, max_length=len(ANGLE_LOCKABLE))
     resistance: float = Field(1., ge=0, le=5)
     mode: Literal['elastic', 'free'] = 'elastic'
+    retry_from_presets: bool = False
 
 
 class GroupPresetInput(BaseModel):
@@ -169,6 +170,11 @@ def initialize():
             'limits': robot.model.jnt_range[1:].tolist()}
 
 
+@app.get('/api/attention')
+def attention():
+    return {'state': robot.state(robot.attention)}
+
+
 def visual_response(model_id: str):
     if model_id != robot.model_id:
         raise HTTPException(409, detail=f'현재 선택된 로봇은 {robot.model_id}입니다. 화면을 새로고침하세요.')
@@ -244,10 +250,28 @@ def solve_group(payload: GroupSolveInput):
     def run():
         if not any((payload.targets, payload.orientations, payload.joints)):
             raise ValueError('At least one position, rotation or joint target is required')
-        q, info = robot.solve(payload.qpos, payload.anchor, pins=payload.pins,
-                             resistance=payload.resistance, mode=payload.mode, selected_targets=payload.targets,
-                             orientation_targets=payload.orientations, joint_targets=payload.joints,
-                             angle_pins=payload.angle_pins)
+        def attempt(start):
+            return robot.solve(start, payload.anchor, pins=payload.pins,
+                               resistance=payload.resistance, mode=payload.mode, selected_targets=payload.targets,
+                               orientation_targets=payload.orientations, joint_targets=payload.joints,
+                               angle_pins=payload.angle_pins)
+        q, info = attempt(payload.qpos)
+        info['restart'] = 'current'
+        if payload.retry_from_presets and not info['converged']:
+            # A local solve can get stuck from an awkward pose (e.g. raised arms). Retry from
+            # the default stand and attention poses, keeping the current base, and keep the best.
+            current = robot.validate_q(payload.qpos)
+            for label, preset in (('default_stand', robot.home), ('attention', robot.attention)):
+                start = preset.copy()
+                start[:7] = current[:7]
+                candidate = attempt(start)
+                candidate[1]['restart'] = label
+                score = lambda result: (not result[1]['converged'], result[1]['rejected'],
+                                        result[1]['target_error_mm'] + result[1]['angle_error_deg'])
+                if score(candidate) < score((q, info)):
+                    q, info = candidate
+                if info['converged']:
+                    break
         return {'state': robot.state(q), 'solver': info}
     return checked(run)
 
@@ -390,6 +414,8 @@ def main():
     except (urllib.error.URLError, OSError, ValueError):
         pass
     robot.export_visual(ROOT / f'assets/g1/robot-{robot.model_id}.glb')
+    # Fork the compile workers now, while the process is still single-threaded.
+    enable_parallel_compile(robot)
     frontend = ROOT / 'frontend/dist'
     if (frontend / 'index.html').exists():
         app.mount('/', StaticFiles(directory=frontend, html=True), name='editor')
