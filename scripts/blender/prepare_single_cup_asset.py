@@ -48,7 +48,8 @@ def main() -> None:
     if len(meshes) > 1:
         bpy.ops.object.join()
     cup = bpy.context.view_layer.objects.active
-    cup.name = "Mupama_Cup_Single_13_8cm_Top"
+    diameter_label = f"{args.target_top_diameter * 100:g}".replace(".", "_")
+    cup.name = f"Mupama_Cup_Single_{diameter_label}cm_Top"
     cup.data.name = "Mupama_Cup_Single_Mesh"
 
     source_lower, source_upper = bounds(cup)

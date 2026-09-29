@@ -35,6 +35,38 @@ The source model's 140 mm top diameter is uniformly scaled to the
 measured 138 mm diameter. The same `138 / 140` scale is applied to X, Y, and Z,
 preserving the cup's proportions.
 
+The smaller 13.5 cm top-diameter version is stored alongside the 13.8 cm
+working asset rather than replacing it. It is uniformly scaled from the same
+140 mm source and has its own 30-object and merged 70 cm stacks:
+
+- `individual/mupama_cup_13_5cm_top.{blend,glb}`
+- `stack_30_objects/mupama_cups_30_stack_70cm_13_5cm_top.{blend,glb}`
+- `stack_1_object/mupama_cups_30_stack_70cm_13_5cm_top_merged.{blend,glb}`
+
+Regenerate the smaller version without touching the 13.8 cm files:
+
+```bash
+blender --background --python scripts/blender/prepare_single_cup_asset.py -- \
+  --source assets/ramen_scan/single_cup/source/mupama_cup.glb \
+  --blend-output assets/ramen_scan/single_cup/individual/mupama_cup_13_5cm_top.blend \
+  --glb-output assets/ramen_scan/single_cup/individual/mupama_cup_13_5cm_top.glb \
+  --source-top-diameter 0.14 --target-top-diameter 0.135 \
+  --report assets/ramen_scan/single_cup/individual/mupama_cup_13_5cm_top_report.json
+
+blender --background --python scripts/blender/stack_single_cups.py -- \
+  --source assets/ramen_scan/single_cup/individual/mupama_cup_13_5cm_top.blend \
+  --blend-output assets/ramen_scan/single_cup/stack_30_objects/mupama_cups_30_stack_70cm_13_5cm_top.blend \
+  --glb-output assets/ramen_scan/single_cup/stack_30_objects/mupama_cups_30_stack_70cm_13_5cm_top.glb \
+  --report assets/ramen_scan/single_cup/stack_30_objects/mupama_cups_30_stack_70cm_13_5cm_top_report.json \
+  --count 30 --height 0.70 --seed 20260929
+
+blender --background --python scripts/blender/merge_cup_stack.py -- \
+  --source assets/ramen_scan/single_cup/stack_30_objects/mupama_cups_30_stack_70cm_13_5cm_top.blend \
+  --blend-output assets/ramen_scan/single_cup/stack_1_object/mupama_cups_30_stack_70cm_13_5cm_top_merged.blend \
+  --glb-output assets/ramen_scan/single_cup/stack_1_object/mupama_cups_30_stack_70cm_13_5cm_top_merged.glb \
+  --report assets/ramen_scan/single_cup/stack_1_object/mupama_cups_30_stack_70cm_13_5cm_top_merged_report.json
+```
+
 ```bash
 blender --background --python scripts/blender/prepare_single_cup_asset.py -- \
   --source assets/ramen_scan/single_cup/source/mupama_cup.glb \
