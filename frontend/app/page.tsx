@@ -10,7 +10,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
 import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
+import { duplicateKeyframeAfter, retimeSmoothTransition, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
@@ -125,6 +125,7 @@ export default function Editor() {
   const [message, setMessage] = useState('G1 모델을 불러오는 중…');
   const [error, setError] = useState('');
   const [frameIndex, setFrameIndex] = useState(0);
+  const [transitionSelection, setTransitionSelection] = useState<number[]>([]);
   const [poseDirty, setPoseDirty] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [sample, setSample] = useState(0);
@@ -726,7 +727,7 @@ export default function Editor() {
     const pose = await api<PoseState>('pose', { qpos: valid.current_qpos ?? valid.keyframes[0].qpos });
     const nextObjects = objectsFromProject(valid);
     const normalized = withLegacyGraspGhosts({ ...valid, scene_objects: nextObjects }, nextObjects);
-    setProject(normalized); current.current.project = normalized; setFrameIndex(0);
+    setProject(normalized); current.current.project = normalized; setFrameIndex(0); setTransitionSelection([]);
     setObjects(nextObjects); current.current.objects = nextObjects; selectObject(null);
     const nextObjectGroups = normalized.scene_groups ?? [];
     setObjectGroups(nextObjectGroups); current.current.objectGroups = nextObjectGroups; setSelectedObjectGroupId(null);
@@ -808,7 +809,7 @@ export default function Editor() {
       const firstIndex = retained.length;
       const keyframes = [...retained, ...result.keyframes];
       const nextProject = { ...project, keyframes };
-      current.current.project = nextProject; setProject(nextProject);
+      current.current.project = nextProject; setProject(nextProject); setTransitionSelection([]);
       const first = await api<PoseState>('pose', { qpos: result.keyframes[0].qpos });
       applyState(first); setPins([...result.keyframes[0].pins]); setAnglePins([...(result.keyframes[0].angle_pins ?? [])]);
       setFrameIndex(firstIndex); setPoseDirty(false); setInfo(null); invalidate();
@@ -823,7 +824,7 @@ export default function Editor() {
     const duplicated = duplicateKeyframeAfter(project.keyframes, frameIndex);
     const source = project.keyframes[frameIndex];
     const finish = (restored?: PoseState) => {
-      setProject({ ...project, keyframes: duplicated.keyframes }); setFrameIndex(duplicated.index);
+      setProject({ ...project, keyframes: duplicated.keyframes }); setFrameIndex(duplicated.index); setTransitionSelection([]);
       if (restored) applyState(restored);
       setPins([...source.pins]); setAnglePins([...(source.angle_pins ?? [])]); setPoseDirty(false); setInfo(null); invalidate();
       setMessage('선택한 키프레임을 바로 다음 순번에 복제했습니다.');
@@ -839,6 +840,30 @@ export default function Editor() {
     if (!project) return;
     const f = project.keyframes[index];
     await run(async () => { checkpoint(); changeGraspPickMode(null); applyState(await api<PoseState>('pose', { qpos: f.qpos })); setPins(f.pins); setAnglePins(f.angle_pins ?? []); setFrameIndex(index); setPoseDirty(false); setInfo(null); });
+  }
+  function selectTransitionFrame(index: number) {
+    setTransitionSelection(previous => previous.length === 1 && previous[0] !== index
+      ? [previous[0], index] : [index]);
+    void chooseFrame(index);
+  }
+  function createSmoothTransition() {
+    if (!project || transitionSelection.length !== 2 || poseDirty || project.keyframes.some(frame => frame.samples)) return;
+    const [start, end] = [...transitionSelection].sort((a, b) => a - b);
+    const keyframes = retimeSmoothTransition(project.keyframes, start, end);
+    if (keyframes === project.keyframes) return;
+    void run(async () => {
+      const updated = { ...project, keyframes };
+      // Compile before committing so invalid pins or interaction targets leave
+      // the user's existing keyframes untouched.
+      const result = await api<Preview>('preview', { project: updated, fps: 30 });
+      checkpoint(); current.current.project = updated; setProject(updated);
+      if (physicsEnabled || objectPhysicsEnabled) invalidate();
+      else {
+        const firstSample = keyframes.slice(1, start + 1).reduce((sum, frame) => sum + Math.max(1, Math.round(frame.duration * 30)), 0);
+        setPreview(result); setSample(Math.min(firstSample, result.states.length - 1));
+      }
+      setMessage(`${start + 1}–${end + 1}번 키프레임의 이동 시간을 자동 조정했습니다. ${physicsEnabled || objectPhysicsEnabled ? '물리 재생은 시작 프레임을 선택한 뒤 실행하세요.' : '재생을 누르면 선택 구간부터 확인할 수 있습니다.'} 장애물 회피·물리 안정성은 별도 검증이 필요합니다.`);
+    });
   }
   function saveAttentionPose() {
     if (!project || !state) return;
@@ -878,6 +903,7 @@ export default function Editor() {
       current.current.objects = restoredObjects; setObjects(restoredObjects);
       current.current.objectGroups = restoredGroups; setObjectGroups(restoredGroups);
       setProject(projectValue => projectValue ? { ...projectValue, scene_objects: restoredObjects, scene_groups: restoredGroups, keyframes: structuredClone(value.keyframes) } : projectValue);
+      setTransitionSelection([]);
       if (current.current.selectedObjectId) {
         selectObject(restoredObjects.some(object => object.id === current.current.selectedObjectId)
           ? current.current.selectedObjectId : null);
@@ -1182,7 +1208,7 @@ export default function Editor() {
       </details>
     </aside>
     <section className="timeline">
-      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{motionClip ? `1 clip · ${motionClip.length} frames` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<button disabled={disabled || !activeFrame || !!motionClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || !!motionClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
+      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{motionClip ? `1 clip · ${motionClip.length} frames` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<small className="transition-hint">{transitionSelection.length === 2 ? `${Math.min(...transitionSelection) + 1}–${Math.max(...transitionSelection) + 1}번 선택` : transitionSelection.length === 1 ? '두 번째 프레임 선택' : '프레임 2개 선택'}</small><button disabled={disabled || transitionSelection.length !== 2 || poseDirty || !!motionClip} onClick={createSmoothTransition} title="키프레임 두 개를 순서대로 클릭하세요. 선택 구간의 이동 시간을 관절·몸통 이동량에 맞춰 조정하고 기존 5차 보간으로 미리보기를 만듭니다. 장애물 회피와 물리 검증은 포함되지 않습니다.">부드러운 연결 생성</button><button disabled={disabled || !activeFrame || !!motionClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || !!motionClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
       <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled || objectPhysicsEnabled ? `${controllerLabel} 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label>
         <div className="simulation-toggles">
         <button className="policy-toggle" type="button" aria-pressed={physicsEnabled} disabled={!state || busy || solving || playing || !physicsAvailable} onClick={() => changeSimulation(!physicsEnabled, false)} title={!physicsAvailable ? '물리 재생을 사용하려면 서버를 업데이트하고 재시작하세요.' : 'ON: 중력·접촉·관절 토크 계산 · OFF: 정책도 끄고 원본 편집으로 돌아가기'}>
@@ -1196,8 +1222,8 @@ export default function Editor() {
         </button>
         </div>
       </div>
-        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''}`} onClick={() => void chooseFrame(i)}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
-        <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>{motionClip ? '클립 재생 시간' : '이동 시간'} <input aria-label="키프레임 이동 시간" type="number" min={motionClip ? 1/120 : .1} max={motionClip ? 600 : 60} step=".01" disabled={disabled || (!motionClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = motionClip ? 1/120 : .1; const maximum = motionClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
+        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title="두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다"><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
+        <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>{motionClip ? '클립 재생 시간' : '이동 시간'} <input aria-label="키프레임 이동 시간" type="number" min={motionClip ? 1/120 : .1} max={motionClip ? 600 : 60} step=".01" disabled={disabled || (!motionClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = motionClip ? 1/120 : .1; const maximum = motionClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); setTransitionSelection([]); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); setTransitionSelection([]); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); setTransitionSelection([]); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
       </div>
       <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) { applyState(preview.states[i]); if (preview.object_states?.[i]) scene.current?.setObjectPoses(preview.object_states[i]); } }}/>
     </section>

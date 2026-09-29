@@ -5,7 +5,7 @@ import { RobotScene, canRotateSelection, headCameraViewQuaternion, horizontalFov
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
-import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
+import { duplicateKeyframeAfter, retimeSmoothTransition, smoothTransitionDuration } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
   const frames = [
@@ -28,6 +28,22 @@ test('a manually duplicated keyframe does not inherit an automatic TCP target', 
   const result = duplicateKeyframeAfter(frames, 0);
   assert.equal(result.keyframes[0].interaction, interaction);
   assert.equal(result.keyframes[1].interaction, undefined);
+});
+
+test('smooth transition retimes only the selected interval without replacing authored poses', () => {
+  const frame = (name, joint, duration = 2) => ({ name, duration,
+    qpos: [0, 0, .8, 1, 0, 0, 0, joint], pins: [], angle_pins: [] });
+  const frames = [frame('A', 0), frame('B', .5), frame('C', 1.5), frame('D', 1.6)];
+  const adjusted = retimeSmoothTransition(frames, 2, 0);
+  assert.equal(adjusted[0], frames[0]);
+  assert.equal(adjusted[3], frames[3]);
+  assert.equal(adjusted[1].duration, smoothTransitionDuration(frames[0], frames[1]));
+  assert.equal(adjusted[2].duration, smoothTransitionDuration(frames[1], frames[2]));
+  assert.deepEqual(adjusted.map(value => value.qpos), frames.map(value => value.qpos));
+  assert.equal(retimeSmoothTransition(frames, 1, 1), frames);
+  const translated = frame('Moved', 0);
+  translated.qpos[0] = .7;
+  assert.ok(smoothTransitionDuration(frames[0], translated) > smoothTransitionDuration(frames[0], frames[1]));
 });
 
 test('scene hierarchy reparents without teleporting and propagates parent motion', () => {

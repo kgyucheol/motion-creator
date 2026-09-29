@@ -87,3 +87,25 @@ export function duplicateKeyframeAfter(keyframes: Keyframe[], selectedIndex: num
   delete duplicate.interaction;
   return { keyframes: [...keyframes.slice(0, index), duplicate, ...keyframes.slice(index)], index };
 }
+
+/** Retiming uses the existing quintic playback curve (peak slope 1.875). */
+export function smoothTransitionDuration(first: Keyframe, second: Keyframe) {
+  const a = first.qpos, b = second.qpos;
+  if (a.length !== b.length || a.length < 7 || !a.every(Number.isFinite) || !b.every(Number.isFinite))
+    throw new Error('연결할 키프레임의 관절 데이터가 올바르지 않습니다.');
+  const rootDistance = Math.hypot(...a.slice(0, 3).map((value, index) => b[index] - value));
+  const rootDot = Math.min(1, Math.abs(a.slice(3, 7).reduce((sum, value, index) => sum + value * b[index + 3], 0)));
+  const rootAngle = 2 * Math.acos(rootDot);
+  const maxJointAngle = a.slice(7).reduce((maximum, value, index) => Math.max(maximum, Math.abs(b[index + 7] - value)), 0);
+  // Conservative editing speeds, not hardware torque/velocity guarantees.
+  const seconds = Math.max(.8, 1.875 * rootDistance / .35, 1.875 * rootAngle / .8,
+    1.875 * maxJointAngle / 1.0);
+  return Math.min(60, Math.ceil(seconds * 10) / 10);
+}
+
+export function retimeSmoothTransition(keyframes: Keyframe[], firstIndex: number, secondIndex: number) {
+  const start = Math.min(firstIndex, secondIndex), end = Math.max(firstIndex, secondIndex);
+  if (start < 0 || end >= keyframes.length || start === end) return keyframes;
+  return keyframes.map((frame, index) => index > start && index <= end
+    ? { ...frame, duration: smoothTransitionDuration(keyframes[index - 1], frame) } : frame);
+}
