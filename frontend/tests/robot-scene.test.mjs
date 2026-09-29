@@ -29,7 +29,7 @@ test('a symmetric hinge pair supports one active ring and mirrored axis deltas',
   assert.deepEqual(viewer.pivot.position.toArray(), [0, -.2, 1]);
 });
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
+import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, savedRamenGraspCoefficients, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, smoothTransitionDuration } from '../lib/keyframes.ts';
 import { isCompleteNumericText } from '../lib/numeric-input.ts';
 
@@ -76,6 +76,14 @@ test('ramen bundle candidate points follow its center and keep robot left/right 
   assert.deepEqual(yawed.approach.left.map(value => Number(value.toFixed(3))), [0, 1, 0]);
   assert.deepEqual(yawed.approach.right.map(value => Number(value.toFixed(3))), [1, 0, 0]);
   assert.equal(yawed.orientation.left.length, 4);
+});
+
+test('saved ramen grasp coefficients remain shared and reject invalid stored values', () => {
+  const saved = { left: { lateral: .30, clearance: .08, height: -.02, roll: 5, pitch: 12, yaw: -4 },
+    right: { lateral: .22, clearance: .12, height: .01, roll: -5, pitch: 8, yaw: 3 } };
+  assert.deepEqual(savedRamenGraspCoefficients(JSON.parse(JSON.stringify(saved))), saved);
+  assert.equal(savedRamenGraspCoefficients({ ...saved, right: { ...saved.right, clearance: -1 } }), null);
+  assert.equal(savedRamenGraspCoefficients({ ...saved, left: { ...saved.left, yaw: '3' } }), null);
 });
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {

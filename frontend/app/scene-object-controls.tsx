@@ -125,6 +125,7 @@ export default function SceneObjectControls(props: Props) {
       {isRamenBundle(selected) && <div className="candidate-grasp-control">
         <button className="wide" type="button" aria-pressed={!!props.graspPreview} disabled={props.disabled} onClick={() => props.onToggleGraspPreview(selected.id)}><Crosshair size={14}/>{props.graspPreview ? '파지점 미리보기 끄기' : '파지점 미리보기'}</button>
         {props.graspPreview && <>
+          <p className="hint">왼손·오른손 계수는 모든 라면 묶음에 공통 적용되며 브라우저에 자동 저장됩니다.</p>
           <p className="hint">묶음 중심 기준 위치 · 로컬 +X는 용기 안쪽입니다. R/P/Y는 이 기준 자세에서 조절하며 Pitch +는 위로 기웁니다. 화살표는 로컬 X/Y/Z입니다.</p>
           {(['left', 'right'] as const).map(side => <div className="candidate-grasp-side" key={side}>
             <strong>{side === 'left' ? '왼손' : '오른손'}</strong>

@@ -9,7 +9,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
-import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
@@ -23,6 +23,7 @@ type GroupPreset = { id: string; name: string; members: string[] };
 type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; objectGroups: SceneObjectGroup[]; keyframes: Keyframe[]; frameIndex: number; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
 const GRASP_GHOST_ID = '__grasp_keyframe_ghost__';
+const GRASP_COEFFICIENTS_STORAGE_KEY = 'motioncreator-editor-ramen-grasp-v1';
 // Keep the experimental planner available in code while users author each phase manually.
 const SHOW_AUTOMATIC_RAMEN_SEQUENCE = false;
 const genericFrameNames = new Set(['stand', 'standing', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip', '서기', '서있기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세']);
@@ -148,6 +149,19 @@ export default function Editor() {
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [graspPreviewId, setGraspPreviewId] = useState<string | null>(null);
   const [graspCoefficients, setGraspCoefficients] = useState<RamenGraspCoefficients>(DEFAULT_RAMEN_GRASP_COEFFICIENTS);
+  const [graspCoefficientsLoaded, setGraspCoefficientsLoaded] = useState(false);
+  useEffect(() => {
+    try {
+      const saved = savedRamenGraspCoefficients(JSON.parse(localStorage.getItem(GRASP_COEFFICIENTS_STORAGE_KEY) ?? 'null'));
+      if (saved) setGraspCoefficients(saved);
+    } catch { /* 손상된 에디터 설정은 기본 계수로 시작합니다. */ }
+    setGraspCoefficientsLoaded(true);
+  }, []);
+  useEffect(() => {
+    if (!graspCoefficientsLoaded) return;
+    try { localStorage.setItem(GRASP_COEFFICIENTS_STORAGE_KEY, JSON.stringify(graspCoefficients)); }
+    catch { /* 저장 공간이 없어도 파지점 편집은 계속합니다. */ }
+  }, [graspCoefficients, graspCoefficientsLoaded]);
   const [objectTransformMode, setObjectTransformMode] = useState<ObjectTransformMode>('translate');
   const [preventObjectOverlap, setPreventObjectOverlap] = useState(true);
   const [objectSurfaceSnap, setObjectSurfaceSnap] = useState(false);

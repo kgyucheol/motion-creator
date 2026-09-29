@@ -93,6 +93,22 @@ export const DEFAULT_RAMEN_GRASP_COEFFICIENTS: RamenGraspCoefficients = {
   left: { lateral: .25, clearance: .10, height: 0, roll: 0, pitch: 0, yaw: 0 },
   right: { lateral: .25, clearance: .10, height: 0, roll: 0, pitch: 0, yaw: 0 },
 };
+export function savedRamenGraspCoefficients(value: unknown): RamenGraspCoefficients | null {
+  if (!value || typeof value !== 'object') return null;
+  const sides = value as Record<string, unknown>;
+  const fields = ['lateral', 'clearance', 'height', 'roll', 'pitch', 'yaw'] as const;
+  const parseSide = (side: 'left' | 'right'): GraspPointCoefficients | null => {
+    const raw = sides[side];
+    if (!raw || typeof raw !== 'object') return null;
+    const values = raw as Record<string, unknown>;
+    if (!fields.every(field => typeof values[field] === 'number' && Number.isFinite(values[field])
+      && (field !== 'lateral' && field !== 'clearance' || (values[field] as number) >= 0))) return null;
+    return Object.fromEntries(fields.map(field => [field, values[field]])) as GraspPointCoefficients;
+  };
+  const left = parseSide('left');
+  const right = parseSide('right');
+  return left && right ? { left, right } : null;
+}
 export type ScenePlacementOptions = { preventOverlap: boolean; surfaceSnap: boolean; groundLock: boolean; snapDistance?: number };
 
 const DEFAULT_PLACEMENT: SceneObjectPlacement = { prevent_overlap: true, surface_snap: false, ground_lock: true };
