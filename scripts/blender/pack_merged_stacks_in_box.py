@@ -22,7 +22,7 @@ WALL = 0.02
 ROWS = 4
 LAYERS = 3
 ROLL_SEED = 20260929
-FINAL_Z_ROTATION_DEGREES = 90
+FINAL_Z_ROTATION_DEGREES = 270
 
 
 def parse_args() -> argparse.Namespace:
