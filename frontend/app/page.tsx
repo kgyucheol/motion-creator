@@ -1,7 +1,6 @@
 'use client';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import SceneObjectControls from './scene-object-controls';
-import { ramenScene } from '../lib/ramen-scene';
 import GraspControls, { type GraspPickMode } from './grasp-controls';
 import RamenSequenceControls, { type RamenSequenceSettings } from './ramen-sequence-controls';
 import BodyControls from './body-controls';
@@ -354,15 +353,6 @@ export default function Editor() {
     const object = placeSceneObject(created, current.current.objects, scenePlacementOptions(created));
     commitObjects([...current.current.objects, object]);
     selectObject(object.id);
-  }
-  function addRamenScene() {
-    if (current.current.objects.length + 17 > 32) { setMessage('라면용기 장면에는 오브젝트 17개가 필요합니다. 기존 오브젝트를 줄여주세요.'); return; }
-    checkpoint();
-    const added = ramenScene(`ramen-${Date.now()}`);
-    commitObjects([...current.current.objects, ...added]);
-    const group = { ...createSceneObjectGroup(added, added.map(object => object.id), current.current.objectGroups.length + 1), name: '라면 상자 묶음' };
-    commitObjectGroups([...current.current.objectGroups, group]);
-    selectObject(added[5].id);
   }
   function removeObject(id: string) {
     const { objects: remaining, removedIds } = removeSceneObjectSubtree(current.current.objects, id);
@@ -1207,8 +1197,6 @@ export default function Editor() {
         onToggleGraspPreview={id => setGraspPreviewId(current => current === id ? null : id)}
         groups={objectGroups} selectedGroupId={selectedObjectGroupId} onSelect={id => { setSelectedObjectGroupId(null); selectObject(id); }} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}
         onImport={() => assetFile.current?.click()} onParentChange={changeObjectParent} onCreateGroup={createObjectGroup} onSelectGroup={id => { setSelectedObjectGroupId(id); if (id) selectObject(null); }} onChangeGroup={changeObjectGroup} onRemoveGroup={removeObjectGroup}/>
-      <button className="wide" disabled={disabled} onClick={addRamenScene}>라면용기 4열 × 3층 + 열린 상자 생성</button>
-      <p className="hint">원기둥은 겹친 용기 묶음 1개를 나타냅니다. 생성 후 크기·질량·위치를 편집할 수 있습니다. 상자의 다섯 면은 물리 시뮬레이션에서 고정됩니다.</p>
       <div className="section-divider"/>
       {state?.handles.left_hand?.label.includes('TCP')
         ? <><p className="hint">G1 그리퍼 작업점: 왼손 주걱 · 오른손 받침. 타임라인에서 자세를 하나씩 추가하고 양쪽 TCP를 조정한 뒤 선택 프레임에 반영하세요. Physics에서는 두 도구의 실제 충돌 형상·질량·관성이 적용됩니다.</p>
