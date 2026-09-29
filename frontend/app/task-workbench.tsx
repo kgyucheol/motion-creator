@@ -1,3 +1,4 @@
+import NumericInput from './numeric-input';
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { RobotScene, type PoseState } from '../lib/robot-scene';
@@ -124,8 +125,7 @@ function Vec({
       {value.map((v, i) => (
         <label key={i}>
           <span>{value.length === 4 ? 'XYZW'[i] : 'XYZ'[i]}</span>
-          <input
-            type="number"
+          <NumericInput
             step={step}
             value={v}
             aria-label={`${label} ${'XYZW'[i]}`}
@@ -162,8 +162,7 @@ function PoseFields({
       />
       <label className="task-number">
         {label} 회전 Z (°)
-        <input
-          type="number"
+        <NumericInput
           step="1"
           value={Math.round(THREE.MathUtils.radToDeg(yaw.z) * 100) / 100}
           onChange={(e) =>
@@ -545,8 +544,7 @@ export default function TaskWorkbench({
       spec && (
         <label className="task-number">
           {label}
-          <input
-            type="number"
+          <NumericInput
             min={min}
             max={max}
             step={step}

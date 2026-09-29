@@ -1,4 +1,5 @@
 'use client';
+import NumericInput from './numeric-input';
 import { Crosshair, Hand, Move3d, Play, RotateCcw } from 'lucide-react';
 import type { SceneObject } from '../lib/scene-objects';
 import type { TwoHandGrasp } from '../lib/keyframes';
@@ -63,7 +64,7 @@ export default function GraspControls({ objects, selectedObjectId, grasp, disabl
       <label className="range-label">양손 파지면 간격 <span>{Math.round(handGap * 1000)} mm</span><input type="range" min="0" max={Math.round(maxGap * 1000)} step="1" disabled={disabled} value={Math.round(handGap * 1000)} onChange={event => update({ hand_gap_m: +event.target.value / 1000 })}/></label>
       <div className="group-actions"><button disabled={disabled || handGap <= 0} onClick={() => update({ hand_gap_m: Math.max(0, handGap - .001) })}>−1 mm</button><button disabled={disabled} onClick={() => update({ hand_gap_m: boxWidth })}>박스 너비 {Math.round(boxWidth * 1000)} mm</button><button disabled={disabled || handGap >= maxGap} onClick={() => update({ hand_gap_m: Math.min(maxGap, handGap + .001) })}>+1 mm</button></div>
       <p className="hint">0 mm에서는 두 보조면이 맞닿고, 박스 너비에서는 양쪽 면과 일치합니다. {clearance > .0005 ? `현재는 면보다 ${Math.round(clearance * 1000)} mm 벌어진 접근 자세입니다.` : clearance < -.0005 ? `현재는 박스보다 ${Math.round(-clearance * 1000)} mm 작은, 접촉력을 만들기 위한 닫힘 목표입니다.` : '현재 보조면이 박스 양쪽 면에 맞춰집니다.'} 값을 바꾼 뒤 자세 맞추기를 누르세요.</p>
-      <div className="grasp-force-row"><label>검증 최소 힘 <input type="number" min="1" max="200" value={grasp.target_force_n} disabled={disabled} onChange={event => { const value = +event.target.value; update({ target_force_n: value, max_force_n: Math.max(value, grasp.max_force_n) }); }}/>N</label><label>검증 안전 상한 <input type="number" min={grasp.target_force_n} max="400" value={grasp.max_force_n} disabled={disabled} onChange={event => update({ max_force_n: Math.max(grasp.target_force_n, +event.target.value) })}/>N</label></div>
+      <div className="grasp-force-row"><label>검증 최소 힘 <NumericInput  min="1" max="200" value={grasp.target_force_n} disabled={disabled} onChange={event => { const value = +event.target.value; update({ target_force_n: value, max_force_n: Math.max(value, grasp.max_force_n) }); }}/>N</label><label>검증 안전 상한 <NumericInput  min={grasp.target_force_n} max="400" value={grasp.max_force_n} disabled={disabled} onChange={event => update({ max_force_n: Math.max(grasp.target_force_n, +event.target.value) })}/>N</label></div>
       <button className="wide primary" disabled={disabled || !selectedBox} onClick={onFit}><Hand size={15}/>양손 파지 자세 맞추기</button>
       <button className="wide" disabled={disabled || !fitted} onClick={onEditGhost}><Move3d size={15}/>이 키프레임의 고스트 박스 편집</button>
       <label className="checkbox"><input type="checkbox" checked={grasp.follow_object !== false} disabled={disabled || !fitted} onChange={event => update({ follow_object: event.target.checked })}/>고스트 박스 이동 시 양손 따라가기</label>

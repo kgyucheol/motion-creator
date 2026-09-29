@@ -31,6 +31,12 @@ test('a symmetric hinge pair supports one active ring and mirrored axis deltas',
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, smoothTransitionDuration } from '../lib/keyframes.ts';
+import { isCompleteNumericText } from '../lib/numeric-input.ts';
+
+test('numeric input accepts signed decimals while keeping unfinished text editable', () => {
+  for (const value of ['-1', '-.5', '0.', '.25', '1e-3']) assert.equal(isCompleteNumericText(value), true);
+  for (const value of ['', '-', '.', '-.', '1e-']) assert.equal(isCompleteNumericText(value), false);
+});
 
 test('PiP defaults to the upper right and stays inside the viewport when moved', () => {
   const viewer = Object.create(RobotScene.prototype);
