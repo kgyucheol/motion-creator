@@ -43,6 +43,9 @@ blender --background --python scripts/blender/prepare_single_cup_asset.py -- \
 at Z=0. The center-to-center vertical pitch is calculated as
 `(0.70 m - one cup height) / 29`, making the total stack height 70 cm.
 The copies share one mesh in the Blender file. No collision simulation is used.
+Each cup has its own Z-axis rotation so the printed labels face different
+directions. A fixed random seed makes the arrangement reproducible; adjacent
+cups differ by at least 25 degrees.
 
 ```bash
 blender --background --python scripts/blender/stack_single_cups.py -- \
@@ -50,5 +53,5 @@ blender --background --python scripts/blender/stack_single_cups.py -- \
   --blend-output assets/ramen_scan/single_cup/mupama_cups_30_stack_70cm.blend \
   --glb-output assets/ramen_scan/single_cup/mupama_cups_30_stack_70cm.glb \
   --report assets/ramen_scan/single_cup/mupama_cups_30_stack_70cm_report.json \
-  --count 30 --height 0.70
+  --count 30 --height 0.70 --seed 20260929
 ```
