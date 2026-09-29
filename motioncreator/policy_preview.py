@@ -24,7 +24,7 @@ from .robot import MODEL_PATH, ROOT, Robot
 from .sonic import KP, KD, Reference, SonicCPU
 from .task_jobs import atomic_json
 from .scene_geometry import append_collision_geoms, grounded_position
-from .interaction import interaction_at, interaction_timeline
+from .interaction import interaction_at, interaction_timeline, project_with_consistent_interactions
 
 MAX_SECONDS = 60
 
@@ -222,6 +222,7 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
     robot = Robot()
     validate_project(robot, project)
     project = project_from_keyframe(project, start_frame_index)
+    project = project_with_consistent_interactions(robot, project)
     start_frame_name = project['keyframes'][0]['name']
     times, poses, grasp = compile_preview_motion(robot, project, fps=50)
     # A single authored pose is a hold, so it can also be tested under gravity.
@@ -247,7 +248,7 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
     interaction_reference = interaction_timeline(project)
     object_geom_ids = {model.geom(index).id for index in range(model.ngeom)
                        if (model.geom(index).name or '').startswith('preview_object_')}
-    interaction_stats = {'active': bool(interaction_reference), 'max_tcp_error_mm': 0.,
+    interaction_stats = {'active': any(first and second for _, _, first, second in interaction_reference), 'max_tcp_error_mm': 0.,
                          'max_orientation_error_deg': 0., 'max_feedback_torque_nm': 0.,
                          'max_contact_force_n': {'left': 0., 'right': 0.},
                          'force_limit_exceeded': False}

@@ -493,6 +493,8 @@ def compile_motion_clip(robot: Robot, frame, fps):
 
 def compile_motion(robot: Robot, project, fps=30):
     validate_project(robot, project)
+    from .interaction import project_with_consistent_interactions
+    project = project_with_consistent_interactions(robot, project)
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
     frames = project['keyframes']

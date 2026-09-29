@@ -832,6 +832,7 @@ npm --prefix frontend run test:scene
 - `motioncreator/ramen_sequence.py — plan_ramen_sequence`: 장면 또는 추후 RGB 추정 물체 포즈에서 양쪽 삽입점과 상부 접근 통로를 만들고, 저장된 차렷자세부터 무충돌 순차 삽입·안정화·수직 인양·인출·운반의 7개 UI 단계를 `motioncreator.ramen-interaction.v1` metadata로 생성한다.
 - `motioncreator/tool_model.py — head_camera_spec`: 그리퍼 URDF의 고정 `d435_joint` 장착 위치와 RPY를 읽는다. URDF에 없는 optical frame과 RGB intrinsics는 보정된 실카메라 드라이버가 공급해야 한다.
 - `motioncreator/interaction.py`: metadata 검증, TCP 위치/회전 보간, 시간축 샘플링을 담당한다.
+- `motioncreator/interaction.py — project_with_consistent_interactions`: 저장된 TCP 목표와 키프레임 FK가 맞지 않는 이전 자동 생성 metadata를 재생용 복사본에서 제외한다. 원본 프로젝트는 유지한다.
 - `motioncreator/motion.py — compile_motion`: 연속 두 키프레임에 interaction metadata가 있으면 TCP 보간값을 양팔 IK로 투영한다.
 - `motioncreator/policy_preview.py — _interaction_feedback`: 500 Hz MuJoCo step마다 위치·방향 오차를 Jacobian transpose 토크로 변환하고, 도구와 모든 장면 오브젝트 접촉력을 안전 상한과 비교한다.
 - `frontend/app/ramen-sequence-controls.tsx`: 자동 생성기의 대상 선택, 경로·임피던스 설정, 단계 탐색과 물리 실행 UI다. 현재 `frontend/app/page.tsx`에서 표시를 비활성화하고 수동 키프레임 편집을 사용한다.

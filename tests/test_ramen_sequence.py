@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
+from motioncreator.interaction import project_with_consistent_interactions
 from motioncreator.motion import compile_motion, new_project, validate_project
 from motioncreator.policy_preview import _interaction_feedback, build_model
 from motioncreator.ramen_sequence import plan_ramen_sequence
@@ -73,9 +74,23 @@ def test_ramen_sequence_uses_taught_tcp_pose_and_compiles_cartesian_path(monkeyp
     inserted = np.asarray(result['keyframes'][3]['interaction']['tcp_targets']['left']['position'])
     assert np.dot(preinsert - inserted, reference['box_up_world']) >= reference['diameter_m'] - 1e-7
     validate_project(robot, project)
+    assert all(frame.get('interaction') for frame in project_with_consistent_interactions(robot, project)['keyframes'])
     motion = compile_motion(robot, project, fps=20)
     assert len(motion['qpos']) > len(result['keyframes'])
     assert motion['max_pin_error_mm'] < 1.
+
+
+def test_manual_pose_changes_ignore_stale_tcp_targets_without_changing_saved_project(monkeypatch):
+    robot, project, _ = _project(monkeypatch)
+    project['keyframes'] = [project['keyframes'][0], project['keyframes'][3]]
+    first_target = project['keyframes'][0]['interaction']['tcp_targets']
+    project['keyframes'][1]['interaction']['tcp_targets'] = first_target
+    cleaned = project_with_consistent_interactions(robot, project)
+    assert cleaned['keyframes'][1].get('interaction') is None
+    assert project['keyframes'][1]['interaction']['tcp_targets'] is first_target
+    motion = compile_motion(robot, project, fps=10)
+    np.testing.assert_allclose(motion['qpos'][-1], project['keyframes'][1]['qpos'])
+    assert any(np.linalg.norm(q - motion['qpos'][0]) > .1 for q in motion['qpos'][1:])
 
 
 def test_interaction_impedance_produces_bounded_restoring_torque(monkeypatch):

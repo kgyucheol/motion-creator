@@ -22,6 +22,14 @@ test('a duplicated keyframe is inserted immediately after the selection as an in
   assert.notEqual(result.keyframes[2].pins, frames[1].pins);
 });
 
+test('a manually duplicated keyframe does not inherit an automatic TCP target', () => {
+  const interaction = { task: 'ramen_extract', tcp_targets: { left: {}, right: {} } };
+  const frames = [{ name: 'Auto', duration: 1, qpos: [0], pins: [], interaction }];
+  const result = duplicateKeyframeAfter(frames, 0);
+  assert.equal(result.keyframes[0].interaction, interaction);
+  assert.equal(result.keyframes[1].interaction, undefined);
+});
+
 test('the head camera view uses URDF +X as forward and +Z as image up', () => {
   const view = headCameraViewQuaternion([0, 0, 0, 1]);
   const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(view);

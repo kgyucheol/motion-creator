@@ -83,5 +83,7 @@ export function duplicateKeyframeAfter(keyframes: Keyframe[], selectedIndex: num
   if (selectedIndex < 0 || selectedIndex >= keyframes.length) return { keyframes, index: selectedIndex };
   const index = selectedIndex + 1;
   const duplicate = structuredClone(keyframes[selectedIndex]);
+  // The new pose will be edited independently; inherited TCP targets would pin playback.
+  delete duplicate.interaction;
   return { keyframes: [...keyframes.slice(0, index), duplicate, ...keyframes.slice(index)], index };
 }

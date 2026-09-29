@@ -108,6 +108,37 @@ def interpolate_interaction(first, second, progress):
     return output
 
 
+def project_with_consistent_interactions(robot, project, position_tolerance_m=.03, orientation_tolerance_deg=15.):
+    """Ignore legacy TCP targets that no longer describe their keyframe's joint pose.
+
+    Manual edits can change qpos while retaining the old auto-generated metadata. Keep
+    the saved project intact; only the playback copy loses those stale targets.
+    """
+    frames = project.get('keyframes', [])
+    if not any(frame.get('interaction') for frame in frames):
+        return project
+    updated = []
+    for frame in frames:
+        interaction = frame.get('interaction')
+        if not interaction:
+            updated.append(frame)
+            continue
+        data = robot.data(frame['qpos'])
+        consistent = True
+        for side in SIDES:
+            position, orientation = robot.point(data, f'{side}_hand')
+            target = interaction['tcp_targets'][side]
+            position_error = np.linalg.norm(position - np.asarray(target['position'], dtype=float))
+            target_orientation = Rotation.from_quat(target['quaternion_xyzw']).as_matrix()
+            orientation_error = np.rad2deg(np.linalg.norm(
+                Rotation.from_matrix(target_orientation @ orientation.T).as_rotvec()))
+            if position_error > position_tolerance_m or orientation_error > orientation_tolerance_deg:
+                consistent = False
+                break
+        updated.append(frame if consistent else {key: value for key, value in frame.items() if key != 'interaction'})
+    return {**project, 'keyframes': updated}
+
+
 def interaction_timeline(project):
     frames = project.get('keyframes', [])
     elapsed = 0.

@@ -257,7 +257,7 @@ export default function Editor() {
       const activeProject = current.current.project;
       if (activeProject) {
         const nextProject = { ...activeProject, keyframes: activeProject.keyframes.map((item, index) => index === pendingFollow.frameIndex
-          ? { ...item, qpos: [...result.state.qpos], grasp: { ...result.grasp, follow_object: true } } : item) };
+          ? { ...item, qpos: [...result.state.qpos], grasp: { ...result.grasp, follow_object: true }, interaction: undefined } : item) };
         current.current.project = nextProject; setProject(nextProject);
       }
       invalidate();
@@ -737,7 +737,10 @@ export default function Editor() {
       if ('grasp' in patch) return { ...f, ...patch };
       const grasp = patch.qpos && f.grasp ? { ...f.grasp, closure_qpos: undefined,
         object_signature: undefined, contact_points_world: undefined, hand_twist_deg: undefined } : f.grasp;
-      return { ...f, ...patch, ...(grasp ? { grasp } : {}) };
+      // A manually authored pose must not keep the auto-planner's old TCP target.
+      const frame = { ...f };
+      if (patch.qpos) delete frame.interaction;
+      return { ...frame, ...patch, ...(grasp ? { grasp } : {}) };
     }) } : p);
     invalidate();
   }
@@ -762,7 +765,7 @@ export default function Editor() {
       const activeProject = current.current.project;
       if (activeProject) {
         const nextProject = { ...activeProject, keyframes: activeProject.keyframes.map((item, index) => index === frameIndex
-          ? { ...item, qpos: [...result.state.qpos], grasp: result.grasp } : item) };
+          ? { ...item, qpos: [...result.state.qpos], grasp: result.grasp, interaction: undefined } : item) };
         current.current.project = nextProject; setProject(nextProject);
       }
       invalidate(); changeGraspPickMode(null);
