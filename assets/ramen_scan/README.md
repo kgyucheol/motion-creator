@@ -30,6 +30,8 @@ height. Collision response is intentionally not configured in this first layout.
 single-cup model: twelve 70 cm stacks (30 cups per stack) laid along the box's
 72 cm axis in four rows and three layers. Each stack is one mesh object; the
 scene contains 12 stacks plus one box. The same slight overlap is permitted.
+Each stack has a reproducible random roll around its lengthwise X axis, then
+the complete box-and-stacks layout is rotated +90 degrees around world Z.
 
 Each working file also has a self-contained GLB export for direct use by the
 motion-validation project:

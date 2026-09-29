@@ -6,11 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import sys
 from pathlib import Path
 
 import bpy
-from mathutils import Vector
+import numpy as np
+from mathutils import Matrix, Vector
 
 
 INNER_WIDTH = 0.72
@@ -19,6 +21,8 @@ INNER_HEIGHT = 0.40
 WALL = 0.02
 ROWS = 4
 LAYERS = 3
+ROLL_SEED = 20260929
+FINAL_Z_ROTATION_DEGREES = 90
 
 
 def parse_args() -> argparse.Namespace:
@@ -52,6 +56,12 @@ def bounds(obj: bpy.types.Object) -> tuple[Vector, Vector]:
     lower = Vector(min(corner[axis] for corner in corners) for axis in range(3))
     upper = Vector(max(corner[axis] for corner in corners) for axis in range(3))
     return lower, upper
+
+
+def mesh_bounds(obj: bpy.types.Object, local_vertices: np.ndarray) -> tuple[Vector, Vector]:
+    matrix = np.asarray(obj.matrix_world, dtype=np.float64)
+    world_vertices = local_vertices @ matrix[:3, :3].T + matrix[:3, 3]
+    return Vector(world_vertices.min(axis=0)), Vector(world_vertices.max(axis=0))
 
 
 def centers(span: float, diameter: float, count: int) -> list[float]:
@@ -99,7 +109,9 @@ def main() -> None:
     z_pitch = (INNER_HEIGHT - layer_diameter) / (LAYERS - 1)
     z_centers = [z_min_center + layer * z_pitch for layer in range(LAYERS)]
 
+    rng = random.Random(ROLL_SEED)
     stacks: list[bpy.types.Object] = []
+    roll_angles_degrees: list[float] = []
     for layer, z_center in enumerate(z_centers, start=1):
         for row, y_center in enumerate(y_centers, start=1):
             stack = template if not stacks else template.copy()
@@ -107,29 +119,43 @@ def main() -> None:
                 stack.data = template.data
                 stack_collection.objects.link(stack)
             stack.name = f"Mupama_Stack_L{layer:02d}_R{row:02d}"
-            stack.rotation_mode = "XYZ"
-            stack.rotation_euler = (0.0, math.pi / 2, 0.0)
-            stack.location = (-stack_length / 2, y_center, z_center)
+            roll = rng.uniform(0.0, 2.0 * math.pi)
+            stack.matrix_world = (
+                Matrix.Translation((-stack_length / 2, y_center, z_center))
+                @ Matrix.Rotation(roll, 4, "X")
+                @ Matrix.Rotation(math.pi / 2, 4, "Y")
+            )
             stack["cup_count"] = 30
             stack["packing_layer"] = layer
             stack["packing_row"] = row
+            stack["x_axis_roll_degrees"] = math.degrees(roll)
             stacks.append(stack)
+            roll_angles_degrees.append(math.degrees(roll))
 
     bpy.context.view_layer.update()
     interior_lower = Vector((-INNER_WIDTH / 2, -INNER_LENGTH / 2, WALL))
     interior_upper = Vector((INNER_WIDTH / 2, INNER_LENGTH / 2, WALL + INNER_HEIGHT))
-    stack_bounds = [bounds(stack) for stack in stacks]
+    vertex_data = np.empty(len(template.data.vertices) * 3, dtype=np.float32)
+    template.data.vertices.foreach_get("co", vertex_data)
+    local_vertices = vertex_data.reshape(-1, 3)
+    stack_bounds = [mesh_bounds(stack, local_vertices) for stack in stacks]
     if any(
         lower[axis] < interior_lower[axis] - 1e-5
         or upper[axis] > interior_upper[axis] + 1e-5
         for lower, upper in stack_bounds
         for axis in range(3)
     ):
-        raise RuntimeError("A stack extends beyond the box interior")
+        raise RuntimeError(f"A stack extends beyond the box interior: {stack_bounds}")
+
+    final_rotation = Matrix.Rotation(math.radians(FINAL_Z_ROTATION_DEGREES), 4, "Z")
+    for obj in (box, *stacks):
+        obj.matrix_world = final_rotation @ obj.matrix_world
+    bpy.context.view_layer.update()
 
     scene["asset_role"] = "motion_validation_packing"
     scene["stack_count"] = len(stacks)
     scene["cups_per_stack"] = 30
+    scene["final_z_rotation_degrees"] = FINAL_Z_ROTATION_DEGREES
     bpy.ops.file.pack_all()
     bpy.ops.wm.save_as_mainfile(filepath=str(args.blend_output.resolve()))
     bpy.ops.export_scene.gltf(
@@ -151,6 +177,9 @@ def main() -> None:
         "layers": LAYERS,
         "stack_count": len(stacks),
         "total_cup_count": len(stacks) * 30,
+        "x_axis_roll_seed": ROLL_SEED,
+        "x_axis_roll_degrees": [round(value, 3) for value in roll_angles_degrees],
+        "final_z_rotation_degrees": FINAL_Z_ROTATION_DEGREES,
         "scene_objects": [obj.name for obj in scene.objects],
         "row_overlap_m": round(max(0.0, ROWS * row_diameter - INNER_LENGTH), 6),
         "layer_overlap_m": round(max(0.0, LAYERS * layer_diameter - INNER_HEIGHT), 6),
