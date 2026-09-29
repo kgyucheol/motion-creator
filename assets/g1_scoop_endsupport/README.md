@@ -23,6 +23,7 @@ Unitree 공식 `g1_29dof_rev_1_0.urdf`(unitree_ros `robots/g1_description`, comm
 2. 그 자리에 아래 링크·관절을 넣었다. 부착점은 공식 손 부착점과 같은 `*_wrist_yaw_link` 기준 x = 41.5 mm(손목 yaw 메시 앞면)이다.
    - `right_scoop_joint`(fixed) → `right_scoop_link` → `right_scoop_tcp_joint`(fixed) → `right_scoop_tcp`
    - `left_end_support_joint`(fixed) → `left_end_support_link` → `left_end_support_tcp_joint`(fixed) → `left_end_support_tcp`
+   - 1차 안쪽 장착 시안: 원본 URDF의 왼 받침은 장착부 X축 기준 +90°, 오른 주걱은 −90° 회전한다. 윗면 법선이 각각 로봇 중심선 쪽(왼쪽 −Y, 오른쪽 +Y)을 향한다. 모션 편집기의 좌우 교환 모델에서는 왼 주걱 −Y, 오른 받침 +Y가 된다.
 3. 재질 2개를 추가했다: `gripper_white`, `adapter_dark`.
 4. `<mujoco><compiler …>`에 `strippath="true"`를 추가했다. 원본 파일은 MuJoCo 3.13에서 메시 경로가 `meshes/meshes/…`로 두 번 붙어 로드에 실패한다(여기서 직접 확인함). 이 한 줄로 해결된다.
 5. 로봇 이름 뒤에 `_scoop_endsupport`를 붙였다.
@@ -31,7 +32,7 @@ Unitree 공식 `g1_29dof_rev_1_0.urdf`(unitree_ros `robots/g1_description`, comm
 
 ## 3. 그리퍼 형상 (링크 좌표계 기준)
 
-두 링크 모두 원점은 플랜지면 중심이다. 축 방향은 손목 yaw 링크와 같다: x = 그리퍼가 뻗는 방향, z = 윗면 법선, y = 로봇 왼쪽.
+두 링크 모두 원점은 플랜지면 중심이다. 링크 로컬 좌표에서 x = 그리퍼가 뻗는 방향, z = 윗면 법선이다. 손목 장착부에서 X축으로 90° 회전하므로 로봇 기본 자세에서 윗면은 위쪽이 아니라 몸 안쪽을 향한다.
 
 **V 주걱 `right_scoop_link`**
 - 위에서 보면 밥주걱 모양이다. 목 폭 32 mm에서 최대 폭 160 mm까지 넓어지고, 끝은 둥글다. 플랜지면에서 끝까지 248 mm다.
@@ -50,12 +51,12 @@ Unitree 공식 `g1_29dof_rev_1_0.urdf`(unitree_ros `robots/g1_description`, comm
 
 | 프레임 | 링크 기준 위치 | 손목 yaw 링크 기준 | 의미 |
 |---|---|---|---|
-| `right_scoop_tcp` | (180.3, 0, −38.1) mm | (221.8, 0, −38.1) mm | 주걱 오목면 최저점 (묶음이 앉는 곳) |
-| `left_end_support_tcp` | (180.3, 0, −38.1) mm | (221.8, 0, −38.1) mm | 시뮬레이션에서 좌우를 바꾼 뒤 왼 주걱 TCP와 대칭이 되는 제어점 |
+| `right_scoop_tcp` | (180.3, 0, −38.1) mm | (221.8, −38.1, 0) mm | 주걱 오목면 최저점 (묶음이 앉는 곳) |
+| `left_end_support_tcp` | (180.3, 0, −38.1) mm | (221.8, +38.1, 0) mm | 시뮬레이션에서 좌우를 바꾼 뒤 왼 주걱 TCP와 대칭이 되는 제어점 |
 
 TCP는 제어 기준점이다. 받침의 판과 옆벽 형상 및 충돌체는 옮기지 않았다. 모션 편집기의
 `g1-tools` 로더는 두 도구를 좌우 교환하므로 실제 모델에서는 왼 주걱과 오른 받침의 TCP가
-손목 기준 같은 전후·높이에 놓이고 좌우로 대칭이 된다.
+손목 기준 같은 전후·높이에 놓이고 좌우로 대칭이 된다. 에디터의 손 자세 목표는 회전된 툴 TCP 좌표계를 사용한다.
 `validate_log.txt`는 공급된 원본 패키지의 검증 기록이며 TCP 보정 전 좌표를 담고 있다.
 
 ## 4. 질량·관성

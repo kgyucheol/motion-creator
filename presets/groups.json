@@ -24,6 +24,14 @@
         "right_shoulder",
         "left_shoulder"
       ]
+    },
+    {
+      "id": "2c66b5dd2aaf431d8f9d6529c67c080c",
+      "name": "양손 yaw",
+      "members": [
+        "left_wrist_yaw_joint",
+        "right_wrist_yaw_joint"
+      ]
     }
   ]
 }

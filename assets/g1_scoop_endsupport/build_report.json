@@ -33,6 +33,11 @@
           80.0,
           3.5
         ]
+      ],
+      "mount_rpy_rad": [
+        -1.57079633,
+        0,
+        0
       ]
     },
     "left_end_support_link": {
@@ -62,8 +67,13 @@
           45.0,
           2.0
         ]
+      ],
+      "mount_rpy_rad": [
+        1.57079633,
+        0,
+        0
       ]
     }
   },
-  "urdf_sha256": "eb628ea7ceaae0d0"
+  "urdf_sha256": "1334976f39bb3c60"
 }

@@ -92,6 +92,10 @@ def matrix_quat(matrix):
     return Rotation.from_matrix(matrix).as_quat()[[3, 0, 1, 2]]
 
 
+ATTENTION_ELBOW = 1.3  # rad; pi/2 would hang the forearm perfectly straight
+ATTENTION_SHOULDER_ROLL = .2  # rad, keeps the hands off the thighs
+
+
 class Robot:
     def __init__(self, model_id=None):
         self.model_id = model_id or os.environ.get('MOTIONCREATOR_MODEL', 'g1')
@@ -123,6 +127,14 @@ class Robot:
         d = self.data(self.home)
         # The model uses radius-5 mm contact spheres at z=-30 mm.
         self.home[2] -= min(self.point(d, k)[0][2] for k in FEET)
+        # Attention pose: the default stand's base, legs and waist, with the arms hanging
+        # at the sides. Sharing the lower body keeps the pinned feet exactly where the
+        # default stand puts them. The left/right shoulder-roll ranges are mirrored, so
+        # +/- ATTENTION_SHOULDER_ROLL and the same elbow angle give a symmetric pose.
+        self.attention = self.home.copy()
+        for side, sign in (('left', 1), ('right', -1)):
+            self.attention[m.joint(f'{side}_elbow_joint').qposadr[0]] = ATTENTION_ELBOW
+            self.attention[m.joint(f'{side}_shoulder_roll_joint').qposadr[0]] = sign * ATTENTION_SHOULDER_ROLL
         self.visual_ids = [i for i in range(m.ngeom) if m.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH and m.geom_group[i] == 1]
         if self.model_id == 'g1':
             fingerprint_source = MODEL_PATH.read_bytes()
@@ -147,6 +159,7 @@ class Robot:
             # TCP. The 29 joints and physical geoms did not change, so saved
             # projects using the earlier TCP calibration remain editable.
             self.compatible_fingerprints.update({
+                'b9c00efdb6e538fea6383b620c4e09e6ce2e638dd6ce1cf9348810cb601d7f3e',
                 'd270539dbd3c592d46a7721e623c4b71d9be7b73ad7437a5531ec3161519aa45',
                 'bde0de43b90b2ff14ebf6641393c1347bd6b1e82620ffcc90d155cfa6ff1163a',
             })
@@ -375,10 +388,15 @@ class Robot:
 
     def state(self, q):
         d = self.data(q)
-        handles = {k: {'position': p.tolist(), 'quaternion': Rotation.from_matrix(r).as_quat().tolist(), 'label': self.handles[k][2]}
-                   for k in HANDLES for p, r in [self.point(d, k)]}
-        geoms = {str(i): {'position': d.geom_xpos[i].tolist(), 'quaternion': Rotation.from_matrix(d.geom_xmat[i].reshape(3, 3)).as_quat().tolist()}
-                 for i in self.visual_ids}
+        # Convert all rotation matrices in one call; a scipy Rotation per handle/geom dominated the cost.
+        points = [self.point(d, k) for k in HANDLES]
+        handle_quaternions = Rotation.from_matrix(np.stack([r for _, r in points])).as_quat().tolist()
+        handles = {k: {'position': p.tolist(), 'quaternion': quaternion, 'label': self.handles[k][2]}
+                   for k, (p, _), quaternion in zip(HANDLES, points, handle_quaternions)}
+        geom_quaternions = Rotation.from_matrix(d.geom_xmat[self.visual_ids].reshape(-1, 3, 3)).as_quat().tolist()
+        geom_positions = d.geom_xpos[self.visual_ids].tolist()
+        geoms = {str(i): {'position': position, 'quaternion': quaternion}
+                 for i, position, quaternion in zip(self.visual_ids, geom_positions, geom_quaternions)}
         grip_pads = {}
         for side in (() if self.model_id == 'g1-tools' else ('left', 'right')):
             body = self.model.body(f'{side}_wrist_yaw_link').id

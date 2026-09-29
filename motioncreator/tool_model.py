@@ -64,6 +64,8 @@ def tool_model_xml():
             if origin is not None:
                 xyz = np.fromstring(origin.get('xyz', '0 0 0'), sep=' ') * [1, -1, 1]
                 origin.set('xyz', ' '.join(map(str, xyz)))
+                rpy = np.fromstring(origin.get('rpy', '0 0 0'), sep=' ') * [-1, 1, -1]
+                origin.set('rpy', ' '.join(map(str, rpy)))
     model = mujoco.MjModel.from_xml_string(ET.tostring(source, encoding='unicode'))
     with tempfile.NamedTemporaryFile(suffix='.xml') as output:
         mujoco.mj_saveLastXML(output.name, model)
@@ -85,13 +87,13 @@ def tool_model_xml():
         compiled.set('actuatorfrcrange', f'{-effort} {effort}')
         compiled.set('armature', '.01')
         ET.SubElement(motors, 'motor', name=name, joint=name, gear='1')
-    # Fixed TCP links are fused by the URDF importer; retain their exact offsets.
+    # Fixed TCP links are fused by the URDF importer; locate each handle in its
+    # tool link so both the mount rotation and TCP orientation reach FK/IK.
     handles = {}
     for side, original, tool in (('left', 'right', 'scoop'), ('right', 'left', 'end_support')):
-        mount = source.find(f"joint[@name='{original}_{tool}_joint']/origin")
         tcp = source.find(f"joint[@name='{original}_{tool}_tcp_joint']/origin")
-        position = [float(a) + float(b) for a, b in zip(mount.get('xyz').split(), tcp.get('xyz').split())]
-        handles[f'{side}_hand'] = (f'{side}_wrist_yaw_link', tuple(position), f'{side} {tool} TCP')
+        position = tuple(float(value) for value in tcp.get('xyz').split())
+        handles[f'{side}_hand'] = (f'{original}_{tool}_link', position, f'{side} {tool} TCP')
     for index, geom in enumerate(root.findall('.//geom')):
         if geom.get('name') is None:
             geom.set('name', f'urdf_geom_{index}')

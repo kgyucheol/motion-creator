@@ -123,8 +123,8 @@ def link_xml(name, M, c, I, meshes, cols, prims):
         g = f'<cylinder radius="{f(a["radius"])}" length="{f(a["length"])}"/>' if kind == 'cylinder' else f'<box size="{xyz(a["size"])}"/>'
         s.append(f'  <collision>\n    <origin xyz="{xyz(o)}" rpy="{xyz(r)}"/>\n    <geometry>\n      {g}\n    </geometry>\n  </collision>')
     s.append('</link>'); return '\n'.join(s)
-def fixed_joint(name, parent, child, o):
-    return f'<joint name="{name}" type="fixed">\n  <origin xyz="{xyz(o)}" rpy="0 0 0"/>\n  <parent link="{parent}"/>\n  <child link="{child}"/>\n</joint>'
+def fixed_joint(name, parent, child, o, rpy=(0, 0, 0)):
+    return f'<joint name="{name}" type="fixed">\n  <origin xyz="{xyz(o)}" rpy="{xyz(rpy)}"/>\n  <parent link="{parent}"/>\n  <child link="{child}"/>\n</joint>'
 
 def main():
     ap = argparse.ArgumentParser()
@@ -153,7 +153,9 @@ def main():
         M, c, I = inertial([(body, a.body_density), (ad, a.adapter_density)])
         ev = np.linalg.eigvalsh(I); assert ev.min() > 0 and ev[2] <= ev[0] + ev[1] + 1e-12, 'bad inertia'
         link = link_xml(f'{base}_link', M, c, I, [(f'{base}_body.STL', 'gripper_white'), (f'{base}_adapter.STL', 'adapter_dark')], colnames, prims)
-        j1 = fixed_joint(f'{base}_joint', f'{side}_wrist_yaw_link', f'{base}_link', (FLANGE_X, 0, 0))
+        # Rotate each tool around its forward X axis so its upper face points toward the torso.
+        mount_roll = np.pi / 2 if side == 'left' else -np.pi / 2
+        j1 = fixed_joint(f'{base}_joint', f'{side}_wrist_yaw_link', f'{base}_link', (FLANGE_X, 0, 0), (mount_roll, 0, 0))
         tl = f'<link name="{base}_tcp"/>'; j2 = fixed_joint(f'{base}_tcp_joint', f'{base}_link', f'{base}_tcp', tcp)
         # 공식 더미손 링크·관절을 같은 자리에서 교체
         old_link = root.find(f"link[@name='{side}_rubber_hand']"); old_joint = root.find(f"joint[@name='{side}_hand_palm_joint']")
@@ -164,6 +166,7 @@ def main():
             e.tail = tail; root.insert(idx + k, e)
         snippet += [link, j1, tl, j2]
         report['links'][f'{base}_link'] = dict(mass_kg=round(M, 4), com_m=[round(v, 5) for v in c], tcp_m=[round(v, 5) for v in tcp],
+                                               mount_rpy_rad=[round(mount_roll, 8), 0, 0],
                                                body_volume_cm3=round(body.volume*1e6, 1), adapter_volume_cm3=round(ad.volume*1e6, 1),
                                                n_collision_meshes=len(colnames), n_collision_primitives=len(prims),
                                                bounds_mm=(body.bounds*1000).round(1).tolist())

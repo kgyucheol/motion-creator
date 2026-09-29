@@ -1,0 +1,17 @@
+PASS ① 구동 관절 29개 (원본과 같은 29)
+PASS ① 새 링크 ['left_end_support_link', 'left_end_support_tcp', 'right_scoop_link', 'right_scoop_tcp']
+PASS ① 더미손 링크 제거됨
+PASS ① yourdfpy validate()
+② MuJoCo 총질량 원본 29.527 kg → 새 모델 30.066 kg (차이 +0.539)
+PASS ② MuJoCo 컴파일·순방향 계산 OK (body 30, geom 157, mesh 116)
+② left_wrist_yaw_link(그리퍼 병합) 질량 0.5468 kg
+② right_wrist_yaw_link(그리퍼 병합) 질량 0.5010 kg
+③ right_scoop_tcp: 손목 기준 [221.8    0.   -38.06] mm
+③ left_end_support_tcp: 손목 기준 [196.75  41.   -30.  ] mm
+PASS ④ 주걱 충돌체 오차: 윗면 최대 1.24 mm(평균 0.42), 아랫면 최대 0.21 mm — 3202점
+PASS ④ 충돌체가 주걱 윗면을 덮는 비율 100.0%
+PASS ⑤ 홈 깊이 실측 0.650 mm (판 윗면 z=-30.00, 홈 바닥 z=-30.65 mm)
+
+결과: ALL PASS
+robot name is: g1_29dof_rev_1_0_scoop_endsupport
+---------- Successfully Parsed XML ---------------
