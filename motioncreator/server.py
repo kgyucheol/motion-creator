@@ -71,7 +71,7 @@ class ProjectInput(BaseModel):
 
 class PhysicsPreviewInput(BaseModel):
     project: dict
-    controller: Literal['pd', 'gear-sonic'] = 'gear-sonic'
+    controller: Literal['pd', 'gear-sonic', 'objects'] = 'gear-sonic'
     start_frame_index: int = Field(0, ge=0)
 
 

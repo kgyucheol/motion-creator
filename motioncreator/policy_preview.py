@@ -217,7 +217,7 @@ def _tool_contact_forces(model, data, robot, object_geom_ids):
 
 
 def simulate(project, progress=lambda value: None, *, controller='gear-sonic', start_frame_index=0, sonic_policy=None):
-    if controller not in ('pd', 'gear-sonic'):
+    if controller not in ('pd', 'gear-sonic', 'objects'):
         raise ValueError('Unknown physics controller')
     robot = Robot()
     validate_project(robot, project)
@@ -248,7 +248,8 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
     interaction_reference = interaction_timeline(project)
     object_geom_ids = {model.geom(index).id for index in range(model.ngeom)
                        if (model.geom(index).name or '').startswith('preview_object_')}
-    interaction_stats = {'active': any(first and second for _, _, first, second in interaction_reference), 'max_tcp_error_mm': 0.,
+    interaction_stats = {'active': controller != 'objects' and any(first and second for _, _, first, second in interaction_reference),
+                         'max_tcp_error_mm': 0.,
                          'max_orientation_error_deg': 0., 'max_feedback_torque_nm': 0.,
                          'max_contact_force_n': {'left': 0., 'right': 0.},
                          'force_limit_exceeded': False}
@@ -295,11 +296,24 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
     reason = 'completed'
     count = max(1, round(float(times[-1]) / .02))
     for step in range(count):
-        # PD-only uses the reference joint angles directly: no learned balance
-        # controller, root forces, pose teleportation, or ONNX dependency.
-        target = (policy.action(data.qpos.copy(), data.qvel.copy(), ref, float(data.time), float(times[-1]))
-                  if policy is not None else ref.sample(data.time)[0][0, 7:])
+        # In objects mode the robot is a prescribed, one-way collision driver.
+        # The object free joints still integrate under gravity and contact.
+        if controller == 'objects':
+            target = None
+        elif policy is not None:
+            target = policy.action(data.qpos.copy(), data.qvel.copy(), ref, float(data.time), float(times[-1]))
+        else:
+            target = ref.sample(data.time)[0][0, 7:]
         for _ in range(10):
+            if controller == 'objects':
+                pose, velocity = ref.sample(float(data.time))
+                data.qpos[:36] = pose[0]
+                data.qvel[:35] = velocity[0]
+                data.ctrl[:] = 0
+                mujoco.mj_forward(model, data)
+                mujoco.mj_step(model, data)
+                update_grasp_stats()
+                continue
             torque = KP * (target - data.qpos[qa]) - KD * data.qvel[va]
             interaction = interaction_at(interaction_reference, float(data.time))
             feedback, feedback_metrics = _interaction_feedback(model, data, robot, interaction, va, limits)
@@ -323,6 +337,10 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
                     interaction_stats['force_limit_exceeded'] = True
                     reason = 'interaction_force_limit'
                     break
+        if controller == 'objects':
+            pose, velocity = ref.sample(float(data.time))
+            data.qpos[:36] = pose[0]
+            data.qvel[:35] = velocity[0]
         if reason != 'completed':
             mujoco.mj_forward(model, data)
         if (not np.isfinite(data.qpos).all() or not np.isfinite(data.qvel).all()
@@ -334,7 +352,7 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
         mujoco.mj_forward(model, data)
         expected, _ = ref.sample(data.time)
         errors.append(float(np.mean((data.qpos[qa] - expected[0, 7:]) ** 2)))
-        if data.qpos[2] < .25 or data.xmat[model.body('pelvis').id].reshape(3, 3)[2, 2] < np.cos(np.pi / 4):
+        if controller != 'objects' and (data.qpos[2] < .25 or data.xmat[model.body('pelvis').id].reshape(3, 3)[2, 2] < np.cos(np.pi / 4)):
             reason = 'fallen'
         if step % 2 == 1 or step == count - 1 or reason != 'completed':
             replay_times.append(float(data.time))
@@ -385,7 +403,7 @@ class PreviewJobs:
         return self.sonic_process
 
     def start(self, project, controller='gear-sonic', start_frame_index=0):
-        if controller not in ('pd', 'gear-sonic'):
+        if controller not in ('pd', 'gear-sonic', 'objects'):
             raise ValueError('Unknown physics controller')
         robot = Robot()
         validate_project(robot, project)

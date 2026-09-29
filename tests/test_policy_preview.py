@@ -49,6 +49,49 @@ def test_primitive_scene_objects_are_free_bodies_and_replay_from_authored_pose()
     assert project['scene_objects'][0]['position'] == [2., 0., .8]
 
 
+def test_object_only_physics_preserves_authored_robot_while_objects_fall():
+    robot = Robot()
+    project = new_project(robot)
+    project['keyframes'][0]['pins'] = []
+    destination = copy.deepcopy(project['keyframes'][0])
+    destination['name'] = 'Move'
+    destination['duration'] = .12
+    destination['qpos'][7] += .1
+    project['keyframes'].append(destination)
+    project['scene_objects'] = [{
+        'id': 'falling', 'name': 'Falling', 'shape': 'box', 'position': [2., 0., .8],
+        'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.2, .2, .2], 'mass_kg': 1.,
+        'friction': .6, 'color': '#336699', 'opacity': 1., 'visible': True,
+    }]
+    original = copy.deepcopy(project)
+    result = preview.simulate(project, controller='objects')
+    assert result['controller'] == 'objects' and result['physics']
+    assert result['policy'] is None and result['summary']['reason'] == 'completed'
+    assert result['summary']['joint_rmse_rad'] == pytest.approx(0., abs=1e-10)
+    np.testing.assert_allclose(result['states'][0]['qpos'], robot.home, atol=1e-10)
+    np.testing.assert_allclose(result['states'][-1]['qpos'], destination['qpos'], atol=1e-10)
+    assert any(abs(state['qpos'][7] - robot.home[7]) > .01 for state in result['states'][1:])
+    assert result['object_states'][-1]['falling']['position'][2] < .8
+    assert project == original
+
+
+def test_object_only_physics_retains_gripper_contact(monkeypatch):
+    monkeypatch.setenv('MOTIONCREATOR_MODEL', 'g1-tools')
+    robot = Robot()
+    project = new_project(robot)
+    project['keyframes'][0]['duration'] = .1
+    tcp = robot.point(robot.data(robot.home), 'left_hand')[0]
+    project['scene_objects'] = [{
+        'id': identifier, 'name': identifier, 'shape': 'box', 'position': position,
+        'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.08, .08, .08],
+        'mass_kg': .2, 'friction': .7, 'color': '#ffffff', 'opacity': 1., 'visible': True,
+    } for identifier, position in [('near', tcp.tolist()), ('far', [tcp[0] + 2., tcp[1], tcp[2]])]]
+    result = preview.simulate(project, controller='objects')
+    final = result['object_states'][-1]
+    assert final['near']['position'][2] > final['far']['position'][2] + .02
+    np.testing.assert_allclose(result['states'][-1]['qpos'], robot.home, atol=1e-10)
+
+
 def test_scene_object_start_pose_is_raised_above_floor_for_its_rotation():
     robot = Robot()
     project = new_project(robot)

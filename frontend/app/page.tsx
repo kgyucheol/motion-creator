@@ -16,7 +16,7 @@ type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
-type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
+type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; controller?: 'pd' | 'gear-sonic' | 'objects'; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
@@ -130,6 +130,7 @@ export default function Editor() {
   const [sample, setSample] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [physicsEnabled, setPhysicsEnabled] = useState(false);
+  const [objectPhysicsEnabled, setObjectPhysicsEnabled] = useState(false);
   const [physicsAvailable, setPhysicsAvailable] = useState(false);
   const [policyEnabled, setPolicyEnabled] = useState(false);
   const [policyAvailable, setPolicyAvailable] = useState(false);
@@ -902,12 +903,12 @@ export default function Editor() {
       if (result.warnings?.length) setError(result.warnings.join(' '));
     });
   }
-  const controllerLabel = policyEnabled ? 'GEAR-SONIC' : '기본 PD';
+  const controllerLabel = objectPhysicsEnabled ? '오브젝트 물리' : policyEnabled ? 'GEAR-SONIC' : '기본 PD';
   async function play(forcePhysics = false, startFrameOverride?: number) {
     if (playing) { setPlaying(false); return; }
     if (preview) { if (sample >= preview.states.length - 1) setSample(0); setPlaying(true); return; }
     await run(async () => {
-      if (!physicsEnabled && !forcePhysics) {
+      if (!physicsEnabled && !objectPhysicsEnabled && !forcePhysics) {
         const result = await api<Preview>('preview', { project, fps: 30 });
         setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
         if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
@@ -923,7 +924,7 @@ export default function Editor() {
       try {
         const startFrame = project?.keyframes[physicsStartFrame];
         setMessage(`${controllerLabel} · ${physicsStartFrame + 1}번 ${startFrame?.name ?? '키프레임'}부터 물리 계산 준비 중…`);
-        let job = await api<PolicyJob>('policy-preview', { project, controller: policyEnabled ? 'gear-sonic' : 'pd', start_frame_index: physicsStartFrame });
+        let job = await api<PolicyJob>('policy-preview', { project, controller: objectPhysicsEnabled && !forcePhysics ? 'objects' : policyEnabled ? 'gear-sonic' : 'pd', start_frame_index: physicsStartFrame });
         request.id = job.id;
         if (request.cancelled) {
           await api(`policy-preview/${job.id}/cancel`, {});
@@ -963,7 +964,7 @@ export default function Editor() {
   async function validateGraspPhysics() {
     const grasp = project?.keyframes[frameIndex]?.grasp;
     if (!grasp?.object_signature || grasp.closure_qpos) return;
-    if (!physicsEnabled) { setPhysicsEnabled(true); setMessage('양손 파지 물리 검증을 준비합니다.'); }
+    if (!physicsEnabled) { setPhysicsEnabled(true); setObjectPhysicsEnabled(false); setMessage('양손 파지 물리 검증을 준비합니다.'); }
     await play(true);
   }
   async function cancelPolicy() {
@@ -975,15 +976,16 @@ export default function Editor() {
       setMessage('물리 계산을 취소했습니다.');
     } catch (failure) { setError((failure as Error).message); }
   }
-  function changeSimulation(physics: boolean, policy: boolean) {
+  function changeSimulation(physics: boolean, policy: boolean, objects = false) {
     const source = policySource.current;
     if (preview?.physics && source) {
       applyState(source.state); setFrameIndex(source.frameIndex); setPins(source.pins); setAnglePins(source.anglePins); setPoseDirty(source.dirty);
     }
     policySource.current = null;
     scene.current?.setSceneObjects(current.current.objects);
-    invalidate(); setPhysicsEnabled(physics); setPolicyEnabled(physics && policy);
-    setMessage(!physics ? '원본 모션 재생 · 물리 OFF' : policy
+    invalidate(); setPhysicsEnabled(physics); setObjectPhysicsEnabled(objects); setPolicyEnabled(physics && policy);
+    setMessage(objects ? '키프레임 로봇 자세를 유지하고 오브젝트만 중력·접촉으로 움직입니다. 로봇 토크·파지 가능성은 검증하지 않습니다.'
+      : !physics ? '원본 모션 재생 · 물리 OFF' : policy
       ? 'MuJoCo + GEAR-SONIC · 재생하면 CPU 계산 후 결과를 보여줍니다.'
       : 'MuJoCo + 기본 PD · 균형 정책 없이 관절을 제어합니다. 불안정한 모션은 넘어질 수 있습니다.');
   }
@@ -1065,10 +1067,11 @@ export default function Editor() {
     <main className="viewport">
       <div ref={host} className="canvas-host"/>
       <div className="viewport-top"><div className="view-title"><span className="status-dot"/>POSE WORKSPACE<span>m · rad · Z-up</span></div><div className="view-buttons"><button className={showCollisions ? 'chosen' : ''} aria-pressed={showCollisions} title="원본 메시를 숨기고 Physics/WBC에서 사용하는 오브젝트 충돌체만 표시합니다." onClick={() => setShowCollisions(value => !value)}><Boxes size={13}/>콜리전</button>{(['perspective', 'front', 'side'] as const).map((v, i) => <button key={v} onClick={() => scene.current?.setView(v)}>{['자유', '정면', '측면'][i]}</button>)}</div></div>
-      <div className={`simulation-status ${physicsEnabled ? 'enabled' : ''}`}>
+      <div className={`simulation-status ${physicsEnabled || objectPhysicsEnabled ? 'enabled' : ''}`}>
         <span>Physics <b data-active={physicsEnabled}>{physicsEnabled ? 'ON' : 'OFF'}</b></span>
+        <span>Object Physics <b data-active={objectPhysicsEnabled}>{objectPhysicsEnabled ? 'ON' : 'OFF'}</b></span>
         <span>GEAR-SONIC <b data-active={policyEnabled}>{policyEnabled ? 'ON' : 'OFF'}</b></span>
-        {physicsEnabled && <small>{controllerLabel} · {preview?.physics ? '계산된 결과' : policyJob ? '계산 중' : '재생 대기'}</small>}
+        {(physicsEnabled || objectPhysicsEnabled) && <small>{controllerLabel} · {preview?.physics ? '계산된 결과' : policyJob ? '계산 중' : '재생 대기'}</small>}
         {preview?.summary && <small>{preview.summary.reason === 'completed' ? '추종 결과' : preview.summary.reason === 'fallen' ? '넘어짐 감지' : '계산 중단'} · 오차 {(preview.summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°</small>}
         {preview?.summary?.grasp && <small>파지 L {preview.summary.grasp.left.max_normal_n.toFixed(1)}N · R {preview.summary.grasp.right.max_normal_n.toFixed(1)}N · {preview.summary.grasp.bilateral_contact ? '양손 접촉' : '접촉 실패'}</small>}
       </div>
@@ -1159,10 +1162,13 @@ export default function Editor() {
     </aside>
     <section className="timeline">
       <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{motionClip ? `1 clip · ${motionClip.length} frames` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<button disabled={disabled || !activeFrame || !!motionClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || !!motionClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
-      <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled ? `${controllerLabel} 물리 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label>
+      <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled || objectPhysicsEnabled ? `${controllerLabel} 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label>
         <div className="simulation-toggles">
         <button className="policy-toggle" type="button" aria-pressed={physicsEnabled} disabled={!state || busy || solving || playing || !physicsAvailable} onClick={() => changeSimulation(!physicsEnabled, false)} title={!physicsAvailable ? '물리 재생을 사용하려면 서버를 업데이트하고 재시작하세요.' : 'ON: 중력·접촉·관절 토크 계산 · OFF: 정책도 끄고 원본 편집으로 돌아가기'}>
           <span className="policy-indicator"/>Physics <b>{physicsEnabled ? 'ON' : 'OFF'}</b>
+        </button>
+        <button className="policy-toggle" type="button" aria-pressed={objectPhysicsEnabled} disabled={!state || busy || solving || playing || !physicsAvailable} onClick={() => changeSimulation(false, false, !objectPhysicsEnabled)} title="로봇은 키프레임 궤적을 정확히 따르고 오브젝트에만 중력·접촉·마찰을 적용합니다. 로봇 토크나 파지 안정성은 검증하지 않습니다.">
+          <span className="policy-indicator"/>Object Physics <b>{objectPhysicsEnabled ? 'ON' : 'OFF'}</b>
         </button>
         <button className="policy-toggle" type="button" aria-pressed={policyEnabled} disabled={!state || busy || solving || playing || !physicsAvailable || !policyAvailable} onClick={() => changeSimulation(true, !policyEnabled)} title={!physicsAvailable || !policyAvailable ? 'SONIC CPU 환경 또는 서버 업데이트를 확인하세요.' : 'ON: Physics도 함께 켜고 GEAR-SONIC 정책 추종 · OFF: 물리는 유지하고 기본 PD 관절 제어 사용'}>
           <span className="policy-indicator"/>GEAR-SONIC <b>{policyEnabled ? 'ON' : 'OFF'}</b>
@@ -1174,6 +1180,6 @@ export default function Editor() {
       </div>
       <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) { applyState(preview.states[i]); if (preview.object_states?.[i]) scene.current?.setObjectPoses(preview.object_states[i]); } }}/>
     </section>
-    <footer className={`statusbar ${error ? 'error' : ''}`}><span>{error ? <AlertCircle size={13}/> : <span className="status-dot"/>}{error || message}</span><span>{physicsEnabled ? `MuJoCo + ${controllerLabel} · ${preview?.physics ? '시뮬레이션 결과' : 'CPU 재생 준비'}` : '원본 모션 · 물리 OFF'}</span></footer>
+    <footer className={`statusbar ${error ? 'error' : ''}`}><span>{error ? <AlertCircle size={13}/> : <span className="status-dot"/>}{error || message}</span><span>{physicsEnabled || objectPhysicsEnabled ? `MuJoCo + ${controllerLabel} · ${preview?.physics ? '시뮬레이션 결과' : 'CPU 재생 준비'}` : '원본 모션 · 물리 OFF'}</span></footer>
   </div>;
 }

@@ -835,6 +835,7 @@ npm --prefix frontend run test:scene
 - `motioncreator/interaction.py — project_with_consistent_interactions`: 저장된 TCP 목표와 키프레임 FK가 맞지 않는 이전 자동 생성 metadata를 재생용 복사본에서 제외한다. 원본 프로젝트는 유지한다.
 - `motioncreator/motion.py — compile_motion`: 연속 두 키프레임에 interaction metadata가 있으면 TCP 보간값을 양팔 IK로 투영한다.
 - `motioncreator/policy_preview.py — _interaction_feedback`: 500 Hz MuJoCo step마다 위치·방향 오차를 Jacobian transpose 토크로 변환하고, 도구와 모든 장면 오브젝트 접촉력을 안전 상한과 비교한다.
+- `motioncreator/policy_preview.py — simulate(controller='objects')`: 로봇 qpos/qvel을 키프레임 참조에 매 스텝 맞추고 장면 오브젝트의 자유 관절만 결과로 적분하는 중간 미리보기다. 로봇의 힘·토크 실현 가능성은 평가하지 않는다.
 - `frontend/app/ramen-sequence-controls.tsx`: 자동 생성기의 대상 선택, 경로·임피던스 설정, 단계 탐색과 물리 실행 UI다. 현재 `frontend/app/page.tsx`에서 표시를 비활성화하고 수동 키프레임 편집을 사용한다.
 - `frontend/lib/robot-scene.ts — renderHeadCamera`: `Robot.state.cameras.head` FK를 별도 PerspectiveCamera에 적용해 메인 뷰 위에 Head Cam PiP를 합성한다. 현재 투영은 미보정 60° FOV다.
 
