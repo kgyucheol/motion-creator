@@ -349,6 +349,13 @@ export function sceneObjectDescendantIds(objects: SceneObject[], parentId: strin
   return descendants;
 }
 
+export function removeSceneObjectSubtree(objects: SceneObject[], id: string) {
+  if (!objects.some(object => object.id === id)) return { objects, removedIds: new Set<string>() };
+  const removedIds = sceneObjectDescendantIds(objects, id);
+  removedIds.add(id);
+  return { objects: objects.filter(object => !removedIds.has(object.id)), removedIds };
+}
+
 export function reparentSceneObject(objects: SceneObject[], childId: string, parentId: string | null) {
   const child = objects.find(object => object.id === childId);
   if (!child || (child.parent_id ?? null) === parentId) return objects;

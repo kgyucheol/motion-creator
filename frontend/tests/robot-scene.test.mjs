@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { RobotScene, canRotateSelection, headCameraViewQuaternion, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, reparentSceneObject, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
+import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
@@ -46,6 +46,18 @@ test('scene hierarchy reparents without teleporting and propagates parent motion
   assert.ok(new THREE.Vector3().fromArray(moved[1].position).distanceTo(new THREE.Vector3(2, 1, 0)) < 1e-10);
   assert.ok(new THREE.Vector3().fromArray(moved[2].position).distanceTo(new THREE.Vector3(1, 1, 0)) < 1e-10);
   assert.equal(reparentSceneObject(hierarchy, 'cup', null)[1].parent_id, null);
+});
+
+test('deleting a scene parent removes every descendant but preserves unrelated objects', () => {
+  const objects = [
+    { id: 'box' }, { id: 'cup', parent_id: 'box' }, { id: 'lid', parent_id: 'cup' },
+    { id: 'other' },
+  ];
+  const result = removeSceneObjectSubtree(objects, 'box');
+  assert.deepEqual([...result.removedIds].sort(), ['box', 'cup', 'lid']);
+  assert.deepEqual(result.objects.map(object => object.id), ['other']);
+  assert.deepEqual(objects.map(object => object.id), ['box', 'cup', 'lid', 'other']);
+  assert.deepEqual(removeSceneObjectSubtree(objects, 'cup').objects.map(object => object.id), ['box', 'other']);
 });
 
 test('the head camera view uses URDF +X as forward and +Z as image up', () => {

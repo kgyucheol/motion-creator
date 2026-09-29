@@ -9,7 +9,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
-import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, reparentSceneObject, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
@@ -361,11 +361,22 @@ export default function Editor() {
     selectObject(added[5].id);
   }
   function removeObject(id: string) {
+    const { objects: remaining, removedIds } = removeSceneObjectSubtree(current.current.objects, id);
+    if (!removedIds.size) return;
     checkpoint();
-    commitObjects(current.current.objects.filter(object => object.id !== id).map(object => object.parent_id === id ? { ...object, parent_id: null } : object), false);
-    commitObjectGroups(current.current.objectGroups.map(group => ({ ...group, member_ids: group.member_ids.filter(member => member !== id) }))
+    commitObjects(remaining, false);
+    commitObjectGroups(current.current.objectGroups.map(group => ({ ...group, member_ids: group.member_ids.filter(member => !removedIds.has(member)) }))
       .filter(group => group.member_ids.length >= 2));
+    const activeProject = current.current.project;
+    if (activeProject) {
+      const nextProject = { ...activeProject, keyframes: activeProject.keyframes.map(frame => ({ ...frame,
+        ...(frame.grasp && removedIds.has(frame.grasp.object_id) ? { grasp: undefined } : {}),
+        ...(frame.interaction && removedIds.has(frame.interaction.object_id) ? { interaction: undefined } : {}),
+      })) };
+      current.current.project = nextProject; setProject(nextProject);
+    }
     selectObject(null);
+    setMessage(removedIds.size > 1 ? `부모와 하위 오브젝트 ${removedIds.size}개를 삭제했습니다. 실행 취소로 복원할 수 있습니다.` : '오브젝트를 삭제했습니다. 실행 취소로 복원할 수 있습니다.');
   }
   async function importSceneAsset(source: File) {
     const extension = source.name.slice(source.name.lastIndexOf('.')).toLowerCase();

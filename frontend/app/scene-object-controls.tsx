@@ -81,7 +81,7 @@ export default function SceneObjectControls(props: Props) {
       <label className="checkbox"><input type="checkbox" checked={props.groundLock} disabled={props.disabled || !selected} onChange={event => props.onPlacementChange({ groundLock: event.target.checked })}/>지면 고정</label>
     </div>
     {selected && <div className="object-editor">
-      <div className="object-title-row"><input aria-label="물체 이름" value={selected.name} maxLength={80} disabled={props.disabled} onChange={event => props.onChange(selected.id, { name: event.target.value || selected.name })}/><button title="물체 삭제" disabled={props.disabled} onClick={() => props.onRemove(selected.id)}><Trash2 size={14}/></button></div>
+      <div className="object-title-row"><input aria-label="물체 이름" value={selected.name} maxLength={80} disabled={props.disabled} onChange={event => props.onChange(selected.id, { name: event.target.value || selected.name })}/><button title="물체와 하위 물체 삭제" disabled={props.disabled} onClick={() => props.onRemove(selected.id)}><Trash2 size={14}/></button></div>
       <div className="segmented object-modes">{(['translate', 'rotate', 'scale'] as ObjectTransformMode[]).map((mode, index) => <button key={mode} className={props.mode === mode ? 'chosen' : ''} disabled={props.disabled} onClick={() => props.onModeChange(mode)}>{['이동 W', '회전 E', '크기 R'][index]}</button>)}</div>
       <div className="inspector-label">{selected.asset_id ? '물리 충돌체' : '도형'}</div>
       <select aria-label="물체 도형" value={selected.shape} disabled={props.disabled || !!selected.asset_id} onChange={event => {
