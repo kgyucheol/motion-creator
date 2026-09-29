@@ -87,6 +87,12 @@ export type SceneAssetImport = {
 
 export type SceneObjectPose = { position: number[]; quaternion_xyzw: number[] };
 export type CandidateGraspPoints = { left: number[]; right: number[] };
+export type GraspPointCoefficients = { lateral: number; clearance: number; height: number };
+export type RamenGraspCoefficients = { left: GraspPointCoefficients; right: GraspPointCoefficients };
+export const DEFAULT_RAMEN_GRASP_COEFFICIENTS: RamenGraspCoefficients = {
+  left: { lateral: .25, clearance: .10, height: 0 },
+  right: { lateral: .25, clearance: .10, height: 0 },
+};
 export type ScenePlacementOptions = { preventOverlap: boolean; surfaceSnap: boolean; groundLock: boolean; snapDistance?: number };
 
 const DEFAULT_PLACEMENT: SceneObjectPlacement = { prevent_overlap: true, surface_snap: false, ground_lock: true };
@@ -142,7 +148,7 @@ export function isRamenBundle(object: SceneObject) {
   return /mupama.stack|ramen.bundle|라면.*묶음/i.test(object.name) && object.shape !== 'open_box';
 }
 
-export function candidateRamenGraspPoints(object: SceneObject, robotPosition: number[], robotQuaternion: number[]): CandidateGraspPoints {
+export function candidateRamenGraspPoints(object: SceneObject, robotPosition: number[], robotQuaternion: number[], coefficients: RamenGraspCoefficients = DEFAULT_RAMEN_GRASP_COEFFICIENTS): CandidateGraspPoints {
   const center = new THREE.Vector3().fromArray(object.position);
   const rotation = new THREE.Quaternion().fromArray(object.quaternion_xyzw).normalize();
   const axisIndex = object.size.indexOf(Math.max(...object.size));
@@ -159,10 +165,13 @@ export function candidateRamenGraspPoints(object: SceneObject, robotPosition: nu
   }
   towardRobot.normalize();
   const radius = Math.max(...object.size.filter((_, index) => index !== axisIndex)) / 2;
-  const approach = center.clone().addScaledVector(towardRobot, radius + .10);
+  const point = (side: 'left' | 'right') => center.clone()
+    .addScaledVector(axis, (side === 'left' ? 1 : -1) * coefficients[side].lateral)
+    .addScaledVector(towardRobot, radius + coefficients[side].clearance)
+    .addScaledVector(new THREE.Vector3(0, 0, 1), coefficients[side].height).toArray();
   return {
-    left: approach.clone().addScaledVector(axis, .25).toArray(),
-    right: approach.clone().addScaledVector(axis, -.25).toArray(),
+    left: point('left'),
+    right: point('right'),
   };
 }
 
