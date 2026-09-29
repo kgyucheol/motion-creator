@@ -6,7 +6,7 @@ import GraspControls, { type GraspPickMode } from './grasp-controls';
 import RamenSequenceControls, { type RamenSequenceSettings } from './ramen-sequence-controls';
 import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
-import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
+import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes, PersonStanding } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
@@ -692,8 +692,10 @@ export default function Editor() {
   useEffect(() => {
     const ghost = !playing && !preview?.physics ? graspGhost(project?.keyframes[frameIndex], objects) : undefined;
     scene.current?.setSceneObjects(ghost ? [...objects, ghost] : objects);
+    // Rebuilding the meshes resets them to their authored poses; when playback stops keep the replayed ones.
+    if (preview?.object_states?.[sample]) scene.current?.setObjectPoses(preview.object_states[sample]);
     if (!ghost && sceneObjectSelection.current === GRASP_GHOST_ID) sceneObjectSelection.current = null;
-  }, [objects, project, frameIndex, playing, preview]);
+  }, [objects, project, frameIndex, playing, preview]); // eslint-disable-line react-hooks/exhaustive-deps -- sample is read only when these change
   useEffect(() => { current.current.project = project; }, [project]);
   useEffect(() => {
     const grasp = project?.keyframes[frameIndex]?.grasp;
@@ -708,6 +710,20 @@ export default function Editor() {
       ? candidateRamenGraspPoints(object, pelvis.position, pelvis.quaternion, graspCoefficients) : null;
   }, [graspPreviewId, selectedObjectId, objects, state, playing, preview?.physics, graspCoefficients]);
   useEffect(() => { scene.current?.setCandidateGraspMarkers(graspPreview); }, [graspPreview]);
+  const playbackFrame = useMemo(() => {
+    if (!preview || !project || !playing) return null;
+    // Keyframe start times follow compile_motion: each frame's duration is its travel time from the previous one.
+    const starts = project.keyframes.reduce<number[]>((times, frame, i) =>
+      [...times, i === 0 ? 0 : times[i - 1] + Math.max(1, Math.round(frame.duration * 30)) / 30], []);
+    const offset = starts[Math.min(preview.summary?.start_frame_index ?? 0, starts.length - 1)] ?? 0;
+    const time = (preview.time[Math.min(sample, preview.time.length - 1)] ?? 0) + offset + 1e-6;
+    let index = 0;
+    while (index + 1 < starts.length && starts[index + 1] <= time) index++;
+    return index;
+  }, [preview, project, playing, sample]);
+  useEffect(() => {
+    if (playbackFrame !== null) document.querySelectorAll('.frame-track .frame-card')[playbackFrame]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [playbackFrame]);
   function applyCandidateGraspToFrame() {
     const frame = project?.keyframes[frameIndex];
     if (!frame || !graspPreview || !selectedObjectId || busy || solving || playing || preview?.physics || frame.samples) return;
@@ -718,7 +734,7 @@ export default function Editor() {
         qpos: frame.qpos, anchor: frame.qpos,
         targets: { left_hand: target.left, right_hand: target.right },
         orientations: { left_hand: target.orientation.left, right_hand: target.orientation.right },
-        pins: frame.pins, angle_pins: frame.angle_pins ?? [], mode, resistance,
+        pins: frame.pins, angle_pins: frame.angle_pins ?? [], mode, resistance, retry_from_presets: true,
       });
       if (!alive.current || current.current.frameIndex !== selectedFrameIndex) return;
       setInfo(result.solver);
@@ -922,24 +938,6 @@ export default function Editor() {
         setPreview(result); setSample(Math.min(firstSample, result.states.length - 1));
       }
       setMessage(`중간 자세 ${end - start}개를 키프레임으로 추가했습니다. ${physicsEnabled || objectPhysicsEnabled ? '물리 재생은 시작 프레임을 선택한 뒤 실행하세요.' : '재생을 누르면 선택 구간부터 확인할 수 있습니다.'} 장애물 회피·물리 안정성은 별도 검증이 필요합니다.`);
-    });
-  }
-  function saveAttentionPose() {
-    if (!project || !state) return;
-    const attention_pose = { qpos: [...state.qpos], pins: [...pins], angle_pins: [...anglePins] };
-    const nextProject = { ...project, attention_pose };
-    current.current.project = nextProject; setProject(nextProject);
-    setMessage('현재 자세와 고정 조건을 차렷자세로 저장했습니다. 기본 서기 자세는 그대로 유지됩니다.');
-  }
-  async function loadAttentionPose() {
-    const saved = project?.attention_pose;
-    if (!saved) return;
-    await run(async () => {
-      checkpoint(); changeGraspPickMode(null);
-      applyState(await api<PoseState>('pose', { qpos: saved.qpos }));
-      setPins([...saved.pins]); setAnglePins([...(saved.angle_pins ?? [])]);
-      setPoseDirty(true); setInfo(null); invalidate();
-      setMessage('저장된 차렷자세를 현재 편집 자세로 불러왔습니다. 선택 프레임에 반영하면 키프레임이 갱신됩니다.');
     });
   }
   function changeHistory(redo: boolean) {
@@ -1156,11 +1154,10 @@ export default function Editor() {
       <p className="hint">먼 부위일수록 원래 위치를 더 유지합니다. 손의 위치를 정확히 유지하려면 손을 고정하세요.</p>
       <div className="pin-summary"><LockKeyhole size={14}/><span>노란 자물쇠: 위치 고정<br/>보라 회전 아이콘: 방향·관절각만 고정</span></div>
       <div className="section-divider"/>
-      <div className="panel-heading"><span>자세 프리셋</span><small>{project?.attention_pose ? '차렷 저장됨' : '차렷 미저장'}</small></div>
+      <div className="panel-heading"><span>자세 프리셋</span></div>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); const init = await api<{state: PoseState}>('init'); applyState(init.state); setPins(feet); setAnglePins([]); setPoseDirty(true); invalidate(); })}><RotateCcw size={15}/> 기본 서기 자세</button>
-      <button className="wide" disabled={disabled || !state || !!motionClip} onClick={saveAttentionPose}><Save size={15}/> 현재 자세를 차렷자세로 저장</button>
-      <button className="wide" disabled={disabled || !project?.attention_pose || !!motionClip} onClick={() => void loadAttentionPose()}><Download size={15}/> 차렷자세 불러오기</button>
-      <p className="hint">기본 서기는 로봇 초기 자세입니다. 차렷자세는 현재 관절값과 위치·각도 고정 설정을 프로젝트에 별도로 저장합니다.</p>
+      <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); changeGraspPickMode(null); const init = await api<{state: PoseState}>('attention'); applyState(init.state); setPins(feet); setAnglePins([]); setPoseDirty(true); setInfo(null); invalidate(); })}><PersonStanding size={15}/> 차렷 자세</button>
+      <p className="hint">기본 서기는 로봇 초기 자세입니다. 차렷 자세는 관절을 좌우대칭으로 맞춰 두 팔을 몸 옆에 내린 자세입니다.</p>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => {
         const init = await api<{ project: Project }>('init');
         await loadProject(init.project);
@@ -1242,7 +1239,6 @@ export default function Editor() {
       {state?.handles.left_hand?.label.includes('TCP')
         ? <><p className="hint">G1 그리퍼 작업점: 왼손 주걱 · 오른손 받침. 타임라인에서 자세를 하나씩 추가하고 양쪽 TCP를 조정한 뒤 선택 프레임에 반영하세요. Physics에서는 두 도구의 실제 충돌 형상·질량·관성이 적용됩니다.</p>
           {SHOW_AUTOMATIC_RAMEN_SEQUENCE && <RamenSequenceControls objects={objects} selectedObjectId={selectedObjectId} keyframes={project?.keyframes ?? []} disabled={disabled || !!motionClip}
-            attentionPoseSaved={!!project?.attention_pose}
             onTargetChange={id => { setSelectedObjectGroupId(null); selectObject(id); }} onGenerate={(id, settings) => void generateRamenSequence(id, settings)}
             onSelectFrame={index => void chooseFrame(index)} onRun={index => { setPhysicsEnabled(true); void play(true, index); }}/>}</>
         : <GraspControls objects={objects} selectedObjectId={selectedObjectId} grasp={activeFrame?.grasp} disabled={disabled || !!motionClip} pickMode={graspPickMode} onChange={changeGrasp} onPickMode={graspPickMode => void changeGraspPickMode(graspPickMode)} onFit={() => void fitGrasp()} onEditGhost={editGraspGhost} onValidate={() => void validateGraspPhysics()}/>}
@@ -1276,7 +1272,7 @@ export default function Editor() {
         </button>
         </div>
       </div>
-        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title="두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다"><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
+        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title="두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다"><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
         <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>{motionClip ? '클립 재생 시간' : '이동 시간'} <NumericInput aria-label="키프레임 이동 시간"  min={motionClip ? 1/120 : .1} max={motionClip ? 600 : 60} step=".01" disabled={disabled || (!motionClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = motionClip ? 1/120 : .1; const maximum = motionClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); setTransitionSelection([]); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); setTransitionSelection([]); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); setTransitionSelection([]); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
       </div>
       <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) { applyState(preview.states[i]); if (preview.object_states?.[i]) scene.current?.setObjectPoses(preview.object_states[i]); } }}/>

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, isJointPairSelection, mirroredJointSign, pairedJointTargets, translatedTargets } from '../lib/pose-transforms.ts';
 
 test('a symmetric hinge pair supports one active ring and mirrored axis deltas', () => {
@@ -742,4 +742,16 @@ test('mirror gizmo anchors at the active member while F still frames both sides'
   assert.deepEqual(viewer.orbit.target.toArray(), [.3,0,.8]);
   viewer.setMirrorTranslation(false);
   assert.deepEqual(viewer.pivot.position.toArray(), [.3,0,.8]);
+});
+
+test('both hand TCPs can rotate together while their positions are pinned', () => {
+  const hands = ['left_hand', 'right_hand'];
+  assert.equal(rotationBlocked(hands, ['left_foot', 'right_foot', ...hands], []), false);
+  assert.equal(rotationBlocked(hands, hands, ['left_hand']), true);
+  assert.equal(rotationBlocked(['left_foot', 'right_foot'], ['left_foot'], []), true);
+  const orientations = { left_hand: [0, 0, 0, 1], right_hand: [0, 0, 0, 1] };
+  const positions = { left_hand: [0, .2, 1], right_hand: [0, -.2, 1] };
+  const result = rotatedGroupTargets(positions, orientations, [0, 0, 1], [0, 0, 0, 1], quaternionFromDegrees([0, 0, 30]), hands);
+  assert.deepEqual(result.targets, {});
+  assert.equal(Object.keys(result.orientations).length, 2);
 });

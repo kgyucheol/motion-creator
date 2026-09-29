@@ -43,6 +43,10 @@ export function ankleFrame(state: PoseState, key: string) {
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, x.clone().cross(y).normalize()));
 }
 export const canRotateSelection = (members: string[]) => members.length > 0 && (members.every(k => ROTATABLE.includes(k)) || isJointPairSelection(members) || members.length === 1 && (HINGE_HANDLES.includes(members[0]) || isJointHandle(members[0])));
+/** Position-pinned handles rotate in place (rotatedGroupTargets sends no position target for them), so
+ * only angle pins and pinned feet, whose orientation the solver keeps fixed, block a rotation. */
+export const rotationBlocked = (controls: string[], pins: string[], anglePins: string[]) =>
+  !canRotateSelection(controls) || controls.some(k => anglePins.includes(k) || pins.includes(k) && k.endsWith('_foot'));
 const HEAD_CAMERA_VIEW_FRAME = new THREE.Quaternion().setFromRotationMatrix(
   new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0)),
 );
@@ -639,7 +643,7 @@ export class RobotScene {
       else this.pivot.quaternion.fromArray(this.state.handles[activeControl].quaternion);
     }
     const blocked = this.transformMode === 'rotate'
-      ? !canRotateSelection(controls) || controls.some(k => anglePins.includes(k) || pins.includes(k) && (controls.length > 1 || k.endsWith('_foot')))
+      ? rotationBlocked(controls, pins, anglePins)
       : members.some(k => pins.includes(k));
     if (this.editable && !blocked && this.markerVisible && !this.selectedSceneObject) this.gizmo.attach(this.pivot); else if (!this.selectedSceneObject) this.gizmo.detach();
     this.dirty = true;

@@ -45,7 +45,6 @@ type Props = {
   selectedObjectId: string | null;
   keyframes: Keyframe[];
   disabled: boolean;
-  attentionPoseSaved: boolean;
   onTargetChange: (id: string) => void;
   onGenerate: (objectId: string, settings: RamenSequenceSettings) => void;
   onSelectFrame: (index: number) => void;
@@ -80,7 +79,7 @@ export default function RamenSequenceControls(props: Props) {
   return <section className="ramen-sequence-controls">
     <div className="panel-heading"><span>라면 꺼내기</span><small>물체 상대 TCP</small></div>
     <p className="hint">대상 중심·충돌 지름·회전으로 양쪽 삽입점을 계산합니다. 현재는 시뮬레이션 물체 포즈를 사용하며, 같은 입력 자리에 추후 RGB 포즈 추정 결과를 연결할 수 있습니다.</p>
-    <p className="ramen-object-reference">시작 자세 <b>{props.attentionPoseSaved ? '저장된 차렷자세' : '기본 서기 자세 (차렷 미저장)'}</b><br/>헤드 카메라 <b>D435 고정 링크 · roll 0° / pitch 47.6° / yaw 0°</b><br/>URDF에는 RGB 내부 파라미터와 optical frame은 없습니다.</p>
+    <p className="ramen-object-reference">시작 자세 <b>기본 서기 자세</b><br/>헤드 카메라 <b>D435 고정 링크 · roll 0° / pitch 47.6° / yaw 0°</b><br/>URDF에는 RGB 내부 파라미터와 optical frame은 없습니다.</p>
     <div className="inspector-label">대상 라면 묶음</div>
     <select aria-label="라면 꺼내기 대상" value={targetId} disabled={props.disabled || !candidates.length} onChange={event => props.onTargetChange(event.target.value)}>
       {!candidates.length && <option value="">움직일 수 있는 오브젝트 없음</option>}
