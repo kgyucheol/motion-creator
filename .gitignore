@@ -23,6 +23,7 @@ assets/g1/robot-g1-tools.glb
 /assets/ramen_scan/single_cup/individual/
 /assets/ramen_scan/single_cup/stack_30_objects/
 /assets/ramen_scan/single_cup/stack_1_object/
+/assets/ramen_scan/packing_12_merged_stacks/
 /assets/ramen_scan/*.blend*
 /assets/ramen_scan/*.glb
 /assets/ramen_scan/*.png

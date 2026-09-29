@@ -26,6 +26,11 @@ centers are evenly distributed within the 55 cm internal length with slight
 overlap. Three layer-axis diameters total about 39.9 cm and fit the 40 cm internal
 height. Collision response is intentionally not configured in this first layout.
 
+`packing_12_merged_stacks/` contains a separate packing model made from the
+single-cup model: twelve 70 cm stacks (30 cups per stack) laid along the box's
+72 cm axis in four rows and three layers. Each stack is one mesh object; the
+scene contains 12 stacks plus one box. The same slight overlap is permitted.
+
 Each working file also has a self-contained GLB export for direct use by the
 motion-validation project:
 
@@ -60,6 +65,15 @@ blender --background --python scripts/blender/export_blend_assets_glb.py -- \
   --asset assets/ramen_scan/cardboard_box_72x55x40cm.blend assets/ramen_scan/cardboard_box_72x55x40cm.glb \
   --asset assets/ramen_scan/ramen_box_packing_4x3.blend assets/ramen_scan/ramen_box_packing_4x3.glb \
   --report assets/ramen_scan/glb_export_report.json
+```
+
+```bash
+blender --background --python scripts/blender/pack_merged_stacks_in_box.py -- \
+  --box assets/ramen_scan/cardboard_box_72x55x40cm.glb \
+  --stack assets/ramen_scan/single_cup/stack_1_object/mupama_cups_30_stack_70cm_merged.glb \
+  --blend-output assets/ramen_scan/packing_12_merged_stacks/mupama_12_stacks_in_box.blend \
+  --glb-output assets/ramen_scan/packing_12_merged_stacks/mupama_12_stacks_in_box.glb \
+  --report assets/ramen_scan/packing_12_merged_stacks/mupama_12_stacks_in_box_report.json
 ```
 
 The raw scan, generated Blender files, reports, and previews are local assets and
