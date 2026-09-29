@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection, headCameraViewQuaternion, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, canRotateSelection, headCameraViewQuaternion, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, sceneObjectsOverlap, transformSceneObjectGroup } from '../lib/scene-objects.ts';
@@ -36,6 +36,15 @@ test('the head camera view uses URDF +X as forward and +Z as image up', () => {
   const up = new THREE.Vector3(0, 1, 0).applyQuaternion(view);
   assert.ok(forward.distanceTo(new THREE.Vector3(1, 0, 0)) < 1e-12);
   assert.ok(up.distanceTo(new THREE.Vector3(0, 0, 1)) < 1e-12);
+});
+
+test('head camera horizontal FOV presets produce the requested view at 16:9', () => {
+  for (const horizontal of [69, 87, 90, 120]) {
+    const vertical = verticalFovForHorizontal(horizontal, 16 / 9);
+    const camera = new THREE.PerspectiveCamera(vertical, 16 / 9, .03, 20);
+    const actual = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
+    assert.ok(Math.abs(actual - horizontal) < 1e-10);
+  }
 });
 
 test('primitive scale constraints preserve spheres and round cylinders', () => {
