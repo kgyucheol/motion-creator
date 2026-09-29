@@ -59,6 +59,8 @@ test('scene tree supports toggle and ordered range selection', () => {
   const removed = selectSceneObjectRows(toggled.ids, toggled.anchorId, 'first', order, true, false);
   assert.deepEqual(removed.ids, ['other']);
   assert.equal(removed.anchorId, 'other');
+  const cleared = selectSceneObjectRows(removed.ids, removed.anchorId, 'other', order, true, false);
+  assert.deepEqual(cleared, { ids: [], anchorId: null });
 });
 
 test('batch reparent moves selected roots together and rejects cycles atomically', () => {

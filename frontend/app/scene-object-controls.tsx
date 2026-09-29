@@ -65,11 +65,17 @@ export default function SceneObjectControls(props: Props) {
     setTreeSelection({ ...next, primaryId });
     props.onSelect(primaryId);
   };
+  const clearSelection = () => {
+    setTreeSelection({ ids: [], anchorId: null, primaryId: null });
+    setDraggedIds([]); setDropTarget(null);
+    props.onSelect(null);
+  };
   const renderObjectRow = (object: SceneObject, depth: number) => <div key={object.id}>
     <button className={`scene-tree-row ${activeIds.includes(object.id) ? 'selected' : ''} ${dropTarget === object.id ? 'drop-target' : ''}`}
       style={{ paddingLeft: `${8 + depth * 16}px` }} disabled={props.disabled} draggable={!props.disabled}
       aria-pressed={activeIds.includes(object.id)}
       onClick={event => selectRow(object.id, event.ctrlKey || event.metaKey, event.shiftKey)}
+      onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); clearSelection(); } }}
       onDragStart={event => {
         const ids = activeIds.includes(object.id) ? activeIds : [object.id];
         if (!activeIds.includes(object.id)) selectRow(object.id, false, false);
@@ -93,6 +99,7 @@ export default function SceneObjectControls(props: Props) {
     <button className="wide" disabled={props.disabled || props.objects.length >= 32} onClick={props.onImport}><Upload size={14}/> 3D 모델 가져오기 (.blend / .glb)</button>
     {!props.objects.length && <p className="hint">장면 물체가 없습니다. 위 버튼으로 MuJoCo 기본 도형을 추가하세요.</p>}
     {!!props.objects.length && <><p className="hint">Ctrl/⌘+클릭으로 다중 선택, Shift+클릭으로 범위 선택한 뒤 드래그해 부모에 넣을 수 있습니다. 현재 위치는 유지됩니다.</p>
+      <div className="scene-tree-selection-bar"><small>{activeIds.length}개 선택</small><button type="button" disabled={props.disabled || !activeIds.length} onClick={clearSelection}>선택 해제 <kbd>Esc</kbd></button></div>
       <div className="scene-tree" aria-label="장면 오브젝트 계층">{roots.map(object => renderObjectRow(object, 0))}</div>
       <button className="scene-tree-root" disabled={props.disabled || !canParent(draggedIds.length ? draggedIds : activeIds, null)} onClick={() => props.onParentChange(activeIds, null)}
         onDragOver={event => { if (canParent(draggedIds, null)) event.preventDefault(); }}
