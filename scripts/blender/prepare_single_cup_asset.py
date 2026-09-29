@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare a single-cup asset using a measured small-base diameter."""
+"""Prepare a single-cup asset using a measured top diameter."""
 
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--blend-output", type=Path, required=True)
     parser.add_argument("--glb-output", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
-    parser.add_argument("--source-bottom-diameter", type=float, default=0.108)
-    parser.add_argument("--target-bottom-diameter", type=float, default=0.11)
+    parser.add_argument("--source-top-diameter", type=float, default=0.14)
+    parser.add_argument("--target-top-diameter", type=float, default=0.138)
     return parser.parse_args(sys.argv[sys.argv.index("--") + 1 :])
 
 
@@ -48,7 +48,7 @@ def main() -> None:
     if len(meshes) > 1:
         bpy.ops.object.join()
     cup = bpy.context.view_layer.objects.active
-    cup.name = "Mupama_Cup_Single_11cm_Base"
+    cup.name = "Mupama_Cup_Single_13_8cm_Top"
     cup.data.name = "Mupama_Cup_Single_Mesh"
 
     source_lower, source_upper = bounds(cup)
@@ -60,7 +60,7 @@ def main() -> None:
             -source_lower.z,
         )
     )
-    uniform_scale = args.target_bottom_diameter / args.source_bottom_diameter
+    uniform_scale = args.target_top_diameter / args.source_top_diameter
     # glTF import may preserve a source-unit conversion in the object's scale
     # (this asset imports its millimeter mesh with scale 0.001). Multiply that
     # existing transform instead of replacing it.
@@ -73,8 +73,8 @@ def main() -> None:
     scene.unit_settings.system = "METRIC"
     scene.unit_settings.length_unit = "METERS"
     cup["asset_role"] = "motion_validation_prop"
-    cup["source_bottom_diameter_m"] = args.source_bottom_diameter
-    cup["target_bottom_diameter_m"] = args.target_bottom_diameter
+    cup["source_top_diameter_m"] = args.source_top_diameter
+    cup["target_top_diameter_m"] = args.target_top_diameter
     cup["applied_uniform_scale"] = uniform_scale
 
     final_lower, final_upper = bounds(cup)
@@ -95,8 +95,8 @@ def main() -> None:
         "glb": str(args.glb_output.resolve()),
         "object": cup.name,
         "source_dimensions_m": [round(value, 6) for value in source_dimensions],
-        "source_bottom_diameter_m": args.source_bottom_diameter,
-        "target_bottom_diameter_m": args.target_bottom_diameter,
+        "source_top_diameter_m": args.source_top_diameter,
+        "target_top_diameter_m": args.target_top_diameter,
         "applied_uniform_scale": round(uniform_scale, 9),
         "final_dimensions_m": [round(value, 6) for value in final_dimensions],
         "bounds_min": [round(value, 6) for value in final_lower],

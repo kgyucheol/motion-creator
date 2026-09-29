@@ -21,17 +21,17 @@ textures, and original photographs. This inventory file is tracked.
 
 ## Measured working asset
 
-`mupama_cup_11cm_base.blend` and `mupama_cup_11cm_base.glb` are derived working
-assets. The source model's documented 108 mm small-base diameter is uniformly
-scaled to the measured 110 mm diameter. The same `110 / 108` scale is applied to
-X, Y, and Z, preserving the cup's proportions.
+`mupama_cup_13_8cm_top.blend` and `mupama_cup_13_8cm_top.glb` are derived working
+assets. The source model's 140 mm top diameter is uniformly scaled to the
+measured 138 mm diameter. The same `138 / 140` scale is applied to X, Y, and Z,
+preserving the cup's proportions.
 
 ```bash
 blender --background --python scripts/blender/prepare_single_cup_asset.py -- \
   --source assets/ramen_scan/single_cup/source/mupama_cup.glb \
-  --blend-output assets/ramen_scan/single_cup/mupama_cup_11cm_base.blend \
-  --glb-output assets/ramen_scan/single_cup/mupama_cup_11cm_base.glb \
-  --source-bottom-diameter 0.108 \
-  --target-bottom-diameter 0.11 \
-  --report assets/ramen_scan/single_cup/mupama_cup_11cm_base_report.json
+  --blend-output assets/ramen_scan/single_cup/mupama_cup_13_8cm_top.blend \
+  --glb-output assets/ramen_scan/single_cup/mupama_cup_13_8cm_top.glb \
+  --source-top-diameter 0.14 \
+  --target-top-diameter 0.138 \
+  --report assets/ramen_scan/single_cup/mupama_cup_13_8cm_top_report.json
 ```
