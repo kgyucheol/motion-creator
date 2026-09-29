@@ -122,10 +122,10 @@ export default function SceneObjectControls(props: Props) {
       {isRamenBundle(selected) && <div className="candidate-grasp-control">
         <button className="wide" type="button" aria-pressed={!!props.graspPreview} disabled={props.disabled} onClick={() => props.onToggleGraspPreview(selected.id)}><Crosshair size={14}/>{props.graspPreview ? '파지점 미리보기 끄기' : '파지점 미리보기'}</button>
         {props.graspPreview && <>
-          <p className="hint">묶음 중심 기준 · 좌우 거리 / 용기 반지름 바깥쪽 여유 / 월드 높이</p>
+          <p className="hint">묶음 중심 기준 위치 · 로컬 +X는 용기 안쪽을 향하고 Pitch +는 위로 기웁니다. 화살표는 진입 방향입니다.</p>
           {(['left', 'right'] as const).map(side => <div className="candidate-grasp-side" key={side}>
             <strong>{side === 'left' ? '왼손' : '오른손'}</strong>
-            <div className="candidate-grasp-fields">{([['lateral', '좌우 거리'], ['clearance', '앞쪽 여유'], ['height', '높이 보정']] as const).map(([field, label]) => <label key={field}>{label}<span><input aria-label={`${side === 'left' ? '왼손' : '오른손'} ${label}`} type="number" step="0.01" value={props.graspCoefficients[side][field]} disabled={props.disabled} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && (field === 'height' || value >= 0)) props.onGraspCoefficientsChange(side, field, value); }}/><small>m</small></span></label>)}</div>
+            <div className="candidate-grasp-fields">{([['lateral', '좌우 거리'], ['clearance', '앞쪽 여유'], ['height', '높이 보정'], ['pitch', '진입 Pitch']] as const).map(([field, label]) => <label key={field}>{label}<span><input aria-label={`${side === 'left' ? '왼손' : '오른손'} ${label}`} type="number" step={field === 'pitch' ? '1' : '0.01'} min={field === 'pitch' ? '-90' : field === 'height' ? undefined : '0'} max={field === 'pitch' ? '90' : undefined} value={props.graspCoefficients[side][field]} disabled={props.disabled} onChange={event => { const value = Number(event.target.value); if (Number.isFinite(value) && (field === 'pitch' ? Math.abs(value) <= 90 : field === 'height' || value >= 0)) props.onGraspCoefficientsChange(side, field, value); }}/><small>{field === 'pitch' ? '°' : 'm'}</small></span></label>)}</div>
             <code>XYZ: {props.graspPreview?.[side].map(value => value.toFixed(3)).join(', ')} m</code>
           </div>)}
           <button type="button" className="wide" disabled={props.disabled} onClick={props.onResetGraspCoefficients}>기본값 복원 · 좌우 0.25 m, 앞쪽 0.10 m</button>

@@ -43,11 +43,13 @@ test('ramen bundle candidate points follow its center and keep robot left/right 
   assert.ok(reversed.left[1] > reversed.right[1]);
   assert.ok(Math.abs(reversed.left[0] - .331) < 1e-10);
   const adjusted = candidateRamenGraspPoints(bundle, [0, 0, 0], [0, 0, 0, 1], {
-    left: { lateral: .30, clearance: .15, height: .02 },
-    right: { lateral: .20, clearance: .05, height: -.03 },
+    left: { lateral: .30, clearance: .15, height: .02, pitch: 30 },
+    right: { lateral: .20, clearance: .05, height: -.03, pitch: -30 },
   });
   assert.deepEqual(adjusted.left.map(value => Number(value.toFixed(3))), [.181, .30, 1.02]);
   assert.deepEqual(adjusted.right.map(value => Number(value.toFixed(3))), [.281, -.20, .97]);
+  assert.deepEqual(adjusted.approach.left.map(value => Number(value.toFixed(3))), [.866, 0, .5]);
+  assert.deepEqual(adjusted.approach.right.map(value => Number(value.toFixed(3))), [.866, 0, -.5]);
 });
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
