@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection, headCameraViewQuaternion, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, canRotateSelection, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
@@ -86,6 +86,16 @@ test('head camera projection applies horizontal and vertical FOV independently',
   setPerspectiveFovs(camera, 90, 60);
   assert.ok(Math.abs(camera.projectionMatrix.elements[0] - horizontalScale) < 1e-10);
   assert.notEqual(camera.projectionMatrix.elements[5], verticalScale);
+});
+
+test('linked head camera FOV follows the selected image aspect', () => {
+  for (const aspect of [4 / 3, 16 / 9]) {
+    for (const horizontal of [69, 90, 120]) {
+      const vertical = verticalFovForHorizontal(horizontal, aspect);
+      assert.ok(Math.abs(horizontalFovForVertical(vertical, aspect) - horizontal) < 1e-10);
+    }
+  }
+  assert.ok(verticalFovForHorizontal(69, 4 / 3) > verticalFovForHorizontal(69, 16 / 9));
 });
 
 test('primitive scale constraints preserve spheres and round cylinders', () => {
