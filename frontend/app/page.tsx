@@ -1143,14 +1143,6 @@ export default function Editor() {
     <main className="viewport">
       <div ref={host} className="canvas-host"/>
       <div className="viewport-top"><div className="view-title"><span className="status-dot"/>POSE WORKSPACE<span>m · rad · Z-up</span></div><div className="view-buttons"><button className={showCollisions ? 'chosen' : ''} aria-pressed={showCollisions} title="원본 메시를 숨기고 Physics/WBC에서 사용하는 오브젝트 충돌체만 표시합니다." onClick={() => setShowCollisions(value => !value)}><Boxes size={13}/>콜리전</button>{(['perspective', 'front', 'side'] as const).map((v, i) => <button key={v} onClick={() => scene.current?.setView(v)}>{['자유', '정면', '측면'][i]}</button>)}</div></div>
-      <div className={`simulation-status ${physicsEnabled || objectPhysicsEnabled ? 'enabled' : ''}`}>
-        <span>Physics <b data-active={physicsEnabled}>{physicsEnabled ? 'ON' : 'OFF'}</b></span>
-        <span>Object Physics <b data-active={objectPhysicsEnabled}>{objectPhysicsEnabled ? 'ON' : 'OFF'}</b></span>
-        <span>GEAR-SONIC <b data-active={policyEnabled}>{policyEnabled ? 'ON' : 'OFF'}</b></span>
-        {(physicsEnabled || objectPhysicsEnabled) && <small>{controllerLabel} · {preview?.physics ? '계산된 결과' : policyJob ? '계산 중' : '재생 대기'}</small>}
-        {preview?.summary && <small>{preview.summary.reason === 'completed' ? '추종 결과' : preview.summary.reason === 'fallen' ? '넘어짐 감지' : '계산 중단'} · 오차 {(preview.summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°</small>}
-        {preview?.summary?.grasp && <small>파지 L {preview.summary.grasp.left.max_normal_n.toFixed(1)}N · R {preview.summary.grasp.right.max_normal_n.toFixed(1)}N · {preview.summary.grasp.bilateral_contact ? '양손 접촉' : '접촉 실패'}</small>}
-      </div>
       {policyJob && <div className="policy-progress">
         <span>{controllerLabel} 물리 계산 <b>{Math.round(policyJob.progress * 100)}%</b></span>
         <progress aria-label="물리 계산 진행률" max={1} value={policyJob.progress}/>

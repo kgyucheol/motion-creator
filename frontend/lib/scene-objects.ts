@@ -86,12 +86,12 @@ export type SceneAssetImport = {
 };
 
 export type SceneObjectPose = { position: number[]; quaternion_xyzw: number[] };
-export type CandidateGraspPoints = { left: number[]; right: number[]; approach: { left: number[]; right: number[] } };
-export type GraspPointCoefficients = { lateral: number; clearance: number; height: number; pitch: number };
+export type CandidateGraspPoints = { left: number[]; right: number[]; approach: { left: number[]; right: number[] }; orientation: { left: number[]; right: number[] } };
+export type GraspPointCoefficients = { lateral: number; clearance: number; height: number; roll: number; pitch: number; yaw: number };
 export type RamenGraspCoefficients = { left: GraspPointCoefficients; right: GraspPointCoefficients };
 export const DEFAULT_RAMEN_GRASP_COEFFICIENTS: RamenGraspCoefficients = {
-  left: { lateral: .25, clearance: .10, height: 0, pitch: 0 },
-  right: { lateral: .25, clearance: .10, height: 0, pitch: 0 },
+  left: { lateral: .25, clearance: .10, height: 0, roll: 0, pitch: 0, yaw: 0 },
+  right: { lateral: .25, clearance: .10, height: 0, roll: 0, pitch: 0, yaw: 0 },
 };
 export type ScenePlacementOptions = { preventOverlap: boolean; surfaceSnap: boolean; groundLock: boolean; snapDistance?: number };
 
@@ -169,14 +169,26 @@ export function candidateRamenGraspPoints(object: SceneObject, robotPosition: nu
     .addScaledVector(axis, (side === 'left' ? 1 : -1) * coefficients[side].lateral)
     .addScaledVector(towardRobot, radius + coefficients[side].clearance)
     .addScaledVector(new THREE.Vector3(0, 0, 1), coefficients[side].height).toArray();
-  const approach = (side: 'left' | 'right') => {
-    const pitch = THREE.MathUtils.degToRad(coefficients[side].pitch);
-    return towardRobot.clone().multiplyScalar(-Math.cos(pitch)).add(new THREE.Vector3(0, 0, Math.sin(pitch))).normalize().toArray();
+  const inward = towardRobot.clone().negate();
+  const up = new THREE.Vector3(0, 0, 1);
+  const localY = up.clone().cross(inward).normalize();
+  const base = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(inward, localY, up));
+  const orientation = (side: 'left' | 'right') => {
+    const { roll, pitch, yaw } = coefficients[side];
+    const offset = new THREE.Quaternion().setFromEuler(new THREE.Euler(
+      THREE.MathUtils.degToRad(roll), -THREE.MathUtils.degToRad(pitch), THREE.MathUtils.degToRad(yaw), 'XYZ'));
+    return base.clone().multiply(offset);
   };
+  const leftOrientation = orientation('left');
+  const rightOrientation = orientation('right');
   return {
     left: point('left'),
     right: point('right'),
-    approach: { left: approach('left'), right: approach('right') },
+    approach: {
+      left: new THREE.Vector3(1, 0, 0).applyQuaternion(leftOrientation).toArray(),
+      right: new THREE.Vector3(1, 0, 0).applyQuaternion(rightOrientation).toArray(),
+    },
+    orientation: { left: leftOrientation.toArray(), right: rightOrientation.toArray() },
   };
 }
 

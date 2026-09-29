@@ -43,13 +43,20 @@ test('ramen bundle candidate points follow its center and keep robot left/right 
   assert.ok(reversed.left[1] > reversed.right[1]);
   assert.ok(Math.abs(reversed.left[0] - .331) < 1e-10);
   const adjusted = candidateRamenGraspPoints(bundle, [0, 0, 0], [0, 0, 0, 1], {
-    left: { lateral: .30, clearance: .15, height: .02, pitch: 30 },
-    right: { lateral: .20, clearance: .05, height: -.03, pitch: -30 },
+    left: { lateral: .30, clearance: .15, height: .02, roll: 0, pitch: 30, yaw: 0 },
+    right: { lateral: .20, clearance: .05, height: -.03, roll: 0, pitch: -30, yaw: 0 },
   });
   assert.deepEqual(adjusted.left.map(value => Number(value.toFixed(3))), [.181, .30, 1.02]);
   assert.deepEqual(adjusted.right.map(value => Number(value.toFixed(3))), [.281, -.20, .97]);
   assert.deepEqual(adjusted.approach.left.map(value => Number(value.toFixed(3))), [.866, 0, .5]);
   assert.deepEqual(adjusted.approach.right.map(value => Number(value.toFixed(3))), [.866, 0, -.5]);
+  const yawed = candidateRamenGraspPoints(bundle, [0, 0, 0], [0, 0, 0, 1], {
+    left: { lateral: .25, clearance: .10, height: 0, roll: 0, pitch: 0, yaw: 90 },
+    right: { lateral: .25, clearance: .10, height: 0, roll: 90, pitch: 0, yaw: 0 },
+  });
+  assert.deepEqual(yawed.approach.left.map(value => Number(value.toFixed(3))), [0, 1, 0]);
+  assert.deepEqual(yawed.approach.right.map(value => Number(value.toFixed(3))), [1, 0, 0]);
+  assert.equal(yawed.orientation.left.length, 4);
 });
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {

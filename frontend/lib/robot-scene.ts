@@ -291,8 +291,9 @@ export class RobotScene {
       const material = new THREE.MeshBasicMaterial({ color, depthTest: false });
       marker.add(new THREE.Mesh(new THREE.SphereGeometry(.018, 16, 12), material));
       marker.add(new THREE.Mesh(new THREE.TorusGeometry(.04, .004, 6, 24), material.clone()));
-      const arrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), .09, color, .025, .012);
-      marker.add(arrow);
+      marker.add(new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), .09, color, .025, .012));
+      marker.add(new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(), .06, '#65b8ff', .018, .009));
+      marker.add(new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), .06, '#f5d86c', .018, .009));
       marker.traverse(node => { node.renderOrder = 6; });
       marker.visible = false; this.scene.add(marker); return [side, marker];
     })) as unknown as Record<'left' | 'right', THREE.Group>;
@@ -902,8 +903,7 @@ export class RobotScene {
       marker.visible = !!points;
       if (points) {
         marker.position.fromArray(points[side]);
-        const arrow = marker.children.find(child => child instanceof THREE.ArrowHelper) as THREE.ArrowHelper;
-        arrow.setDirection(new THREE.Vector3().fromArray(points.approach[side]));
+        marker.quaternion.fromArray(points.orientation[side]);
       }
     }
     this.dirty = true;
