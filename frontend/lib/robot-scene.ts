@@ -140,7 +140,13 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<b>HEAD CAM · SIM</b><div class="head-camera-controls"><select aria-label="PiP 카메라 화각 프리셋"></select><label><input type="range" min="45" max="120" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label></div><small>명목 화각 · 실기기 보정 전</small>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><strong>PiP 카메라 화각</strong><select aria-label="PiP 카메라 화각 프리셋"></select><label><input type="range" min="45" max="120" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label><p>명목 화각 · 실기기 보정 전</p></div>';
+    const settingsButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-settings-button')!;
+    const settings = this.headCameraOverlay.querySelector<HTMLDivElement>('.head-camera-controls')!;
+    settingsButton.addEventListener('click', () => {
+      settings.hidden = !settings.hidden;
+      settingsButton.setAttribute('aria-expanded', String(!settings.hidden));
+    });
     const preset = this.headCameraOverlay.querySelector('select')!;
     const range = this.headCameraOverlay.querySelector('input')!;
     const value = this.headCameraOverlay.querySelector('label span')!;
