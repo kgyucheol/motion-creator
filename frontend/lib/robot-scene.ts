@@ -52,12 +52,6 @@ export function headCameraViewQuaternion(linkQuaternion: number[]) {
 export function verticalFovForHorizontal(horizontalDegrees: number, aspect: number) {
   return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(horizontalDegrees / 2)) / aspect));
 }
-const HEAD_CAMERA_FOV_PRESETS = [
-  { id: 'd435-rgb', label: 'D435 RGB · 69°', horizontal: 69 },
-  { id: 'd435-depth', label: 'D435 Depth · 87°', horizontal: 87 },
-  { id: 'd455-rgb', label: 'D455 RGB · 90°', horizontal: 90 },
-  { id: 'd455-depth', label: 'D455 Depth · 87°', horizontal: 87 },
-];
 type Callbacks = {
   select: (key: string, additive: boolean, hover: boolean) => void;
   begin: () => void;
@@ -140,38 +134,22 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><strong>PiP 카메라 화각</strong><select aria-label="PiP 카메라 화각 프리셋"></select><label><input type="range" min="45" max="120" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label><p>명목 화각 · 실기기 보정 전</p></div>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><strong>PiP 카메라 화각</strong><label><input type="range" min="45" max="120" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label></div>';
     const settingsButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-settings-button')!;
     const settings = this.headCameraOverlay.querySelector<HTMLDivElement>('.head-camera-controls')!;
     settingsButton.addEventListener('click', () => {
       settings.hidden = !settings.hidden;
       settingsButton.setAttribute('aria-expanded', String(!settings.hidden));
     });
-    const preset = this.headCameraOverlay.querySelector('select')!;
     const range = this.headCameraOverlay.querySelector('input')!;
     const value = this.headCameraOverlay.querySelector('label span')!;
-    for (const item of HEAD_CAMERA_FOV_PRESETS) {
-      const option = document.createElement('option');
-      option.value = item.id;
-      option.textContent = item.label;
-      preset.appendChild(option);
-    }
-    const custom = document.createElement('option');
-    custom.value = 'custom';
-    custom.textContent = '직접 조절';
-    preset.appendChild(custom);
     const applyFov = (horizontal: number) => {
       this.headCameraHorizontalFov = horizontal;
       range.value = String(horizontal);
       value.textContent = `가로 ${horizontal}°`;
       this.dirty = true;
     };
-    preset.addEventListener('change', () => {
-      const selected = HEAD_CAMERA_FOV_PRESETS.find(item => item.id === preset.value);
-      if (selected) applyFov(selected.horizontal);
-    });
     range.addEventListener('input', () => {
-      preset.value = 'custom';
       applyFov(Number(range.value));
     });
     this.headCameraOverlay.hidden = true;
