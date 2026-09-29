@@ -9,7 +9,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
-import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, scenePlacementOptions, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, reparentSceneObject, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
@@ -208,7 +208,7 @@ export default function Editor() {
   }
   function invalidate() { setPreview(null); setSample(0); setPlaying(false); }
   function commitObjects(next: SceneObject[], ground = true) {
-    const grounded = ground ? next.map(groundedSceneObject) : next;
+    const grounded = ground ? next.map(object => object.parent_id ? object : groundedSceneObject(object)) : next;
     current.current.objects = grounded;
     setObjects(grounded);
     const activeProject = current.current.project;
@@ -274,13 +274,23 @@ export default function Editor() {
   }
   function changeObject(id: string, patch: Partial<SceneObject>, recordHistory = true) {
     if (recordHistory) checkpoint();
-    commitObjects(current.current.objects.map(object => {
-      if (object.id !== id) return object;
-      const next = { ...object, ...patch };
-      const normalized = { ...next, size: normalizedObjectSize(next.shape, next.size) };
-      if (!Object.keys(patch).some(key => ['position', 'quaternion_xyzw', 'size', 'shape'].includes(key))) return normalized;
-      return placeSceneObject(normalized, current.current.objects.filter(other => other.id !== id), scenePlacementOptions(object), object);
-    }));
+    const before = current.current.objects.find(object => object.id === id);
+    if (!before) return;
+    const normalized = { ...before, ...patch, size: normalizedObjectSize(patch.shape ?? before.shape, patch.size ?? before.size) };
+    const transformChanged = Object.keys(patch).some(key => ['position', 'quaternion_xyzw', 'size', 'shape'].includes(key));
+    const descendants = sceneObjectDescendantIds(current.current.objects, id);
+    const next = transformChanged
+      ? placeSceneObject(normalized, current.current.objects.filter(other => other.id !== id && !descendants.has(other.id)), scenePlacementOptions(before), before)
+      : normalized;
+    const updated = current.current.objects.map(object => object.id === id ? next : object);
+    commitObjects(transformChanged ? transformSceneObjectChildren(updated, before, next) : updated, false);
+  }
+  function changeObjectParent(id: string, parentId: string | null) {
+    const before = current.current.objects;
+    const after = reparentSceneObject(before, id, parentId);
+    if (after === before || before.every((object, index) => object.parent_id === after[index].parent_id)) return;
+    checkpoint(); commitObjects(after, false);
+    setMessage(parentId ? '부모-자식 관계를 만들었습니다. 부모의 이동·회전에 자식이 함께 따라갑니다.' : '부모 연결을 해제했습니다. 현재 월드 위치는 유지됩니다.');
   }
   function changeGraspGhost(patch: Partial<SceneObject>) {
     const c = current.current;
@@ -352,7 +362,7 @@ export default function Editor() {
   }
   function removeObject(id: string) {
     checkpoint();
-    commitObjects(current.current.objects.filter(object => object.id !== id));
+    commitObjects(current.current.objects.filter(object => object.id !== id).map(object => object.parent_id === id ? { ...object, parent_id: null } : object), false);
     commitObjectGroups(current.current.objectGroups.map(group => ({ ...group, member_ids: group.member_ids.filter(member => member !== id) }))
       .filter(group => group.member_ids.length >= 2));
     selectObject(null);
@@ -1134,7 +1144,7 @@ export default function Editor() {
       <div className="section-divider"/>
       <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock}
         groups={objectGroups} selectedGroupId={selectedObjectGroupId} onSelect={id => { setSelectedObjectGroupId(null); selectObject(id); }} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}
-        onImport={() => assetFile.current?.click()} onCreateGroup={createObjectGroup} onSelectGroup={id => { setSelectedObjectGroupId(id); if (id) selectObject(null); }} onChangeGroup={changeObjectGroup} onRemoveGroup={removeObjectGroup}/>
+        onImport={() => assetFile.current?.click()} onParentChange={changeObjectParent} onCreateGroup={createObjectGroup} onSelectGroup={id => { setSelectedObjectGroupId(id); if (id) selectObject(null); }} onChangeGroup={changeObjectGroup} onRemoveGroup={removeObjectGroup}/>
       <button className="wide" disabled={disabled} onClick={addRamenScene}>라면용기 4열 × 3층 + 열린 상자 생성</button>
       <p className="hint">원기둥은 겹친 용기 묶음 1개를 나타냅니다. 생성 후 크기·질량·위치를 편집할 수 있습니다. 상자의 다섯 면은 물리 시뮬레이션에서 고정됩니다.</p>
       <div className="section-divider"/>

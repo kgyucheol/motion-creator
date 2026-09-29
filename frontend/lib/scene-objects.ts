@@ -7,6 +7,8 @@ export type SceneObjectPlacement = { prevent_overlap: boolean; surface_snap: boo
 
 export type SceneObject = {
   id: string;
+  /** Editor hierarchy only; world transforms and physics bodies remain independent. */
+  parent_id?: string | null;
   name: string;
   shape: SceneObjectShape;
   position: number[];
@@ -336,9 +338,45 @@ export function transformSceneObjectGroup(objects: SceneObject[], previous: Scen
   });
 }
 
+export function sceneObjectDescendantIds(objects: SceneObject[], parentId: string): Set<string> {
+  const descendants = new Set<string>();
+  let frontier = [parentId];
+  while (frontier.length) {
+    const children = objects.filter(object => object.parent_id && frontier.includes(object.parent_id) && !descendants.has(object.id));
+    frontier = children.map(object => object.id);
+    for (const child of children) descendants.add(child.id);
+  }
+  return descendants;
+}
+
+export function reparentSceneObject(objects: SceneObject[], childId: string, parentId: string | null) {
+  const child = objects.find(object => object.id === childId);
+  if (!child || (child.parent_id ?? null) === parentId) return objects;
+  if (parentId && (!objects.some(object => object.id === parentId)
+      || parentId === childId || sceneObjectDescendantIds(objects, childId).has(parentId))) return objects;
+  return objects.map(object => object.id === childId ? { ...object, parent_id: parentId } : object);
+}
+
+export function transformSceneObjectChildren(objects: SceneObject[], previous: SceneObject, next: SceneObject) {
+  const descendants = sceneObjectDescendantIds(objects, previous.id);
+  if (!descendants.size) return objects;
+  const beforePosition = new THREE.Vector3().fromArray(previous.position);
+  const afterPosition = new THREE.Vector3().fromArray(next.position);
+  const beforeRotation = new THREE.Quaternion().fromArray(previous.quaternion_xyzw).normalize();
+  const afterRotation = new THREE.Quaternion().fromArray(next.quaternion_xyzw).normalize();
+  const rotationDelta = afterRotation.clone().multiply(beforeRotation.clone().invert());
+  return objects.map(object => {
+    if (!descendants.has(object.id)) return object;
+    const position = new THREE.Vector3().fromArray(object.position).sub(beforePosition).applyQuaternion(rotationDelta).add(afterPosition);
+    const rotation = rotationDelta.clone().multiply(new THREE.Quaternion().fromArray(object.quaternion_xyzw)).normalize();
+    return { ...object, position: position.toArray(), quaternion_xyzw: rotation.toArray() };
+  });
+}
+
 export function objectsFromProject(project: { scene_objects?: SceneObject[]; box?: { position: number[]; size: number[]; visible: boolean } }) {
   if (Array.isArray(project.scene_objects)) return structuredClone(project.scene_objects)
-    .map(object => groundedSceneObject(withScenePlacement(object, scenePlacementOptions(object))));
+    .map(object => object.parent_id ? withScenePlacement(object, scenePlacementOptions(object))
+      : groundedSceneObject(withScenePlacement(object, scenePlacementOptions(object))));
   if (project.box) {
     const object = createSceneObject(1);
     return [groundedSceneObject({ ...object, id: 'legacy-box', position: [...project.box.position], size: [...project.box.size], visible: project.box.visible })];

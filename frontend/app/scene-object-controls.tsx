@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Boxes, Plus, Trash2, Upload } from 'lucide-react';
 import { eulerDegrees, quaternionFromDegrees } from '../lib/pose-transforms';
-import { normalizedObjectSize, type ObjectTransformMode, type SceneObject, type SceneObjectGroup, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { normalizedObjectSize, sceneObjectDescendantIds, type ObjectTransformMode, type SceneObject, type SceneObjectGroup, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 
 type Props = {
   objects: SceneObject[];
@@ -20,6 +20,7 @@ type Props = {
   onModeChange: (mode: ObjectTransformMode) => void;
   onPlacementChange: (patch: Partial<ScenePlacementOptions>) => void;
   onImport: () => void;
+  onParentChange: (id: string, parentId: string | null) => void;
   onCreateGroup: (ids: string[], name: string) => void;
   onSelectGroup: (id: string | null) => void;
   onChangeGroup: (id: string, patch: Partial<SceneObjectGroup>) => void;
@@ -27,10 +28,13 @@ type Props = {
 };
 
 const shapeLabels: Record<SceneObjectShape, string> = { box: '박스', open_box: '열린 상자', cylinder: '원통', sphere: '구' };
+const SHOW_LEGACY_OBJECT_GROUPS = false;
 
 export default function SceneObjectControls(props: Props) {
   const [groupMembers, setGroupMembers] = useState<string[]>([]);
   const [groupName, setGroupName] = useState('');
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const selected = props.objects.find(object => object.id === props.selectedId) ?? null;
   const selectedGroup = props.groups.find(group => group.id === props.selectedGroupId) ?? null;
   const grouped = new Set(props.groups.flatMap(group => group.member_ids));
@@ -40,6 +44,22 @@ export default function SceneObjectControls(props: Props) {
     props.onChange(selected.id, { [field]: field === 'size' ? normalizedObjectSize(selected.shape, vector, 'XYZ'[index]) : vector });
   };
   const rotation = selected ? eulerDegrees(selected.quaternion_xyzw) : [0, 0, 0];
+  const canParent = (childId: string | null, parentId: string) => !!childId && childId !== parentId
+    && !sceneObjectDescendantIds(props.objects, childId).has(parentId);
+  const roots = props.objects.filter(object => !object.parent_id || !props.objects.some(parent => parent.id === object.parent_id));
+  const renderObjectRow = (object: SceneObject, depth: number) => <div key={object.id}>
+    <button className={`scene-tree-row ${props.selectedId === object.id ? 'selected' : ''} ${dropTarget === object.id ? 'drop-target' : ''}`}
+      style={{ paddingLeft: `${8 + depth * 16}px` }} disabled={props.disabled} draggable={!props.disabled}
+      onClick={() => props.onSelect(object.id)}
+      onDragStart={event => { event.dataTransfer.setData('text/plain', object.id); event.dataTransfer.effectAllowed = 'move'; setDraggedId(object.id); }}
+      onDragEnd={() => { setDraggedId(null); setDropTarget(null); }}
+      onDragOver={event => { if (canParent(draggedId, object.id)) { event.preventDefault(); setDropTarget(object.id); } }}
+      onDragLeave={() => setDropTarget(value => value === object.id ? null : value)}
+      onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || draggedId; if (canParent(id, object.id)) props.onParentChange(id!, object.id); setDraggedId(null); setDropTarget(null); }}>
+      <span className="scene-tree-grip" aria-hidden="true">⋮⋮</span><span className="scene-tree-name">{object.name}</span><small>{shapeLabels[object.shape]}</small>
+    </button>
+    {props.objects.filter(child => child.parent_id === object.id).map(child => renderObjectRow(child, depth + 1))}
+  </div>;
 
   return <>
     <div className="panel-heading"><span>SCENE OBJECTS</span><small>{objectsLabel(props.objects.length)}</small></div>
@@ -48,10 +68,13 @@ export default function SceneObjectControls(props: Props) {
     </div>
     <button className="wide" disabled={props.disabled || props.objects.length >= 32} onClick={props.onImport}><Upload size={14}/> 3D 모델 가져오기 (.blend / .glb)</button>
     {!props.objects.length && <p className="hint">장면 물체가 없습니다. 위 버튼으로 MuJoCo 기본 도형을 추가하세요.</p>}
-    {!!props.objects.length && <select aria-label="장면 물체 선택" value={props.selectedId ?? ''} disabled={props.disabled} onChange={event => props.onSelect(event.target.value || null)}>
-      <option value="">물체 선택</option>
-      {props.objects.map(object => <option key={object.id} value={object.id}>{object.name} · {shapeLabels[object.shape]}</option>)}
-    </select>}
+    {!!props.objects.length && <><p className="hint">물체를 다른 물체 위로 드래그하면 부모-자식 관계가 됩니다. 현재 위치는 그대로 유지됩니다.</p>
+      <div className="scene-tree" aria-label="장면 오브젝트 계층">{roots.map(object => renderObjectRow(object, 0))}</div>
+      <button className="scene-tree-root" disabled={props.disabled || (!selected?.parent_id && !draggedId)} onClick={() => selected && props.onParentChange(selected.id, null)}
+        onDragOver={event => { if (draggedId) event.preventDefault(); }}
+        onDrop={event => { event.preventDefault(); const id = event.dataTransfer.getData('text/plain') || draggedId; if (id) props.onParentChange(id, null); setDraggedId(null); setDropTarget(null); }}>
+        선택 물체 부모 해제 · 여기에 놓으면 최상위로
+      </button></>}
     <div className="object-placement-options">
       <label className="checkbox"><input type="checkbox" checked={props.preventOverlap} disabled={props.disabled || !selected} onChange={event => props.onPlacementChange({ preventOverlap: event.target.checked })}/>겹침 방지</label>
       <label className="checkbox"><input type="checkbox" checked={props.surfaceSnap} disabled={props.disabled || !selected} onChange={event => props.onPlacementChange({ surfaceSnap: event.target.checked })}/>표면 스냅</label>
@@ -81,7 +104,7 @@ export default function SceneObjectControls(props: Props) {
       <div className="object-appearance-row"><label>색상 <input aria-label="물체 색상" type="color" value={selected.color} disabled={props.disabled} onChange={event => props.onChange(selected.id, { color: event.target.value })}/></label><label>불투명도 <span>{Math.round(selected.opacity * 100)}%</span><input aria-label="물체 불투명도" type="range" min=".05" max="1" step=".01" value={selected.opacity} disabled={props.disabled} onChange={event => props.onChange(selected.id, { opacity: +event.target.value })}/></label></div>
       <p className="hint">기즈모로 이동·회전·크기를 조절하고 Delete 또는 Backspace로 선택 물체를 삭제합니다. 겹침 방지는 회전된 도형의 바깥 경계를 기준으로 물체를 가장 가까운 비충돌 위치에 둡니다. 표면 스냅은 2cm 이내의 물체 표면에 붙이고, 지면 고정은 최저점을 바닥에 유지합니다. 물리 재생을 다시 시작하면 이 초기 위치와 방향에서 출발합니다.</p>
     </div>}
-    <div className="section-divider"/>
+    {SHOW_LEGACY_OBJECT_GROUPS && <><div className="section-divider"/>
     <div className="panel-heading"><span>OBJECT GROUPS</span><small>{props.groups.length}개</small></div>
     <p className="hint">상자와 내부 물체를 하나의 그룹으로 묶으면 중심 기준으로 함께 이동·회전합니다.</p>
     <input aria-label="오브젝트 그룹 이름" placeholder="그룹 이름 (선택)" value={groupName} disabled={props.disabled} onChange={event => setGroupName(event.target.value)}/>
@@ -95,7 +118,7 @@ export default function SceneObjectControls(props: Props) {
       <div className="inspector-label">그룹 회전 · 월드 XYZ <small>°</small></div>
       <div className="xyz">{eulerDegrees(selectedGroup.quaternion_xyzw).map((value, index, rotation) => <label key={index}><span>{'XYZ'[index]}</span><input aria-label={`그룹 회전 ${'XYZ'[index]}`} type="number" step="1" value={Number(value.toFixed(2))} disabled={props.disabled} onChange={event => { const next = rotation.map((current, i) => i === index ? +event.target.value : current); if (next.every(Number.isFinite)) props.onChangeGroup(selectedGroup.id, { quaternion_xyzw: quaternionFromDegrees(next) }); }}/></label>)}</div>
       <p className="hint">그룹을 회전하면 각 물체의 위치와 방향이 중심을 기준으로 같이 바뀌며, 해제해도 결과 트랜스폼은 유지됩니다.</p>
-    </div>}
+    </div>}</>}
   </>;
 }
 

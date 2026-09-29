@@ -360,6 +360,19 @@ def validate_project(robot: Robot, project):
             for key in ('prevent_overlap', 'surface_snap', 'ground_lock'):
                 if not isinstance(placement.get(key), bool):
                     raise ValueError(f'Scene object placement {key} must be a boolean')
+    parents = {item['id']: item.get('parent_id') for item in objects}
+    for identifier, parent in parents.items():
+        if parent is not None and (not isinstance(parent, str) or parent not in identifiers or parent == identifier):
+            raise ValueError('Scene object parent must reference another scene object')
+        visited = {identifier}
+        current = parent
+        while current is not None:
+            if current not in parents:
+                raise ValueError('Scene object parent must reference another scene object')
+            if current in visited:
+                raise ValueError('Scene object hierarchy cannot contain a cycle')
+            visited.add(current)
+            current = parents[current]
     interactions = [frame['interaction'] for frame in frames if frame.get('interaction') is not None]
     if interactions:
         if robot.model_id != 'g1-tools':

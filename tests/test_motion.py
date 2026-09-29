@@ -99,6 +99,10 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
         'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.4, .3, .4], 'mass_kg': 2.,
         'friction': .7, 'color': '#336699', 'opacity': .8, 'visible': True,
         'placement': {'prevent_overlap': False, 'surface_snap': True, 'ground_lock': False},
+    }, {
+        'id': 'cup', 'name': 'Cup', 'parent_id': 'crate', 'shape': 'cylinder', 'position': [.6, 0., .5],
+        'quaternion_xyzw': [0., 0., 0., 1.], 'size': [.1, .1, .2], 'mass_kg': .2,
+        'friction': .7, 'color': '#cc9966', 'opacity': 1., 'visible': True,
     }]
     bundle = save_bundle(robot, project, fps=15, directory=tmp_path)
     for filename in bundle['files']:
@@ -113,6 +117,7 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
     assert environment['physics']['gravity_m_s2'] == [0., 0., -9.81]
     assert environment['physics']['floor']['friction'] == [1., .005, .0001]
     assert environment['scene_objects'] == project['scene_objects']
+    assert editable['scene_objects'][1]['parent_id'] == 'crate'
     assert editable['scene_objects'][0]['placement'] == {
         'prevent_overlap': False, 'surface_snap': True, 'ground_lock': False,
     }
@@ -136,6 +141,23 @@ def test_project_and_npz_roundtrip(robot, tmp_path):
     assert data['joint_names'].tolist() == robot.names
     assert data['root_quat_wxyz'].shape == (61, 4)
     assert np.allclose(np.linalg.norm(data['root_quat_wxyz'], axis=1), 1)
+
+
+def test_scene_object_parent_links_require_existing_acyclic_objects(robot):
+    project = new_project(robot)
+    base = {'shape': 'box', 'position': [.6, 0., .2], 'quaternion_xyzw': [0., 0., 0., 1.],
+            'size': [.2, .2, .2], 'mass_kg': 1., 'friction': .7, 'color': '#336699',
+            'opacity': 1., 'visible': True}
+    project['scene_objects'] = [{**base, 'id': 'parent', 'name': 'Parent'},
+                                {**base, 'id': 'child', 'name': 'Child', 'parent_id': 'parent'}]
+    validate_project(robot, project)
+    project['scene_objects'][0]['parent_id'] = 'child'
+    with pytest.raises(ValueError, match='cycle'):
+        validate_project(robot, project)
+    project['scene_objects'][0]['parent_id'] = None
+    project['scene_objects'][1]['parent_id'] = 'missing'
+    with pytest.raises(ValueError, match='parent'):
+        validate_project(robot, project)
 
 
 def test_automatic_project_name_uses_keyframe_intent_and_creation_date(robot):

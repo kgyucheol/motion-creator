@@ -432,14 +432,17 @@ undo snapshot에는 현재 qpos, pin, angle pin, pose dirty 여부, 키프레임
 - `surface_snap`: 2 cm 이내의 옆면을 맞닿게 한다.
 - `prevent_overlap`: 회전된 물체의 AABB가 다른 물체와 겹치지 않게 이동을 보정한다.
 - 그룹: 여러 물체의 상대 위치·방향을 유지한 채 공통 피벗으로 이동·회전한다. 한 물체는 한 그룹에만 속한다.
+- `parent_id`: 장면 트리에서 드래그앤드롭으로 지정하는 편집용 부모다. 월드 pose는 유지한 채 연결하며 부모를 이동·회전하면 모든 자손의 월드 pose도 같은 강체 변환을 받는다. 부모를 삭제하면 직계 자식은 최상위로 이동하고 현재 pose는 유지된다. 순환 관계는 금지한다.
+
+기존 `scene_groups` 데이터·변환 코드는 보존하지만 Object Groups 패널은 숨겼다. `parent_id`는 물리 weld가 아니다. 물리 재생 중에는 각 오브젝트가 자신의 fixed/free 설정대로 독립적으로 움직인다.
 
 배치 보정은 authoring 편의 기능이며 정확한 mesh-level collision solver가 아니다. 실제 물리 충돌은 Python이 생성한 MuJoCo geom을 따른다.
 
 소스 레퍼런스:
 
-- `frontend/lib/scene-objects.ts` — `SceneObject`, `placeSceneObject`, `createSceneObject`, `transformSceneObjectGroup`
+- `frontend/lib/scene-objects.ts` — `SceneObject`, `placeSceneObject`, `reparentSceneObject`, `transformSceneObjectChildren`, `createSceneObjectGroup`, `transformSceneObjectGroup`
 - `frontend/app/scene-object-controls.tsx` — `SceneObjectControls`
-- `frontend/app/page.tsx` — `commitObjects`, `createObjectGroup`, `changeObjectGroup`
+- `frontend/app/page.tsx` — `commitObjects`, `changeObjectParent`, `createObjectGroup`, `changeObjectGroup`
 
 ### 11.2 GLB 가져오기
 
