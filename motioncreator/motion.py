@@ -255,6 +255,17 @@ def validate_project(robot: Robot, project):
                 part_id = item.get('asset_part_id')
                 part = next((value for value in metadata.get('parts', []) if value['part_id'] == part_id), None)
                 if part_id is not None and part is None:
+                    # v7 treated each primitive of a multi-primitive glTF node as
+                    # a separate part with a generated suffix. Keep older scenes
+                    # loadable after v8 groups them under the authored GLB node.
+                    old_name = item.get('asset_node_name')
+                    if isinstance(old_name, str):
+                        authored_name = re.sub(r'_[0-9a-f]{6}$', '', old_name)
+                        part = next((value for value in metadata.get('parts', [])
+                                     if value['node_name'] == authored_name), None)
+                        if part is not None:
+                            item['asset_part_id'] = part['part_id']
+                if part_id is not None and part is None:
                     raise ValueError('Scene object asset part does not exist')
                 if part is not None:
                     item['asset_node_name'] = part['node_name']

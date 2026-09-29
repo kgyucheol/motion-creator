@@ -103,6 +103,41 @@ def test_packing_glb_uses_thirteen_authored_nodes_and_preserves_texture(tmp_path
                for material in gltf["materials"])
 
 
+def test_multi_primitive_stacks_keep_authored_node_names(tmp_path, monkeypatch):
+    source = scene_assets.ROOT / "assets/ramen_scan/packing_12_merged_stacks/mupama_12_stacks_in_box.glb"
+    monkeypatch.setattr(scene_assets, "ASSET_ROOT", tmp_path)
+
+    imported = scene_assets.import_scene_asset(source.read_bytes(), source.name)
+
+    assert len(imported["parts"]) == 13
+    assert sum(part["node_name"].startswith("Mupama_Stack_") for part in imported["parts"]) == 12
+    stored = (tmp_path / imported["asset_id"] / "model.glb").read_bytes()
+    json_length, _ = struct.unpack_from("<II", stored, 12)
+    gltf = json.loads(stored[20:20 + json_length])
+    node_names = {node.get("name") for node in gltf["nodes"]}
+    assert all(part["node_name"] in node_names for part in imported["parts"])
+    stack = next(part for part in imported["parts"] if part["node_name"] == "Mupama_Stack_L01_R01")
+    assert stack["suggestion"]["collision_shape"] == "convex_hull"
+    assert len(stack["suggestion"]["collision_hull_vertices"]) > 8
+
+    # A project saved under v7 may still refer to a generated primitive node.
+    robot = Robot()
+    project = new_project(robot)
+    project["scene_objects"] = [{
+        "id": "old-stack", "name": "Old stack", "shape": "box",
+        "position": [0, 0, .2], "quaternion_xyzw": [0, 0, 0, 1],
+        "size": stack["dimensions"], "mass_kg": 1., "friction": .7,
+        "color": "#ffffff", "opacity": 1., "visible": True,
+        "asset_id": imported["asset_id"],
+        "asset_part_id": "part-25-mupama-stack-l01-r01-abcdef",
+        "asset_node_name": "Mupama_Stack_L01_R01_abcdef",
+        "asset_bounds_min": stack["bounds_min"], "asset_bounds_max": stack["bounds_max"],
+    }]
+    migrated = validate_project(robot, project)["scene_objects"][0]
+    assert migrated["asset_part_id"] == stack["part_id"]
+    assert migrated["asset_node_name"] == stack["node_name"]
+
+
 def test_open_box_proxy_has_floor_and_four_walls():
     body = ET.Element("body")
     names = append_collision_geoms(body, "preview", 0, {

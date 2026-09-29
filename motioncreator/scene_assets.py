@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import struct
 import subprocess
 import time
 
@@ -19,7 +20,7 @@ ASSET_ROOT = ROOT / "assets/imported"
 CONVERTER = ROOT / "scripts/blender/export_motioncreator_asset.py"
 MAX_ASSET_BYTES = 200 * 1024 * 1024
 SUPPORTED_SUFFIXES = {".blend", ".glb"}
-PIPELINE_VERSION = 7
+PIPELINE_VERSION = 8
 IDENTITY_XYZW = [0., 0., 0., 1.]
 Y_UP_TO_Z_UP_XYZW = [2 ** -.5, 0., 0., 2 ** -.5]
 Y_UP_TO_Z_UP = np.array([
@@ -148,12 +149,24 @@ def _asset_parts(folder: Path, source_format: str, properties: dict) -> list[dic
     """
     scene = trimesh.load(folder / "model.glb", force="scene")
     axis = Y_UP_TO_Z_UP if source_format == "glb" else None
-    candidates: list[tuple[str, trimesh.Trimesh]] = []
+    glb = (folder / "model.glb").read_bytes()
+    json_length, _ = struct.unpack_from("<II", glb, 12)
+    gltf = json.loads(glb[20:20 + json_length])
+    authored_names = {node["name"] for node in gltf.get("nodes", [])
+                      if "mesh" in node and node.get("name")}
+    grouped: dict[str, list[trimesh.Trimesh]] = {}
     for node_name in scene.graph.nodes_geometry:
         transform, geometry_name = scene.graph[node_name]
         mesh = scene.geometry[geometry_name].copy()
         mesh.apply_transform(transform)
-        candidates.append((str(node_name), mesh))
+        authored_name = str(node_name)
+        while authored_name not in authored_names:
+            parent = scene.graph.transforms.parents.get(authored_name)
+            if parent is None or parent == "world":
+                break
+            authored_name = parent
+        grouped.setdefault(authored_name, []).append(mesh)
+    candidates = [(name, trimesh.util.concatenate(meshes)) for name, meshes in grouped.items()]
     if len(candidates) <= 1:
         return []
     parts = []
