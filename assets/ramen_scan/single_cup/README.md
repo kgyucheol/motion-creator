@@ -35,3 +35,20 @@ blender --background --python scripts/blender/prepare_single_cup_asset.py -- \
   --target-top-diameter 0.138 \
   --report assets/ramen_scan/single_cup/mupama_cup_13_8cm_top_report.json
 ```
+
+## 30-cup stack
+
+`mupama_cups_30_stack_70cm.blend` and `mupama_cups_30_stack_70cm.glb` contain
+30 copies of the measured single cup, all facing upward. The first cup starts
+at Z=0. The center-to-center vertical pitch is calculated as
+`(0.70 m - one cup height) / 29`, making the total stack height 70 cm.
+The copies share one mesh in the Blender file. No collision simulation is used.
+
+```bash
+blender --background --python scripts/blender/stack_single_cups.py -- \
+  --source assets/ramen_scan/single_cup/mupama_cup_13_8cm_top.blend \
+  --blend-output assets/ramen_scan/single_cup/mupama_cups_30_stack_70cm.blend \
+  --glb-output assets/ramen_scan/single_cup/mupama_cups_30_stack_70cm.glb \
+  --report assets/ramen_scan/single_cup/mupama_cups_30_stack_70cm_report.json \
+  --count 30 --height 0.70
+```
