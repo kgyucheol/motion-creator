@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection, headCameraViewQuaternion, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, canRotateSelection, headCameraViewQuaternion, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, reparentSceneObject, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
@@ -63,6 +63,17 @@ test('head camera horizontal FOV presets produce the requested view at 16:9', ()
     const actual = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect));
     assert.ok(Math.abs(actual - horizontal) < 1e-10);
   }
+});
+
+test('head camera projection applies horizontal and vertical FOV independently', () => {
+  const camera = new THREE.PerspectiveCamera(42, 16 / 9, .03, 20);
+  setPerspectiveFovs(camera, 90, 42);
+  const [horizontalScale, , , , , verticalScale] = camera.projectionMatrix.elements;
+  assert.ok(Math.abs(THREE.MathUtils.radToDeg(2 * Math.atan(1 / horizontalScale)) - 90) < 1e-10);
+  assert.ok(Math.abs(THREE.MathUtils.radToDeg(2 * Math.atan(1 / verticalScale)) - 42) < 1e-10);
+  setPerspectiveFovs(camera, 90, 60);
+  assert.ok(Math.abs(camera.projectionMatrix.elements[0] - horizontalScale) < 1e-10);
+  assert.notEqual(camera.projectionMatrix.elements[5], verticalScale);
 });
 
 test('primitive scale constraints preserve spheres and round cylinders', () => {

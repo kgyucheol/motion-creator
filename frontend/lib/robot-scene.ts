@@ -52,6 +52,13 @@ export function headCameraViewQuaternion(linkQuaternion: number[]) {
 export function verticalFovForHorizontal(horizontalDegrees: number, aspect: number) {
   return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(horizontalDegrees / 2)) / aspect));
 }
+export function setPerspectiveFovs(camera: THREE.PerspectiveCamera, horizontalDegrees: number, verticalDegrees: number) {
+  const right = camera.near * Math.tan(THREE.MathUtils.degToRad(horizontalDegrees / 2));
+  const top = camera.near * Math.tan(THREE.MathUtils.degToRad(verticalDegrees / 2));
+  camera.fov = verticalDegrees;
+  camera.projectionMatrix.makePerspective(-right, right, top, -top, camera.near, camera.far);
+  camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+}
 type Callbacks = {
   select: (key: string, additive: boolean, hover: boolean) => void;
   begin: () => void;
@@ -77,6 +84,7 @@ export class RobotScene {
   headCamera = new THREE.PerspectiveCamera(verticalFovForHorizontal(69, 16 / 9), 16 / 9, .03, 20);
   headCameraOverlay: HTMLDivElement;
   headCameraHorizontalFov = 69;
+  headCameraVerticalFov = 42;
   headCameraAvailable = false;
   renderer: THREE.WebGLRenderer;
   orbit: OrbitControls;
@@ -134,23 +142,24 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><strong>PiP 카메라 화각</strong><label><input type="range" min="45" max="120" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label></div>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><strong>PiP 카메라 화각</strong><label><input type="range" min="45" max="120" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label><label><input type="range" min="25" max="90" value="42" aria-label="PiP 세로 화각"><span>세로 42°</span></label></div>';
     const settingsButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-settings-button')!;
     const settings = this.headCameraOverlay.querySelector<HTMLDivElement>('.head-camera-controls')!;
     settingsButton.addEventListener('click', () => {
       settings.hidden = !settings.hidden;
       settingsButton.setAttribute('aria-expanded', String(!settings.hidden));
     });
-    const range = this.headCameraOverlay.querySelector('input')!;
-    const value = this.headCameraOverlay.querySelector('label span')!;
-    const applyFov = (horizontal: number) => {
-      this.headCameraHorizontalFov = horizontal;
-      range.value = String(horizontal);
-      value.textContent = `가로 ${horizontal}°`;
+    const [horizontalRange, verticalRange] = this.headCameraOverlay.querySelectorAll<HTMLInputElement>('input');
+    const [horizontalValue, verticalValue] = this.headCameraOverlay.querySelectorAll<HTMLSpanElement>('label span');
+    horizontalRange.addEventListener('input', () => {
+      this.headCameraHorizontalFov = Number(horizontalRange.value);
+      horizontalValue.textContent = `가로 ${horizontalRange.value}°`;
       this.dirty = true;
-    };
-    range.addEventListener('input', () => {
-      applyFov(Number(range.value));
+    });
+    verticalRange.addEventListener('input', () => {
+      this.headCameraVerticalFov = Number(verticalRange.value);
+      verticalValue.textContent = `세로 ${verticalRange.value}°`;
+      this.dirty = true;
     });
     this.headCameraOverlay.hidden = true;
     host.appendChild(this.headCameraOverlay);
@@ -328,8 +337,7 @@ export class RobotScene {
   private renderHeadCamera(width: number, height: number) {
     const rect = this.headCameraRect(width, height);
     this.headCamera.aspect = rect.width / rect.height;
-    this.headCamera.fov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCamera.aspect);
-    this.headCamera.updateProjectionMatrix();
+    setPerspectiveFovs(this.headCamera, this.headCameraHorizontalFov, this.headCameraVerticalFov);
     this.headCameraOverlay.style.width = `${rect.width}px`;
     this.headCameraOverlay.style.height = `${rect.height}px`;
     this.headCameraOverlay.style.right = `${rect.right}px`;
