@@ -89,6 +89,9 @@ export class RobotScene {
   headCameraHorizontalFov = 69;
   headCameraVerticalFov = 42;
   headCameraAspect: number | null = null;
+  private editorSettingsKey: string;
+  private headCameraPosition: { top: number; right: number } | null = null;
+  private headCameraMoving = false;
   headCameraAvailable = false;
   renderer: THREE.WebGLRenderer;
   orbit: OrbitControls;
@@ -139,6 +142,7 @@ export class RobotScene {
   modelMismatchReported = false;
 
   constructor(public host: HTMLDivElement, private callbacks: Callbacks, public modelId = 'g1', visualRevision = '') {
+    this.editorSettingsKey = `motioncreator-editor-view-v1-${modelId}`;
     this.scene.background = new THREE.Color('#10171f');
     this.scene.fog = new THREE.Fog('#10171f', 5, 14);
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
@@ -147,7 +151,34 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><div class="head-camera-controls-title"><strong>PiP 카메라 화각 (°)</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><span>가로</span><input type="range" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 슬라이더"><input type="number" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 수치"></label><label><span>세로</span><input type="range" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 슬라이더"><input type="number" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 수치"></label></div>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><button class="head-camera-move-button" type="button" aria-label="PiP 이동 시작" aria-pressed="false" title="PiP 위치 이동">⤧</button><div id="head-camera-settings" class="head-camera-controls" hidden><div class="head-camera-controls-title"><strong>PiP 카메라 화각 (°)</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><span>가로</span><input type="range" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 슬라이더"><input type="number" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 수치"></label><label><span>세로</span><input type="range" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 슬라이더"><input type="number" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 수치"></label></div>';
+    const moveButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-move-button')!;
+    moveButton.addEventListener('click', () => {
+      this.headCameraMoving = !this.headCameraMoving;
+      this.headCameraOverlay.classList.toggle('moving', this.headCameraMoving);
+      moveButton.setAttribute('aria-pressed', String(this.headCameraMoving));
+      moveButton.setAttribute('aria-label', this.headCameraMoving ? 'PiP 위치 고정' : 'PiP 이동 시작');
+      moveButton.title = this.headCameraMoving ? '현재 위치에 고정' : 'PiP 위치 이동';
+      if (!this.headCameraMoving) this.saveEditorViewSettings();
+    });
+    let drag: { x: number; y: number; top: number; right: number } | null = null;
+    this.headCameraOverlay.addEventListener('pointerdown', event => {
+      if (!this.headCameraMoving || (event.target as HTMLElement).closest('button,input,.head-camera-controls')) return;
+      const rect = this.headCameraRect(this.host.clientWidth, this.host.clientHeight);
+      drag = { x: event.clientX, y: event.clientY, top: rect.top, right: rect.right };
+      this.headCameraOverlay.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    this.headCameraOverlay.addEventListener('pointermove', event => {
+      if (!drag) return;
+      this.headCameraPosition = { top: drag.top + event.clientY - drag.y, right: drag.right - (event.clientX - drag.x) };
+      const rect = this.headCameraRect(this.host.clientWidth, this.host.clientHeight);
+      this.headCameraPosition = { top: rect.top, right: rect.right };
+      this.dirty = true;
+    });
+    const finishMove = () => { if (drag) { drag = null; this.saveEditorViewSettings(); } };
+    this.headCameraOverlay.addEventListener('pointerup', finishMove);
+    this.headCameraOverlay.addEventListener('pointercancel', finishMove);
     const settingsButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-settings-button')!;
     const settings = this.headCameraOverlay.querySelector<HTMLDivElement>('.head-camera-controls')!;
     settingsButton.addEventListener('click', () => {
@@ -172,6 +203,7 @@ export class RobotScene {
         this.headCameraVerticalFov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCameraAspect);
       }
       showFovs();
+      this.saveEditorViewSettings();
     };
     aspectButtons.forEach(button => button.addEventListener('click', () => setAspect(button.dataset.aspect!)));
     this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-controls-title button')!.addEventListener('click', () => {
@@ -187,6 +219,7 @@ export class RobotScene {
         this.headCameraVerticalFov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCameraAspect);
       }
       showFovs();
+      this.saveEditorViewSettings();
     };
     const setVertical = (value: number) => {
       if (!Number.isFinite(value)) { showFovs(); return; }
@@ -196,6 +229,7 @@ export class RobotScene {
         this.headCameraVerticalFov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCameraAspect);
       }
       showFovs();
+      this.saveEditorViewSettings();
     };
     horizontalRange.addEventListener('input', () => setHorizontal(Number(horizontalRange.value)));
     verticalRange.addEventListener('input', () => setVertical(Number(verticalRange.value)));
@@ -207,12 +241,14 @@ export class RobotScene {
     this.camera.position.set(2.4, -2.8, 1.85);
     this.orbit = new OrbitControls(this.camera, this.renderer.domElement);
     this.orbit.target.set(0, 0, .7);
+    this.loadEditorViewSettings();
     this.orbit.enableDamping = false;
     this.orbit.minDistance = .5;
     this.orbit.maxDistance = 10;
     this.orbit.maxPolarAngle = Math.PI * .49;
     this.orbit.update();
     this.orbit.addEventListener('change', () => { this.dirty = true; });
+    this.orbit.addEventListener('end', () => this.saveEditorViewSettings());
     this.scene.add(new THREE.HemisphereLight(0xcce9ff, 0x37434e, 2.6));
     const key = new THREE.DirectionalLight(0xffffff, 3.8);
     key.position.set(2, -3, 5);
@@ -378,11 +414,50 @@ export class RobotScene {
     }, undefined, () => callbacks.error('G1 모델을 불러오지 못했습니다. 서버 연결을 확인하세요.'));
   }
 
+  private saveEditorViewSettings() {
+    try {
+      window.localStorage.setItem(this.editorSettingsKey, JSON.stringify({
+        camera: { position: this.camera.position.toArray(), target: this.orbit.target.toArray() },
+        pip: { position: this.headCameraPosition, horizontalFov: this.headCameraHorizontalFov,
+          verticalFov: this.headCameraVerticalFov, aspect: this.headCameraAspect },
+      }));
+    } catch { /* 에디터 설정 저장이 불가능해도 편집은 계속합니다. */ }
+  }
+
+  private loadEditorViewSettings() {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(this.editorSettingsKey) ?? 'null');
+      const vector = (value: unknown): value is number[] => Array.isArray(value) && value.length === 3
+        && value.every(component => typeof component === 'number' && Number.isFinite(component));
+      if (vector(saved?.camera?.position) && vector(saved?.camera?.target)) {
+        this.camera.position.fromArray(saved.camera.position);
+        this.orbit.target.fromArray(saved.camera.target);
+        this.orbit.update();
+      }
+      const pip = saved?.pip;
+      if (Number.isFinite(pip?.position?.top) && Number.isFinite(pip?.position?.right)) {
+        this.headCameraPosition = { top: pip.position.top, right: pip.position.right };
+      }
+      if (Number.isFinite(pip?.horizontalFov) && pip.horizontalFov >= 1 && pip.horizontalFov <= 120) this.headCameraHorizontalFov = pip.horizontalFov;
+      if (Number.isFinite(pip?.verticalFov) && pip.verticalFov >= 1 && pip.verticalFov <= 120) this.headCameraVerticalFov = pip.verticalFov;
+      if (pip?.aspect === null || pip?.aspect === 4 / 3 || pip?.aspect === 16 / 9) this.headCameraAspect = pip.aspect;
+      const [horizontalRange, verticalRange] = this.headCameraOverlay.querySelectorAll<HTMLInputElement>('input[type="range"]');
+      const [horizontalValue, verticalValue] = this.headCameraOverlay.querySelectorAll<HTMLInputElement>('input[type="number"]');
+      horizontalRange.value = String(this.headCameraHorizontalFov);
+      verticalRange.value = String(this.headCameraVerticalFov);
+      horizontalValue.value = String(Number(this.headCameraHorizontalFov.toFixed(2)));
+      verticalValue.value = String(Number(this.headCameraVerticalFov.toFixed(2)));
+      const choice = this.headCameraAspect === 4 / 3 ? '4:3' : this.headCameraAspect === 16 / 9 ? '16:9' : 'free';
+      this.headCameraOverlay.querySelectorAll<HTMLButtonElement>('.head-camera-aspects button').forEach(button =>
+        button.setAttribute('aria-pressed', String(button.dataset.aspect === choice)));
+    } catch { /* 손상된 로컬 설정은 기본값으로 시작합니다. */ }
+  }
+
   private headCameraRect(width: number, height: number) {
     const frameWidth = Math.min(220, Math.max(150, width * .28));
     const frameHeight = frameWidth / (this.headCameraAspect ?? 16 / 9);
-    const right = 18;
-    const top = Math.min(160, Math.max(58, height - frameHeight - 18));
+    const right = THREE.MathUtils.clamp(this.headCameraPosition?.right ?? 18, 4, Math.max(4, width - frameWidth - 4));
+    const top = THREE.MathUtils.clamp(this.headCameraPosition?.top ?? 52, 4, Math.max(4, height - frameHeight - 4));
     return { x: width - frameWidth - right, y: height - frameHeight - top,
       width: frameWidth, height: frameHeight, right, top };
   }
@@ -531,6 +606,7 @@ export class RobotScene {
     this.orbit.target.copy(center);
     this.camera.position.copy(center).addScaledVector(direction, distance);
     this.orbit.update();
+    this.saveEditorViewSettings();
     this.dirty = true;
   }
 
@@ -646,6 +722,7 @@ export class RobotScene {
     this.camera.position.fromArray(positions[view]);
     this.orbit.target.set(0, 0, .7);
     this.orbit.update();
+    this.saveEditorViewSettings();
     this.dirty = true;
   }
   showHandles(show: boolean) {

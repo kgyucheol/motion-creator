@@ -32,6 +32,19 @@ import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, cont
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, smoothTransitionDuration } from '../lib/keyframes.ts';
 
+test('PiP defaults to the upper right and stays inside the viewport when moved', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  viewer.headCameraAspect = null;
+  viewer.headCameraPosition = null;
+  const initial = viewer.headCameraRect(600, 400);
+  assert.equal(initial.top, 52);
+  assert.equal(initial.right, 18);
+  viewer.headCameraPosition = { top: 1000, right: -50 };
+  const clamped = viewer.headCameraRect(600, 400);
+  assert.equal(clamped.right, 4);
+  assert.ok(clamped.top + clamped.height <= 400);
+});
+
 test('ramen bundle candidate points follow its center and keep robot left/right sides', () => {
   const bundle = { name: 'Mupama_Stack_L03_R01', shape: 'box', position: [.4, 0, 1],
     quaternion_xyzw: [0, 0, 0, 1], size: [.138, .7, .138] };
