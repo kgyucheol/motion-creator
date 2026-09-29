@@ -5,7 +5,7 @@ import { RobotScene, canRotateSelection, headCameraViewQuaternion, horizontalFov
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, translatedTargets } from '../lib/pose-transforms.ts';
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
 import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
-import { duplicateKeyframeAfter, retimeSmoothTransition, smoothTransitionDuration } from '../lib/keyframes.ts';
+import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, smoothTransitionDuration } from '../lib/keyframes.ts';
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
   const frames = [
@@ -44,6 +44,25 @@ test('smooth transition retimes only the selected interval without replacing aut
   const translated = frame('Moved', 0);
   translated.qpos[0] = .7;
   assert.ok(smoothTransitionDuration(frames[0], translated) > smoothTransitionDuration(frames[0], frames[1]));
+});
+
+test('generated transition samples become editable visible keyframes', () => {
+  const pose = joint => [0, 0, .8, 1, 0, 0, 0, joint];
+  const frames = [
+    { name: 'A', duration: 2, qpos: pose(0), pins: ['left_foot'], angle_pins: [] },
+    { name: 'B', duration: 1, qpos: pose(1), pins: ['left_foot'], angle_pins: [] },
+    { name: 'C', duration: 2, qpos: pose(2), pins: [], angle_pins: [] },
+  ];
+  const samples = Array.from({ length: 91 }, (_, index) => ({ qpos: pose(index / 30) }));
+  const generated = insertSmoothTransitionFrames(frames, 0, 1, samples);
+  assert.equal(generated.length, 4);
+  assert.equal(generated[1].generated_transition, true);
+  assert.equal(generated[1].qpos[7], .5);
+  assert.deepEqual(generated[1].pins, ['left_foot']);
+  assert.equal(generated[1].duration + generated[2].duration, frames[1].duration);
+  assert.equal(generated[2].name, 'B');
+  assert.equal(generated[3], frames[2]);
+  assert.throws(() => insertSmoothTransitionFrames([{ ...frames[0], grasp: {} }, frames[1]], 0, 1, samples));
 });
 
 test('scene hierarchy reparents without teleporting and propagates parent motion', () => {

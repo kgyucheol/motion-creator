@@ -527,7 +527,7 @@ def compile_motion(robot: Robot, project, fps=30):
     poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
     pin_errors = []
     elapsed = 0.
-    for a, b in zip(frames, frames[1:]):
+    for segment_index, (a, b) in enumerate(zip(frames, frames[1:])):
         qa, qb = robot.validate_q(a['qpos']), robot.validate_q(b['qpos'])
         if np.dot(qa[3:7], poses[-1][3:7]) < 0:
             qa[3:7] *= -1
@@ -558,10 +558,34 @@ def compile_motion(robot: Robot, project, fps=30):
         root_delta = Rotation.from_matrix(root_rotation.T @ quat_matrix(qb[3:7])).as_rotvec()
         angular_deltas = {k: Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec() for k in ROTATABLE}
         interaction_pair = a.get('interaction'), b.get('interaction')
+        blend = bool(a.get('generated_transition') or b.get('generated_transition'))
+        if blend:
+            def tangent(frame_index):
+                if not frames[frame_index].get('generated_transition') or frame_index == 0 or frame_index == len(frames) - 1:
+                    return np.zeros_like(qa)
+                before = robot.validate_q(frames[frame_index - 1]['qpos'])
+                after = robot.validate_q(frames[frame_index + 1]['qpos'])
+                seconds = float(frames[frame_index]['duration']) + float(frames[frame_index + 1]['duration'])
+                result = 1.875 * (after - before) / seconds
+                result[3:7] = 0.
+                return result
+            start_velocity = tangent(segment_index)
+            end_velocity = tangent(segment_index + 1)
+            delta = qb - qa
+            delta[3:7] = 0.
+            squared = float(np.dot(delta, delta))
+            start_slope = float(np.dot(start_velocity, delta) * duration / squared) if squared > 1e-12 else 0.
+            end_slope = float(np.dot(end_velocity, delta) * duration / squared) if squared > 1e-12 else 0.
         for i in range(1, count + 1):
             u = i / count
-            s = u*u*u*(10 + u*(-15 + 6*u))  # quintic easing, zero endpoint velocity/acceleration
-            q = (1-s)*qa + s*qb
+            if blend:
+                h00, h10 = 2*u**3 - 3*u**2 + 1, u**3 - 2*u**2 + u
+                h01, h11 = -2*u**3 + 3*u**2, u**3 - u**2
+                s = float(np.clip(h01 + h10*start_slope + h11*end_slope, 0., 1.))
+                q = h00*qa + h10*duration*start_velocity + h01*qb + h11*duration*end_velocity
+            else:
+                s = u*u*u*(10 + u*(-15 + 6*u))  # quintic easing, zero endpoint velocity/acceleration
+                q = (1-s)*qa + s*qb
             q[3:7] = matrix_quat(root_rotation @ Rotation.from_rotvec(s*root_delta).as_matrix())
             if np.dot(q[3:7], qa[3:7]) < 0:
                 q[3:7] *= -1

@@ -91,6 +91,25 @@ def test_motion_endpoints_contacts_and_smoothness(robot):
     assert all(np.isfinite(motion[k]).all() for k in ('qpos', 'qvel', 'qacc'))
 
 
+def test_generated_middle_keyframe_keeps_velocity_through_the_middle(robot):
+    project = new_project(robot)
+    address = robot.model.joint('left_elbow_joint').qposadr[0]
+    frames = []
+    for index in range(3):
+        qpos = robot.home.copy()
+        qpos[address] += .2 * index
+        frames.append({'name': f'Pose {index}', 'duration': 1., 'qpos': qpos.tolist(),
+                       'pins': [], 'angle_pins': [], **({'generated_transition': True} if index == 1 else {})})
+    project['keyframes'] = frames
+    assert validate_project(robot, project)['keyframes'][1]['generated_transition'] is True
+    motion = compile_motion(robot, project, fps=60)
+    np.testing.assert_allclose(motion['qpos'][60], frames[1]['qpos'])
+    before = (motion['qpos'][60, address] - motion['qpos'][59, address]) * 60
+    after = (motion['qpos'][61, address] - motion['qpos'][60, address]) * 60
+    assert before > .2 and after > .2
+    assert abs(before - after) < .02
+
+
 def test_project_and_npz_roundtrip(robot, tmp_path):
     project = crouch_demo(robot)
     project['name'] = '../../outside/한글 모션'

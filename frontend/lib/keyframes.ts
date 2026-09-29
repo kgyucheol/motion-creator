@@ -77,6 +77,7 @@ export type Keyframe = {
   samples?: number[][];
   grasp?: TwoHandGrasp;
   interaction?: ToolInteraction;
+  generated_transition?: boolean;
 };
 
 export function duplicateKeyframeAfter(keyframes: Keyframe[], selectedIndex: number) {
@@ -108,4 +109,32 @@ export function retimeSmoothTransition(keyframes: Keyframe[], firstIndex: number
   if (start < 0 || end >= keyframes.length || start === end) return keyframes;
   return keyframes.map((frame, index) => index > start && index <= end
     ? { ...frame, duration: smoothTransitionDuration(keyframes[index - 1], frame) } : frame);
+}
+
+export function insertSmoothTransitionFrames(keyframes: Keyframe[], firstIndex: number, secondIndex: number,
+                                             samples: { qpos: number[] }[], fps = 30) {
+  const start = Math.min(firstIndex, secondIndex), end = Math.max(firstIndex, secondIndex);
+  if (start < 0 || end >= keyframes.length || start === end) return keyframes;
+  if (keyframes.length + end - start > 100) throw new Error('중간 자세를 추가하면 키프레임 최대 100개를 넘습니다.');
+  if (keyframes.slice(start, end + 1).some(frame => frame.samples || frame.grasp || frame.interaction))
+    throw new Error('파지·도구 상호작용이 있는 구간은 자동 중간 자세를 지원하지 않습니다. 해당 구간은 직접 키프레임을 추가해 주세요.');
+  const result: Keyframe[] = [];
+  let cursor = 0;
+  keyframes.forEach((frame, index) => {
+    if (index === 0) { result.push(frame); return; }
+    const count = Math.max(1, Math.round(frame.duration * fps));
+    if (index > start && index <= end) {
+      const halfway = Math.round(count / 2);
+      const qpos = samples[cursor + halfway]?.qpos;
+      if (!qpos || qpos.length !== frame.qpos.length) throw new Error('중간 자세 샘플을 생성하지 못했습니다.');
+      const previous = keyframes[index - 1];
+      result.push({ name: `자동 중간 자세 ${index}→${index + 1}`, duration: halfway / fps,
+        qpos: [...qpos], pins: previous.pins.filter(pin => frame.pins.includes(pin)),
+        angle_pins: (previous.angle_pins ?? []).filter(pin => (frame.angle_pins ?? []).includes(pin)),
+        generated_transition: true });
+      result.push({ ...frame, duration: (count - halfway) / fps });
+    } else result.push(frame);
+    cursor += count;
+  });
+  return result;
 }
