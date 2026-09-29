@@ -142,7 +142,7 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><strong>PiP 카메라 화각</strong><label><input type="range" min="45" max="120" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label><label><input type="range" min="25" max="90" value="42" aria-label="PiP 세로 화각"><span>세로 42°</span></label></div>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><div class="head-camera-controls-title"><strong>PiP 카메라 화각</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><label><input type="range" min="45" max="120" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label><label><input type="range" min="25" max="90" value="42" aria-label="PiP 세로 화각"><span>세로 42°</span></label></div>';
     const settingsButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-settings-button')!;
     const settings = this.headCameraOverlay.querySelector<HTMLDivElement>('.head-camera-controls')!;
     settingsButton.addEventListener('click', () => {
@@ -151,6 +151,15 @@ export class RobotScene {
     });
     const [horizontalRange, verticalRange] = this.headCameraOverlay.querySelectorAll<HTMLInputElement>('input');
     const [horizontalValue, verticalValue] = this.headCameraOverlay.querySelectorAll<HTMLSpanElement>('label span');
+    this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-controls-title button')!.addEventListener('click', () => {
+      this.headCameraHorizontalFov = 69;
+      this.headCameraVerticalFov = 42;
+      horizontalRange.value = '69';
+      verticalRange.value = '42';
+      horizontalValue.textContent = '가로 69°';
+      verticalValue.textContent = '세로 42°';
+      this.dirty = true;
+    });
     horizontalRange.addEventListener('input', () => {
       this.headCameraHorizontalFov = Number(horizontalRange.value);
       horizontalValue.textContent = `가로 ${horizontalRange.value}°`;
