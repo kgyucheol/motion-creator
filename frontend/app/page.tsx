@@ -8,7 +8,7 @@ import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
-import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, translatedTargets } from '../lib/pose-transforms';
+import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
@@ -173,6 +173,7 @@ export default function Editor() {
   const anchorOrientations = useRef<Record<string, number[]>>({});
   const anchorQuaternion = useRef([0, 0, 0, 1]);
   const anchorMirror = useRef<{ active: string; rootQuaternion: number[] } | undefined>(undefined);
+  const anchorHinges = useRef<PoseState['hinges']>({});
   const pending = useRef<{ kind: TransformMode | 'joint'; key: string; target: number[]; joints?: Record<string, number> } | null>(null);
   const inFlight = useRef(false);
   const dragActive = useRef(false);
@@ -518,6 +519,7 @@ export default function Editor() {
       ? { active: controlKey(current.current.members, current.current.selected), rootQuaternion: [...current.current.state.handles.pelvis.quaternion] } : undefined;
     anchorOrientations.current = Object.fromEntries(controls.map(k => [k, [...current.current.state!.handles[k].quaternion]]));
     anchorQuaternion.current = [...current.current.state.handles[controlKey(current.current.members, current.current.selected)].quaternion];
+    anchorHinges.current = structuredClone(current.current.state.hinges);
     dragActive.current = true;
     invalidate(); setError('');
   }
@@ -552,7 +554,16 @@ export default function Editor() {
     const hinge = current.current.state?.hinges?.[key];
     if (!hinge || !Number.isFinite(angle)) return;
     const value = Math.max(hinge.limits[0], Math.min(hinge.limits[1], angle));
-    pending.current = { kind: 'joint', key, target: [], joints: { [hinge.joint_name]: value } };
+    const joints = { [hinge.joint_name]: value } as Record<string, number>;
+    const controls = controlSelection(current.current.members);
+    if (isJointPairSelection(controls) && controls.includes(key)) {
+      const otherKey = counterpart(key)!;
+      const other = current.current.state?.hinges?.[otherKey];
+      const base = anchorHinges.current[key];
+      const otherBase = anchorHinges.current[otherKey];
+      if (other && base && otherBase) Object.assign(joints, pairedJointTargets(base, otherBase, value, current.current.mirror, current.current.state!.handles.pelvis.quaternion));
+    }
+    pending.current = { kind: 'joint', key, target: [], joints };
     void drain();
   }
   function applyHingeAngle(angle: number) {
@@ -1048,12 +1059,12 @@ export default function Editor() {
   const selectionPinned = members.some(k => pins.includes(k));
   const controls = controlSelection(members);
   const mirrorAvailable = canMirrorSelection(controls);
-  const mirrorActive = mirror && mirrorAvailable && transformMode === 'translate';
+  const mirrorActive = mirror && mirrorAvailable && (transformMode === 'translate' || isJointPairSelection(controls));
   const activeControl = controlKey(members, selected);
   const rotationAllowed = canRotateSelection(controls);
   const selectionAnglePinned = members.some(k => anglePins.includes(k)) || controls.some(k => anglePins.includes(k));
   const rotationBlocked = !rotationAllowed || selectionAnglePinned || controls.some(k => pins.includes(k) && (controls.length > 1 || feet.includes(k)));
-  const hinge = controls.length === 1 ? state?.hinges?.[activeControl] : undefined;
+  const hinge = controls.length === 1 || isJointPairSelection(controls) ? state?.hinges?.[activeControl] : undefined;
   const ankle = controls.length === 1 && ANKLE_HANDLES.includes(activeControl);
   const selectedJoints = members.filter(key => key.endsWith('_joint'));
   const partJoints = selectedJoints.length > 1 ? selectedJoints : controls.length === 1 ? COMBINED_JOINTS[activeControl] : undefined;
@@ -1145,7 +1156,7 @@ export default function Editor() {
       <div className="segmented transform-modes"><button className={transformMode === 'translate' ? 'chosen' : ''} disabled={disabled} onClick={() => changeTransformMode('translate')} aria-keyshortcuts="W" title="이동 모드 (W)">이동 W</button><button className={transformMode === 'rotate' ? 'chosen' : ''} disabled={disabled || !rotationAllowed} onClick={() => changeTransformMode('rotate')} aria-keyshortcuts="E" title="회전 모드 (E)">회전 E</button></div>
       <div className="segmented"><button className={space === 'world' ? 'chosen' : ''} disabled={disabled || transformMode === 'rotate' && (!!hinge || ankle)} onClick={() => setSpace('world')} title="장면에 고정된 XYZ 축으로 드래그">월드 축</button><button className={space === 'local' ? 'chosen' : ''} disabled={disabled || transformMode === 'rotate' && (!!hinge || ankle)} onClick={() => setSpace('local')} title="선택 부위의 방향을 따라가는 XYZ 축으로 드래그">로컬 축</button></div>
       <div className="segmented"><button className={!mirror ? 'chosen' : ''} disabled={disabled} onClick={() => setMirror(false)}>일반 이동</button><button className={mirror ? 'chosen' : ''} disabled={disabled} aria-pressed={mirror} onClick={() => setMirror(true)}>좌우 미러 이동</button></div>
-      {mirror && <p className="hint">{mirrorActive ? `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 이쪽을 바깥/안쪽으로 드래그하면 반대쪽도 대칭 이동합니다. 골반의 좌우 평면을 기준으로 합니다.` : !mirrorAvailable ? '좌우 짝을 모두 선택하면 미러 이동이 활성화됩니다.' : 'W 이동 모드에서 미러 이동을 사용할 수 있습니다.'}</p>}
+      {mirror && <p className="hint">{mirrorActive ? transformMode === 'rotate' ? `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 선택한 관절 링의 변화량을 반대쪽 관절축에 좌우 대칭으로 적용합니다.` : `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 이쪽을 바깥/안쪽으로 드래그하면 반대쪽도 대칭 이동합니다. 골반의 좌우 평면을 기준으로 합니다.` : !mirrorAvailable ? '좌우 짝을 모두 선택하면 미러 이동이 활성화됩니다.' : 'W 이동 또는 대칭 관절 2개를 선택한 E 회전 모드에서 사용할 수 있습니다.'}</p>}
       <h2>{selectedGroup?.label ?? (members.length > 1 ? `${members.length}개 부위` : state?.handles[selected].label ?? '골반')} <span>{selectionPinned ? '위치 고정 포함' : selectionAnglePinned ? '각도 고정 포함' : '이동 가능'}</span></h2>
       <p className="hint">{members.map(k => state?.handles[k].label ?? k).join(' · ')}</p>
       <button className="wide" disabled={!state} onClick={() => scene.current?.focusSelection()}>선택 부위 보기 <kbd>F</kbd></button>

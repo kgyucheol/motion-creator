@@ -3,7 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { controlKey, controlSelection } from './body-groups.ts';
-import { canMirrorSelection } from './pose-transforms.ts';
+import { canMirrorSelection, isJointPairSelection } from './pose-transforms.ts';
 import { normalizedObjectSize, normalizedSceneAsset, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
 
 export type PoseState = {
@@ -42,7 +42,7 @@ export function ankleFrame(state: PoseState, key: string) {
   const y = new THREE.Vector3().fromArray(state.hinges[key + '_pitch_joint'].axis_world).normalize();
   return new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, y, x.clone().cross(y).normalize()));
 }
-export const canRotateSelection = (members: string[]) => members.length > 0 && (members.every(k => ROTATABLE.includes(k)) || members.length === 1 && (HINGE_HANDLES.includes(members[0]) || isJointHandle(members[0])));
+export const canRotateSelection = (members: string[]) => members.length > 0 && (members.every(k => ROTATABLE.includes(k)) || isJointPairSelection(members) || members.length === 1 && (HINGE_HANDLES.includes(members[0]) || isJointHandle(members[0])));
 const HEAD_CAMERA_VIEW_FRAME = new THREE.Quaternion().setFromRotationMatrix(
   new THREE.Matrix4().makeBasis(new THREE.Vector3(0, -1, 0), new THREE.Vector3(0, 0, 1), new THREE.Vector3(-1, 0, 0)),
 );
@@ -244,7 +244,8 @@ export class RobotScene {
       }
       if (event.value) {
         const ring = jointForRing(controlKey(this.members, this.selected), this.gizmo.axis);
-        const hinge = this.transformMode === 'rotate' && controlSelection(this.members).length === 1 && ring ? this.state?.hinges?.[ring.key] : undefined;
+        const controls = controlSelection(this.members);
+        const hinge = this.transformMode === 'rotate' && (controls.length === 1 || isJointPairSelection(controls)) && ring ? this.state?.hinges?.[ring.key] : undefined;
         this.hingeDrag = hinge && ring ? { quaternion: this.pivot.quaternion.clone(), angle: hinge.angle, lastTwist: 0, delta: 0, limits: hinge.limits, ...ring } : null;
         this.callbacks.begin();
       } else {
@@ -536,7 +537,7 @@ export class RobotScene {
       this.labels[k]?.classList.toggle('pinned', pins.includes(k));
       this.labels[k]?.classList.toggle('angle-pinned', anglePins.includes(k));
     });
-    const hinge = this.transformMode === 'rotate' && controls.length === 1 ? this.state?.hinges?.[activeControl] : undefined;
+    const hinge = this.transformMode === 'rotate' && (controls.length === 1 || isJointPairSelection(controls)) ? this.state?.hinges?.[activeControl] : undefined;
     const ankle = this.transformMode === 'rotate' && controls.length === 1 && ANKLE_HANDLES.includes(activeControl);
     this.gizmo.setSpace(hinge || ankle ? 'local' : this.space);
     this.gizmo.showX = this.gizmo.showY = !hinge;

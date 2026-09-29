@@ -4,6 +4,21 @@ export const counterpart = (key: string) => key.startsWith('left_') ? 'right_' +
 export function canMirrorSelection(keys: string[]) {
   return keys.length >= 2 && keys.every(key => { const other = counterpart(key); return other !== null && keys.includes(other); });
 }
+export function isJointPairSelection(keys: string[]) {
+  return keys.length === 2 && keys.every(key => key.endsWith('_joint')) && counterpart(keys[0]) === keys[1];
+}
+export function mirroredJointSign(axis: number[], otherAxis: number[], rootQuaternion: number[]) {
+  const normal = new Vector3(0, 1, 0).applyQuaternion(new Quaternion().fromArray(rootQuaternion)).normalize();
+  const reflectedAxial = new Vector3().fromArray(axis).addScaledVector(normal, -2 * new Vector3().fromArray(axis).dot(normal)).negate();
+  return reflectedAxial.dot(new Vector3().fromArray(otherAxis)) < 0 ? -1 : 1;
+}
+type JointAnchor = { joint_name: string; angle: number; limits: number[]; axis_world: number[] };
+export function pairedJointTargets(active: JointAnchor, other: JointAnchor, requestedAngle: number, mirror: boolean, rootQuaternion: number[]) {
+  const clamp = (value: number, limits: number[]) => Math.max(limits[0], Math.min(limits[1], value));
+  const angle = clamp(requestedAngle, active.limits);
+  const sign = mirror ? mirroredJointSign(active.axis_world, other.axis_world, rootQuaternion) : 1;
+  return { [active.joint_name]: angle, [other.joint_name]: clamp(other.angle + sign * (angle - active.angle), other.limits) };
+}
 export function translatedTargets(positions: Record<string, number[]>, delta: number[], mirror?: { active: string; rootQuaternion: number[] }) {
   const offset = new Vector3().fromArray(delta);
   const normal = mirror ? new Vector3(0, 1, 0).applyQuaternion(new Quaternion().fromArray(mirror.rootQuaternion)).normalize() : null;
