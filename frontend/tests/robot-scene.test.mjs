@@ -29,8 +29,20 @@ test('a symmetric hinge pair supports one active ring and mirrored axis deltas',
   assert.deepEqual(viewer.pivot.position.toArray(), [0, -.2, 1]);
 });
 import { BODY_GROUPS, allNodes, nodeMembers, selectMembers, selectionState, controlSelection, controlKey, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups.ts';
-import { createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
+import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, normalizedSceneAsset, objectVerticalHalfExtent, placeSceneObject, removeSceneObjectSubtree, reparentSceneObject, reparentSceneObjects, selectSceneObjectRows, sceneObjectDescendantIds, sceneObjectsOverlap, transformSceneObjectChildren, transformSceneObjectGroup } from '../lib/scene-objects.ts';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, smoothTransitionDuration } from '../lib/keyframes.ts';
+
+test('ramen bundle candidate points follow its center and keep robot left/right sides', () => {
+  const bundle = { name: 'Mupama_Stack_L03_R01', shape: 'box', position: [.4, 0, 1],
+    quaternion_xyzw: [0, 0, 0, 1], size: [.138, .7, .138] };
+  const points = candidateRamenGraspPoints(bundle, [0, 0, 0], [0, 0, 0, 1]);
+  assert.deepEqual(points.left.map(value => Number(value.toFixed(3))), [.231, .25, 1]);
+  assert.deepEqual(points.right.map(value => Number(value.toFixed(3))), [.231, -.25, 1]);
+  const reversed = candidateRamenGraspPoints({ ...bundle, position: [.5, 0, 1],
+    quaternion_xyzw: [0, 0, 1, 0] }, [0, 0, 0], [0, 0, 0, 1]);
+  assert.ok(reversed.left[1] > reversed.right[1]);
+  assert.ok(Math.abs(reversed.left[0] - .331) < 1e-10);
+});
 
 test('a duplicated keyframe is inserted immediately after the selection as an independent copy', () => {
   const frames = [

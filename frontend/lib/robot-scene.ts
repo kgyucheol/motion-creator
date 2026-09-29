@@ -4,7 +4,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { controlKey, controlSelection } from './body-groups.ts';
 import { canMirrorSelection, isJointPairSelection } from './pose-transforms.ts';
-import { normalizedObjectSize, normalizedSceneAsset, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
+import { normalizedObjectSize, normalizedSceneAsset, type CandidateGraspPoints, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
 
 export type PoseState = {
   model_id?: string;
@@ -131,6 +131,7 @@ export class RobotScene {
   gripMarkerObjectId: string | null = null;
   gripMarkerUV: { left: number[]; right: number[] } | null = null;
   gripMarkers: Record<'left' | 'right', THREE.Mesh>;
+  candidateGraspMarkers: Record<'left' | 'right', THREE.Group>;
   gripPads: Record<'left' | 'right', THREE.Mesh>;
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
@@ -284,6 +285,15 @@ export class RobotScene {
       const marker = new THREE.Mesh(new THREE.SphereGeometry(.018, 16, 10), new THREE.MeshBasicMaterial({ color: side === 'left' ? '#55e7c1' : '#ffbd70', depthTest: false }));
       marker.visible = false; marker.renderOrder = 5; this.scene.add(marker); return [side, marker];
     })) as unknown as Record<'left' | 'right', THREE.Mesh>;
+    this.candidateGraspMarkers = Object.fromEntries((['left', 'right'] as const).map(side => {
+      const color = side === 'left' ? '#55e7c1' : '#ffbd70';
+      const marker = new THREE.Group();
+      const material = new THREE.MeshBasicMaterial({ color, depthTest: false });
+      marker.add(new THREE.Mesh(new THREE.SphereGeometry(.018, 16, 12), material));
+      marker.add(new THREE.Mesh(new THREE.TorusGeometry(.04, .004, 6, 24), material.clone()));
+      marker.traverse(node => { node.renderOrder = 6; });
+      marker.visible = false; this.scene.add(marker); return [side, marker];
+    })) as unknown as Record<'left' | 'right', THREE.Group>;
     this.gripPads = Object.fromEntries((['left', 'right'] as const).map(side => {
       const color = side === 'left' ? '#42e5bc' : '#ff9e45';
       const pad = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({
@@ -883,6 +893,14 @@ export class RobotScene {
     this.gripMarkerObjectId = id;
     this.gripMarkerUV = id && leftUV && rightUV ? { left: [...leftUV], right: [...rightUV] } : null;
     this.refreshGripMarkers();
+  }
+  setCandidateGraspMarkers(points: CandidateGraspPoints | null) {
+    for (const side of ['left', 'right'] as const) {
+      const marker = this.candidateGraspMarkers[side];
+      marker.visible = !!points;
+      if (points) marker.position.fromArray(points[side]);
+    }
+    this.dirty = true;
   }
   private refreshGripMarkers() {
     const object = this.gripMarkerObjectId ? this.sceneObjects[this.gripMarkerObjectId] : undefined;

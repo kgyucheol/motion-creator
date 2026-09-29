@@ -86,6 +86,7 @@ export type SceneAssetImport = {
 };
 
 export type SceneObjectPose = { position: number[]; quaternion_xyzw: number[] };
+export type CandidateGraspPoints = { left: number[]; right: number[] };
 export type ScenePlacementOptions = { preventOverlap: boolean; surfaceSnap: boolean; groundLock: boolean; snapDistance?: number };
 
 const DEFAULT_PLACEMENT: SceneObjectPlacement = { prevent_overlap: true, surface_snap: false, ground_lock: true };
@@ -135,6 +136,34 @@ export function normalizedObjectSize(shape: SceneObjectShape, size: number[], ax
     return [diameter, diameter, safe[2]];
   }
   return safe;
+}
+
+export function isRamenBundle(object: SceneObject) {
+  return /mupama.stack|ramen.bundle|라면.*묶음/i.test(object.name) && object.shape !== 'open_box';
+}
+
+export function candidateRamenGraspPoints(object: SceneObject, robotPosition: number[], robotQuaternion: number[]): CandidateGraspPoints {
+  const center = new THREE.Vector3().fromArray(object.position);
+  const rotation = new THREE.Quaternion().fromArray(object.quaternion_xyzw).normalize();
+  const axisIndex = object.size.indexOf(Math.max(...object.size));
+  const axis = new THREE.Vector3().setComponent(axisIndex, 1).applyQuaternion(rotation).normalize();
+  const robotLeft = new THREE.Vector3(0, 1, 0).applyQuaternion(new THREE.Quaternion().fromArray(robotQuaternion));
+  if (axis.dot(robotLeft) < 0) axis.negate();
+  const towardRobot = new THREE.Vector3().fromArray(robotPosition).sub(center);
+  towardRobot.z = 0;
+  towardRobot.addScaledVector(axis, -towardRobot.dot(axis));
+  if (towardRobot.lengthSq() < 1e-8) {
+    towardRobot.set(-1, 0, 0).applyQuaternion(new THREE.Quaternion().fromArray(robotQuaternion));
+    towardRobot.z = 0;
+    towardRobot.addScaledVector(axis, -towardRobot.dot(axis));
+  }
+  towardRobot.normalize();
+  const radius = Math.max(...object.size.filter((_, index) => index !== axisIndex)) / 2;
+  const approach = center.clone().addScaledVector(towardRobot, radius + .10);
+  return {
+    left: approach.clone().addScaledVector(axis, .25).toArray(),
+    right: approach.clone().addScaledVector(axis, -.25).toArray(),
+  };
 }
 
 export function objectHalfExtents(object: Pick<SceneObject, 'shape' | 'size' | 'quaternion_xyzw'>) {

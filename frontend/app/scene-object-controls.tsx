@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Boxes, Plus, Trash2, Upload } from 'lucide-react';
+import { Boxes, Crosshair, Plus, Trash2, Upload } from 'lucide-react';
 import { eulerDegrees, quaternionFromDegrees } from '../lib/pose-transforms';
-import { normalizedObjectSize, reparentSceneObjects, selectSceneObjectRows, type ObjectTransformMode, type SceneObject, type SceneObjectGroup, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { isRamenBundle, normalizedObjectSize, reparentSceneObjects, selectSceneObjectRows, type CandidateGraspPoints, type ObjectTransformMode, type SceneObject, type SceneObjectGroup, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 
 type Props = {
   objects: SceneObject[];
@@ -25,6 +25,8 @@ type Props = {
   onSelectGroup: (id: string | null) => void;
   onChangeGroup: (id: string, patch: Partial<SceneObjectGroup>) => void;
   onRemoveGroup: (id: string) => void;
+  graspPreview: CandidateGraspPoints | null;
+  onToggleGraspPreview: (id: string) => void;
 };
 
 const shapeLabels: Record<SceneObjectShape, string> = { box: '박스', open_box: '열린 상자', cylinder: '원통', sphere: '구' };
@@ -114,6 +116,7 @@ export default function SceneObjectControls(props: Props) {
     {selected && <div className="object-editor">
       <div className="object-title-row"><input aria-label="물체 이름" value={selected.name} maxLength={80} disabled={props.disabled} onChange={event => props.onChange(selected.id, { name: event.target.value || selected.name })}/><button title="물체와 하위 물체 삭제" disabled={props.disabled} onClick={() => props.onRemove(selected.id)}><Trash2 size={14}/></button></div>
       <div className="segmented object-modes">{(['translate', 'rotate', 'scale'] as ObjectTransformMode[]).map((mode, index) => <button key={mode} className={props.mode === mode ? 'chosen' : ''} disabled={props.disabled} onClick={() => props.onModeChange(mode)}>{['이동 W', '회전 E', '크기 R'][index]}</button>)}</div>
+      {isRamenBundle(selected) && <div className="candidate-grasp-control"><button className="wide" type="button" aria-pressed={!!props.graspPreview} disabled={props.disabled} onClick={() => props.onToggleGraspPreview(selected.id)}><Crosshair size={14}/>{props.graspPreview ? '파지점 미리보기 끄기' : '파지점 미리보기'}</button>{props.graspPreview && <div className="candidate-grasp-coordinates">{(['left', 'right'] as const).map(side => <div key={side}><span>{side === 'left' ? '왼손' : '오른손'}</span><code>{props.graspPreview![side].map(value => value.toFixed(3)).join(', ')} m</code></div>)}</div>}</div>}
       <div className="inspector-label">{selected.asset_id ? '물리 충돌체' : '도형'}</div>
       <select aria-label="물체 도형" value={selected.shape} disabled={props.disabled || !!selected.asset_id} onChange={event => {
         const shape = event.target.value as SceneObjectShape;

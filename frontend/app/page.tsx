@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import SceneObjectControls from './scene-object-controls';
 import { ramenScene } from '../lib/ramen-scene';
 import GraspControls, { type GraspPickMode } from './grasp-controls';
@@ -9,7 +9,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
-import { createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
+import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
@@ -146,6 +146,7 @@ export default function Editor() {
   const [objectGroups, setObjectGroups] = useState<SceneObjectGroup[]>([]);
   const [selectedObjectGroupId, setSelectedObjectGroupId] = useState<string | null>(null);
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [graspPreviewId, setGraspPreviewId] = useState<string | null>(null);
   const [objectTransformMode, setObjectTransformMode] = useState<ObjectTransformMode>('translate');
   const [preventObjectOverlap, setPreventObjectOverlap] = useState(true);
   const [objectSurfaceSnap, setObjectSurfaceSnap] = useState(false);
@@ -693,6 +694,14 @@ export default function Editor() {
     scene.current?.setGripMarkers(grasp?.object_pose ? GRASP_GHOST_ID : grasp?.object_id ?? null,
       grasp?.left_surface_uv, grasp?.right_surface_uv);
   }, [project, frameIndex, objects]);
+  const graspPreview = useMemo(() => {
+    if (!graspPreviewId || graspPreviewId !== selectedObjectId || playing || preview?.physics) return null;
+    const object = objects.find(value => value.id === graspPreviewId);
+    const pelvis = state?.handles.pelvis;
+    return object && pelvis && isRamenBundle(object)
+      ? candidateRamenGraspPoints(object, pelvis.position, pelvis.quaternion) : null;
+  }, [graspPreviewId, selectedObjectId, objects, state, playing, preview?.physics]);
+  useEffect(() => { scene.current?.setCandidateGraspMarkers(graspPreview); }, [graspPreview]);
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
@@ -1199,6 +1208,7 @@ export default function Editor() {
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>
       <div className="section-divider"/>
       <SceneObjectControls objects={objects} selectedId={selectedObjectId} mode={objectTransformMode} disabled={disabled} preventOverlap={preventObjectOverlap} surfaceSnap={objectSurfaceSnap} groundLock={objectGroundLock}
+        graspPreview={graspPreview} onToggleGraspPreview={id => setGraspPreviewId(current => current === id ? null : id)}
         groups={objectGroups} selectedGroupId={selectedObjectGroupId} onSelect={id => { setSelectedObjectGroupId(null); selectObject(id); }} onAdd={addObject} onRemove={removeObject} onChange={changeObject} onModeChange={changeObjectMode} onPlacementChange={changeObjectPlacement}
         onImport={() => assetFile.current?.click()} onParentChange={changeObjectParent} onCreateGroup={createObjectGroup} onSelectGroup={id => { setSelectedObjectGroupId(id); if (id) selectObject(null); }} onChangeGroup={changeObjectGroup} onRemoveGroup={removeObjectGroup}/>
       <button className="wide" disabled={disabled} onClick={addRamenScene}>라면용기 4열 × 3층 + 열린 상자 생성</button>
