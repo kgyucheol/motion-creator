@@ -1,0 +1,69 @@
+{
+  "source": "g1_29dof_rev_1_0.urdf",
+  "scoop_side": "right",
+  "groove_depth_mm": 0.65,
+  "groove_width_mm": 7.0,
+  "body_density": 2700.0,
+  "adapter_density": 2700.0,
+  "links": {
+    "right_scoop_link": {
+      "mass_kg": 0.4164,
+      "com_m": [
+        0.10044,
+        0.0,
+        -0.01615
+      ],
+      "tcp_m": [
+        0.1803,
+        0.0,
+        -0.03806
+      ],
+      "body_volume_cm3": 90.7,
+      "adapter_volume_cm3": 63.6,
+      "n_collision_meshes": 78,
+      "n_collision_primitives": 2,
+      "bounds_mm": [
+        [
+          42.0,
+          -80.0,
+          -42.6
+        ],
+        [
+          248.3,
+          80.0,
+          3.5
+        ]
+      ]
+    },
+    "left_end_support_link": {
+      "mass_kg": 0.4623,
+      "com_m": [
+        0.06028,
+        0.00451,
+        -0.01625
+      ],
+      "tcp_m": [
+        0.18031,
+        0.0,
+        -0.03806
+      ],
+      "body_volume_cm3": 81.2,
+      "adapter_volume_cm3": 90.0,
+      "n_collision_meshes": 1,
+      "n_collision_primitives": 3,
+      "bounds_mm": [
+        [
+          12.0,
+          -45.0,
+          -34.0
+        ],
+        [
+          192.0,
+          45.0,
+          2.0
+        ]
+      ]
+    }
+  },
+  "urdf_sha256": "eb628ea7ceaae0d0"
+}

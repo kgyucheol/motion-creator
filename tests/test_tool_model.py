@@ -19,7 +19,11 @@ def test_tool_urdf_joint_mapping_and_tcp_ik(monkeypatch):
     assert 'scoop' in robot.handles['left_hand'][2]
     assert 'end_support' in robot.handles['right_hand'][2]
     np.testing.assert_allclose(robot.handles['left_hand'][1], [.221805, 0, -.0380589785])
-    assert robot.handles['right_hand'][1][1] < 0
+    np.testing.assert_allclose(robot.handles['right_hand'][1], [.221805, 0, -.0380589785])
+    home_data = robot.data(robot.home)
+    left = robot.point(home_data, 'left_hand')[0]
+    right = robot.point(home_data, 'right_hand')[0]
+    np.testing.assert_allclose(right, left * [1, -1, 1], atol=2e-5, rtol=0)
     assert robot.fingerprint != standard.fingerprint
     camera = robot.state(robot.home)['cameras']['head']
     assert camera['label'] == 'Head Cam · D435'
@@ -39,11 +43,11 @@ def test_gripper_fingerprint_is_stable_and_pd_physics_runs(monkeypatch):
     project['keyframes'][0]['duration'] = .1
     worker_robot = Robot()
     assert worker_robot.fingerprint == editor_robot.fingerprint
-    assert len(editor_robot.compatible_fingerprints) == 3
-    legacy_project = new_project(editor_robot)
-    legacy_project['model_sha256'] = next(value for value in editor_robot.compatible_fingerprints
-                                          if value not in (editor_robot.fingerprint, Robot('g1').fingerprint))
-    assert validate_project(worker_robot, legacy_project)['model_sha256'] == worker_robot.fingerprint
+    assert len(editor_robot.compatible_fingerprints) == 5
+    for old_hash in editor_robot.compatible_fingerprints - {editor_robot.fingerprint}:
+        legacy_project = new_project(editor_robot)
+        legacy_project['model_sha256'] = old_hash
+        assert validate_project(worker_robot, legacy_project)['model_sha256'] == worker_robot.fingerprint
     base_project = new_project(Robot('g1'))
     assert validate_project(worker_robot, base_project)['model_sha256'] == worker_robot.fingerprint
     result = simulate(project, controller='pd')

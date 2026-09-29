@@ -1,0 +1,571 @@
+<!-- 다른 G1 URDF에 붙일 때: 기존 손 링크·관절을 지우고 아래를 <robot> 안에 붙여 넣기. 재질 2개도 함께 -->
+<material name="gripper_white"><color rgba="0.95 0.95 0.93 1"/></material>
+<material name="adapter_dark"><color rgba="0.30 0.31 0.33 1"/></material>
+<link name="right_scoop_link">
+  <inertial>
+    <origin xyz="0.100435144 8.55123053e-14 -0.0161536088" rpy="0 0 0"/>
+    <mass value="0.416449569"/>
+    <inertia ixx="0.000445694705" ixy="-1.91473162e-15" ixz="0.000475709133" iyy="0.00285275504" iyz="-7.12164744e-10" izz="0.00304810381"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_body.STL"/>
+    </geometry>
+    <material name="gripper_white"/>
+  </visual>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_adapter.STL"/>
+    </geometry>
+    <material name="adapter_dark"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_00.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_01.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_02.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_03.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_04.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_05.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_06.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_07.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_08.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_09.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_10.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_11.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_12.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_13.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_14.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_15.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_16.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_17.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_18.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_19.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_20.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_21.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_22.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_23.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_24.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_25.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_26.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_27.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_28.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_29.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_30.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_31.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_32.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_33.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_34.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_35.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_36.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_37.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_38.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_39.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_40.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_41.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_42.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_43.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_44.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_45.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_46.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_47.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_48.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_49.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_50.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_51.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_52.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_53.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_54.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_55.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_56.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_57.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_58.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_59.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_60.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_61.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_62.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_63.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_64.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_65.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_66.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_67.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_68.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_69.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_70.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_71.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_72.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_73.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_74.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_75.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_76.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/right_scoop_col_77.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0.006 0 0" rpy="0 1.57079633 0"/>
+    <geometry>
+      <cylinder radius="0.029" length="0.012"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0.027 0 0" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.03 0.044 0.024"/>
+    </geometry>
+  </collision>
+</link>
+<joint name="right_scoop_joint" type="fixed">
+  <origin xyz="0.0415 0 0" rpy="0 0 0"/>
+  <parent link="right_wrist_yaw_link"/>
+  <child link="right_scoop_link"/>
+</joint>
+<link name="right_scoop_tcp"/>
+<joint name="right_scoop_tcp_joint" type="fixed">
+  <origin xyz="0.180305 0 -0.0380589785" rpy="0 0 0"/>
+  <parent link="right_scoop_link"/>
+  <child link="right_scoop_tcp"/>
+</joint>
+<link name="left_end_support_link">
+  <inertial>
+    <origin xyz="0.0602805273 0.00451375483 -0.016246618" rpy="0 0 0"/>
+    <mass value="0.462258829"/>
+    <inertia ixx="0.000363736709" ixy="-0.000119394574" ixz="0.000224673136" iyy="0.00159106192" iyz="1.51878679e-07" izz="0.00170745922"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/left_end_support_body.STL"/>
+    </geometry>
+    <material name="gripper_white"/>
+  </visual>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/left_end_support_adapter.STL"/>
+    </geometry>
+    <material name="adapter_dark"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="meshes/left_end_support_col_00.STL"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0.006 0 0" rpy="0 1.57079633 0"/>
+    <geometry>
+      <cylinder radius="0.029" length="0.012"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0.027 0 -0.008" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.03 0.044 0.044"/>
+    </geometry>
+  </collision>
+  <collision>
+    <origin xyz="0.102 0 -0.032" rpy="0 0 0"/>
+    <geometry>
+      <box size="0.18 0.09 0.004"/>
+    </geometry>
+  </collision>
+</link>
+<joint name="left_end_support_joint" type="fixed">
+  <origin xyz="0.0415 0 0" rpy="0 0 0"/>
+  <parent link="left_wrist_yaw_link"/>
+  <child link="left_end_support_link"/>
+</joint>
+<link name="left_end_support_tcp"/>
+<joint name="left_end_support_tcp_joint" type="fixed">
+  <origin xyz="0.180305 0 -0.0380589785" rpy="0 0 0"/>
+  <parent link="left_end_support_link"/>
+  <child link="left_end_support_tcp"/>
+</joint>

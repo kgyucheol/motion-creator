@@ -143,6 +143,13 @@ class Robot:
             # actuated joints, order and qpos layout are identical to base G1,
             # so authored base-model motion references are directly portable.
             self.compatible_fingerprints.add(hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest())
+            # The right support TCP was aligned with the mirrored left scoop
+            # TCP. The 29 joints and physical geoms did not change, so saved
+            # projects using the earlier TCP calibration remain editable.
+            self.compatible_fingerprints.update({
+                'd270539dbd3c592d46a7721e623c4b71d9be7b73ad7437a5531ec3161519aa45',
+                'bde0de43b90b2ff14ebf6641393c1347bd6b1e82620ffcc90d155cfa6ff1163a',
+            })
             # Projects created by the first gripper-model load in older builds
             # may contain MuJoCo's inferred STL content_type attributes.
             legacy_xml = copy.deepcopy(fingerprint_xml)
