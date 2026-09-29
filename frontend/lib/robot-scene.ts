@@ -146,7 +146,7 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><div class="head-camera-controls-title"><strong>PiP 카메라 화각</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><input type="range" min="45" max="120" step="0.1" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label><label><input type="range" min="25" max="110" step="0.1" value="42" aria-label="PiP 세로 화각"><span>세로 42°</span></label></div>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><b>HEAD CAM · SIM</b><div id="head-camera-settings" class="head-camera-controls" hidden><div class="head-camera-controls-title"><strong>PiP 카메라 화각</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><input type="range" min="1" max="120" step="0.1" value="69" aria-label="PiP 가로 화각"><span>가로 69°</span></label><label><input type="range" min="1" max="120" step="0.1" value="42" aria-label="PiP 세로 화각"><span>세로 42°</span></label></div>';
     const settingsButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-settings-button')!;
     const settings = this.headCameraOverlay.querySelector<HTMLDivElement>('.head-camera-controls')!;
     settingsButton.addEventListener('click', () => {
@@ -166,7 +166,10 @@ export class RobotScene {
     const setAspect = (choice: string) => {
       this.headCameraAspect = choice === '4:3' ? 4 / 3 : choice === '16:9' ? 16 / 9 : null;
       aspectButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.aspect === choice)));
-      if (this.headCameraAspect) this.headCameraVerticalFov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCameraAspect);
+      if (this.headCameraAspect) {
+        this.headCameraHorizontalFov = Math.max(this.headCameraHorizontalFov, horizontalFovForVertical(1, this.headCameraAspect));
+        this.headCameraVerticalFov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCameraAspect);
+      }
       showFovs();
     };
     aspectButtons.forEach(button => button.addEventListener('click', () => setAspect(button.dataset.aspect!)));
@@ -177,13 +180,16 @@ export class RobotScene {
     });
     horizontalRange.addEventListener('input', () => {
       this.headCameraHorizontalFov = Number(horizontalRange.value);
-      if (this.headCameraAspect) this.headCameraVerticalFov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCameraAspect);
+      if (this.headCameraAspect) {
+        this.headCameraHorizontalFov = Math.max(this.headCameraHorizontalFov, horizontalFovForVertical(1, this.headCameraAspect));
+        this.headCameraVerticalFov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCameraAspect);
+      }
       showFovs();
     });
     verticalRange.addEventListener('input', () => {
       this.headCameraVerticalFov = Number(verticalRange.value);
       if (this.headCameraAspect) {
-        this.headCameraHorizontalFov = Math.min(120, Math.max(45, horizontalFovForVertical(this.headCameraVerticalFov, this.headCameraAspect)));
+        this.headCameraHorizontalFov = Math.min(120, Math.max(1, horizontalFovForVertical(this.headCameraVerticalFov, this.headCameraAspect)));
         this.headCameraVerticalFov = verticalFovForHorizontal(this.headCameraHorizontalFov, this.headCameraAspect);
       }
       showFovs();
