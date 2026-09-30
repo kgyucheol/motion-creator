@@ -14,7 +14,9 @@ type Demo = { id: string; name: string; description: string; source: string; par
 
 type LabScene = Scene & { toward_robot?: number[]; plane_y?: number; robot_position?: number[]; robot_quaternion_xyzw?: number[] };
 type AutoPath = { waypoints: Waypoint[]; stage_steps: Record<string, number>; blades: BladePath[] };
+type ToolState = { model_id: string; tools: [string, string] | null; options: { id: string; label: string }[] };
 type Stored = { project?: string; mode?: string; params?: Record<string, number>; stepping?: DrawnStepping;
+  tools?: [string, string];
   drawings?: Record<string, { points: DrawnPoint[]; flip: boolean }>;
   physics?: { material?: string; softMm?: number; scope?: string; shape?: string; force?: number; tracking?: number;
     muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number; mass?: string } };
@@ -39,6 +41,9 @@ let originalPitch: number | null = null; // the box pitch as loaded, for "원래
 let scene: LabScene | null = null;
 let defaults: Record<string, number> = {};
 let limits: Record<string, [number, number]> = {};
+let toolModelId = 'g1';
+let mountedTools: [string, string] | null = null;
+let toolOptions: ToolState['options'] = [];
 let mode: 'draw' | 'auto' = 'draw';
 let points: DrawnPoint[] = [];
 let selected = -1;
@@ -583,6 +588,51 @@ function currentGrasps(of: LabScene | null = scene): Record<'left' | 'right', Se
     of.box ? of.frame.up : null);
 }
 const graspSide = () => $<HTMLSelectElement>('grasp-side').value as 'left' | 'right';
+const handIndex = (side: 'left' | 'right') => side === 'left' ? 0 : 1;
+
+function renderMountedTool() {
+  const side = graspSide(), select = $<HTMLSelectElement>('mounted-tool');
+  const fallback = stored().tools ?? ['nse_scoop', 'nse_spatula'];
+  const selected = mountedTools?.[handIndex(side)] ?? fallback[handIndex(side)];
+  select.innerHTML = toolOptions.map(option => `<option value="${option.id}">${option.label}</option>`).join('');
+  if (toolOptions.some(option => option.id === selected)) select.value = selected;
+  const pair = mountedTools?.map(id => toolOptions.find(option => option.id === id)?.label ?? id);
+  $('mounted-tool-info').textContent = toolModelId === 'g1-tools'
+    ? `G1 그리퍼 장착 구성 · 왼손 ${pair?.[0] ?? '—'} / 오른손 ${pair?.[1] ?? '—'}`
+    : '툴을 고르면 메인 편집기와 공유하는 G1 그리퍼 모델로 전환하고 해당 손에 장착합니다.';
+}
+
+async function changeMountedTool(toolId: string) {
+  const side = graspSide(), select = $<HTMLSelectElement>('mounted-tool');
+  select.disabled = true;
+  try {
+    if (toolModelId !== 'g1-tools') {
+      await api('model', { model_id: 'g1-tools' });
+      const current = await api<ToolState>('tools');
+      toolModelId = current.model_id;
+      mountedTools = current.tools ?? ['scoop', 'end_support'];
+    }
+    const next: [string, string] = [...(mountedTools ?? ['scoop', 'end_support'])];
+    next[handIndex(side)] = toolId;
+    const updated = await api<{ model_id: string; tools: [string, string] }>('tools', { left: next[0], right: next[1] });
+    toolModelId = updated.model_id;
+    mountedTools = updated.tools;
+    remember({ tools: updated.tools });
+    renderMountedTool();
+    const label = toolOptions.find(option => option.id === toolId)?.label ?? toolId;
+    status(`${side === 'left' ? '왼손' : '오른손'}에 ${label}을 장착했습니다. 메인 편집기와 같은 로봇 모델 설정입니다.`);
+  } catch (error) {
+    // A failed change can still have switched the robot model; read the server's actual state back.
+    try {
+      const current = await api<ToolState>('tools');
+      toolModelId = current.model_id; mountedTools = current.tools;
+    } catch { /* keep the last known state */ }
+    renderMountedTool();
+    status(error instanceof Error ? error.message : String(error));
+  } finally {
+    select.disabled = false;
+  }
+}
 
 const COEFFICIENT_FIELDS: [keyof RamenGraspCoefficients['left'], string, number, number | null][] = [
   ['lateral', 'lateral (m)', .005, 0], ['clearance', 'clearance (m)', .005, 0], ['height', 'height (m)', .005, null],
@@ -926,7 +976,11 @@ function tick(time: number) {
 
 async function init() {
   const saved = stored();
-  const names = await api<string[]>('saved');
+  const [names, tools] = await Promise.all([api<string[]>('saved'), api<ToolState>('tools')]);
+  toolModelId = tools.model_id;
+  mountedTools = tools.tools;
+  toolOptions = tools.options;
+  renderMountedTool();
   const select = $<HTMLSelectElement>('project');
   select.innerHTML = names.map(name => `<option value="${name}">${name.replace(/\/project\.json$/, '')}</option>`).join('');
   select.value = saved.project && names.includes(saved.project) ? saved.project : names[0];
@@ -955,7 +1009,8 @@ async function init() {
   $('tab-draw').onclick = () => setMode('draw');
   $('tab-auto').onclick = () => setMode('auto');
   $('from-grasp').onclick = () => { if (!scene) return; checkpoint(); const p = graspPoint(); if (p) { points.unshift(p); selected = 0; changed(); } };
-  $('grasp-side').addEventListener('change', () => { renderGraspInfo(); draw(); });
+  $('grasp-side').addEventListener('change', () => { renderGraspInfo(); renderMountedTool(); draw(); });
+  $('mounted-tool').addEventListener('change', event => void changeMountedTool((event.target as HTMLSelectElement).value));
   $('grasp-coefficients').addEventListener('change', event => {
     const target = event.target as HTMLInputElement;
     if (target.dataset.coefficient) editCoefficient(target.dataset.coefficient as keyof RamenGraspCoefficients['left'], target.value);
