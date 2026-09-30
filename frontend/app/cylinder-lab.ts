@@ -4,6 +4,7 @@ import { autoSteps, drawnWaypoints, pointAngles, snapToCircle, waypointsToPoints
 import DEMOS from '../lib/cylinder-demos.json';
 import { termFor } from '../lib/lab-glossary';
 import { EDITOR_GRASP_KEY, editorGraspCoefficients, sectionGrasps, type SectionGrasp } from '../lib/lab-grasp';
+import { DEFAULT_RAMEN_GRASP_COEFFICIENTS, type RamenGraspCoefficients } from '../lib/scene-objects';
 import { pileAfter, retarget, type Attempt } from '../lib/lab-batch';
 import { boxPitchDeg, tiltScene } from '../lib/box-tilt';
 
@@ -175,10 +176,18 @@ function renderParams(values: Record<string, number>) {
   $('params').innerHTML = Object.keys(defaults).map(key => {
     const [label, note] = PARAM_LABELS[key] ?? [key];
     const [low, high] = limits[key] ?? [-1e9, 1e9];
-    return `<label class="row">${label}${note ? `<small>${note}</small>` : ''}<input data-key="${key}" type="number" step="any" min="${low}" max="${high}" value="${values[key]}"/></label>`;
+    const fromGrasp = GRASP_PARAMS.includes(key);
+    return `<label class="row">${label}${fromGrasp ? '<small>파지점 칸의 계수를 씀</small>' : note ? `<small>${note}</small>` : ''}<input data-key="${key}" type="number" step="any" min="${low}" max="${high}" value="${values[key]}" ${fromGrasp ? 'disabled' : ''}/></label>`;
   }).join('');
   decorateTerms($('params'));
+  if (scene) renderGraspInfo();
 }
+/** Planner parameters with the grasp point taken from the chosen hand's editor coefficients. */
+function plannerParams() {
+  const c = editorGraspCoefficients()[graspSide()];
+  return { ...readParams(), clearance_m: c.clearance, height_m: c.height, pitch_deg: c.pitch };
+}
+const GRASP_PARAMS = ['clearance_m', 'height_m', 'pitch_deg'];
 const readParams = () => Object.fromEntries([...document.querySelectorAll<HTMLInputElement>('#params input')].map(i => [i.dataset.key!, Number(i.value)]));
 
 function renderPoints() {
@@ -255,7 +264,7 @@ async function run() {
       if (points.length < 2) throw new Error('점을 두 개 이상 찍으세요.');
       simBlades = [{ waypoints: drawnWaypoints(points, stepping()), flip: input('flip').value === '1', side: 'drawn' }];
     } else {
-      const params = readParams();
+      const params = plannerParams();
       status('궤적 계획 중…');
       const planned = await api<{ scene: LabScene; path: AutoPath }>('cylinder-lab/plan', {
         scene: baseScene, params, positions: Object.fromEntries(scene.circles.map(c => [c.id, c.center])) });
@@ -575,11 +584,39 @@ function currentGrasps(of: LabScene | null = scene): Record<'left' | 'right', Se
 }
 const graspSide = () => $<HTMLSelectElement>('grasp-side').value as 'left' | 'right';
 
+const COEFFICIENT_FIELDS: [keyof RamenGraspCoefficients['left'], string, number, number | null][] = [
+  ['lateral', 'lateral (m)', .005, 0], ['clearance', 'clearance (m)', .005, 0], ['height', 'height (m)', .005, null],
+  ['roll', 'roll (°)', 1, null], ['pitch', 'pitch (°)', 1, null], ['yaw', 'yaw (°)', 1, null],
+];
+
+/** The chosen hand's editor coefficients as editable fields; edits are saved at once to the shared key. */
 function renderGraspInfo() {
   const c = editorGraspCoefficients()[graspSide()];
+  const focused = (document.activeElement as HTMLElement | null)?.dataset?.coefficient;
+  $('grasp-coefficients').innerHTML = COEFFICIENT_FIELDS.map(([key, label, step, min]) =>
+    `<label class="row">${label}<input data-coefficient="${key}" type="number" step="${step}" ${min === null ? '' : `min="${min}"`} value="${c[key]}"/></label>`).join('');
+  decorateTerms($('grasp-coefficients'));
+  if (focused) (document.querySelector(`[data-coefficient="${focused}"]`) as HTMLInputElement | null)?.focus();
+  // The planner's grasp fields mirror these coefficients.
+  const mirror: Record<string, number> = { clearance_m: c.clearance, height_m: c.height, pitch_deg: c.pitch };
+  document.querySelectorAll<HTMLInputElement>('#params input').forEach(field => {
+    if (field.dataset.key! in mirror) field.value = String(mirror[field.dataset.key!]);
+  });
   const grasp = currentGrasps()?.[graspSide()];
-  $('grasp-info').textContent = `에디터 계수 · lateral ${c.lateral} m · clearance ${c.clearance} m · height ${c.height} m · roll ${c.roll}° · pitch ${c.pitch}° · yaw ${c.yaw}°`
-    + (grasp && grasp.inPlane < .5 ? ' · yaw/roll 때문에 날이 단면 밖을 크게 향합니다(단면에서는 짧게 보임).' : '');
+  $('grasp-info').textContent = `에디터와 같은 공통 계수입니다. 바꾸면 바로 저장되고 에디터에도 반영됩니다.`
+    + (grasp && grasp.inPlane < .5 ? ' yaw/roll 때문에 날이 단면 밖을 크게 향합니다(단면에서는 짧게 보임).' : '');
+}
+
+function writeCoefficients(next: RamenGraspCoefficients) {
+  try { localStorage.setItem(EDITOR_GRASP_KEY, JSON.stringify(next)); } catch { status('브라우저 저장소를 쓸 수 없어 계수를 저장하지 못했습니다.'); }
+  renderGraspInfo(); draw();
+}
+function editCoefficient(key: keyof RamenGraspCoefficients['left'], raw: string) {
+  const value = Number(raw);
+  const field = COEFFICIENT_FIELDS.find(([k]) => k === key)!;
+  if (raw.trim() === '' || !Number.isFinite(value) || (field[3] !== null && value < field[3])) { renderGraspInfo(); return; }
+  const all = editorGraspCoefficients(), side = graspSide();
+  writeCoefficients({ ...all, [side]: { ...all[side], [key]: value } });
 }
 
 function graspPoint(): DrawnPoint | null {
@@ -788,7 +825,7 @@ function setPickMode(on: boolean) {
       template = { kind: 'drawn', paths, referenceCenter: [...scene.target.center], referenceRimUp: scene.frame.rim_up_m };
       pickStatus(`그린 궤적(기준 ${scene.circles.find(c => c.id === scene!.target_id)?.name ?? '대상 원통'})을 옮겨 쓰고, 깊은 원통은 인양을 늘립니다. 꺼낼 라면용기를 클릭하세요.`);
     } else {
-      template = { kind: 'auto', params: readParams() };
+      template = { kind: 'auto', params: plannerParams() };
       pickStatus('클릭한 라면용기마다 지금 파라미터로 다시 계획합니다. 꺼낼 라면용기를 클릭하세요.');
     }
     if (!pile) { pile = scene; pileNeedsSettle = false; }
@@ -915,6 +952,14 @@ async function init() {
   $('tab-auto').onclick = () => setMode('auto');
   $('from-grasp').onclick = () => { if (!scene) return; checkpoint(); const p = graspPoint(); if (p) { points.unshift(p); selected = 0; changed(); } };
   $('grasp-side').addEventListener('change', () => { renderGraspInfo(); draw(); });
+  $('grasp-coefficients').addEventListener('change', event => {
+    const target = event.target as HTMLInputElement;
+    if (target.dataset.coefficient) editCoefficient(target.dataset.coefficient as keyof RamenGraspCoefficients['left'], target.value);
+  });
+  $('grasp-defaults').onclick = () => {
+    const all = editorGraspCoefficients();
+    writeCoefficients({ ...all, [graspSide()]: { ...DEFAULT_RAMEN_GRASP_COEFFICIENTS[graspSide()] } });
+  };
   input('show-grasp').addEventListener('change', draw);
   // The editor may change the shared grasp coefficients in another tab.
   window.addEventListener('storage', event => { if (event.key === EDITOR_GRASP_KEY) { renderGraspInfo(); draw(); } });

@@ -71,6 +71,8 @@ select,input{width:100%}
       <h2>파지점 <button type="button" class="save-section" data-save="grasp" title="이 칸의 현재 값을 저장합니다. 다음에 페이지를 열면 이 값으로 시작합니다.">저장</button></h2>
       <label class="row">손<select id="grasp-side"><option value="left">왼손</option><option value="right">오른손</option></select></label>
       <label class="check"><input type="checkbox" id="show-grasp" checked/>파지점 표시</label>
+      <div id="grasp-coefficients"></div>
+      <div class="buttons"><button id="grasp-defaults">이 손 계수 기본값</button></div>
       <p class="hint" id="grasp-info"></p>
       <div class="buttons"><button id="from-grasp">파지점에서 시작</button><button id="undo-point">마지막 점 삭제</button><button id="clear-points">모두 지우기</button></div>
       <label class="row">날 윗면<small>원통을 받치는 면</small><select id="flip"><option value="0">진행 방향 왼쪽</option><option value="1">진행 방향 오른쪽</option></select></label>

@@ -172,6 +172,14 @@ export default function Editor() {
       if (saved) setGraspCoefficients(saved);
     } catch { /* 손상된 에디터 설정은 기본 계수로 시작합니다. */ }
     setGraspCoefficientsLoaded(true);
+    // The cylinder lab edits the same shared coefficients in another tab.
+    const follow = (event: StorageEvent) => {
+      if (event.key !== GRASP_COEFFICIENTS_STORAGE_KEY) return;
+      try { const next = savedRamenGraspCoefficients(JSON.parse(event.newValue ?? 'null')); if (next) setGraspCoefficients(next); }
+      catch { /* 다른 탭의 손상된 값은 무시합니다. */ }
+    };
+    window.addEventListener('storage', follow);
+    return () => window.removeEventListener('storage', follow);
   }, []);
   useEffect(() => {
     if (!graspCoefficientsLoaded) return;
