@@ -19,16 +19,26 @@ export function editorGraspCoefficients(storage: Pick<Storage, 'getItem'> | null
 
 /**
  * Run the editor's grasp calculation for a cylinder lying across the robot (axis along world Y) and
- * project both hands onto the XZ plane. The axis offset (`lateral`) drops out of the section; the
+ * project both hands onto the XZ plane. With `boxUp` (the box opening direction in XZ) the tool angle
+ * follows the box tilt: it enters along -up, plus the pitch coefficient. The axis offset (`lateral`) drops out of the section; the
  * tool's forward axis gives the angle and its top-face normal (+Z) decides the blade face side.
  */
 export function sectionGrasps(target: { center: number[]; radius: number }, planeY: number, robotPosition: number[],
-  robotQuaternion: number[], coefficients: RamenGraspCoefficients): Record<'left' | 'right', SectionGrasp> {
+  robotQuaternion: number[], coefficients: RamenGraspCoefficients, boxUp: number[] | null = null): Record<'left' | 'right', SectionGrasp> {
   const object = { id: 'section-target', name: 'section target', shape: 'cylinder', position: [target.center[0], planeY, target.center[1]],
     quaternion_xyzw: [0, 0, 0, 1], size: [2 * target.radius, 1, 2 * target.radius] } as unknown as SceneObject;
   const points = candidateRamenGraspPoints(object, robotPosition, robotQuaternion, coefficients);
+  // The editor aims the tool horizontally at the cylinder. In a tilted box the tool should enter along the
+  // opening instead (-up), so turn the whole grasp frame about the cylinder axis (world Y) by the angle
+  // between the two; the pitch coefficient then tilts from the entry direction. The position stays.
+  let tilt = new THREE.Quaternion();
+  if (boxUp) {
+    const inward = new THREE.Vector3(target.center[0] - robotPosition[0], 0, 0).normalize();
+    const change = Math.atan2(-boxUp[1], -boxUp[0]) - Math.atan2(0, inward.x || 1);
+    tilt = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -change); // about +Y, X turns away from +Z
+  }
   const project = (side: 'left' | 'right'): SectionGrasp => {
-    const rotation = new THREE.Quaternion().fromArray(points.orientation[side]);
+    const rotation = tilt.clone().multiply(new THREE.Quaternion().fromArray(points.orientation[side]));
     const forward = new THREE.Vector3(1, 0, 0).applyQuaternion(rotation);
     const normal = new THREE.Vector3(0, 0, 1).applyQuaternion(rotation);
     const position = points[side];

@@ -535,7 +535,8 @@ function currentGrasps(of: LabScene | null = scene): Record<'left' | 'right', Se
   const [cx, cz] = of.target.center, toward = of.toward_robot ?? [-1, 0];
   const planeY = of.plane_y ?? 0;
   const robotPosition = of.robot_position ?? [cx + toward[0], planeY, cz + toward[1]];
-  return sectionGrasps(of.target, planeY, robotPosition, of.robot_quaternion_xyzw ?? [0, 0, 0, 1], editorGraspCoefficients());
+  return sectionGrasps(of.target, planeY, robotPosition, of.robot_quaternion_xyzw ?? [0, 0, 0, 1], editorGraspCoefficients(),
+    of.box ? of.frame.up : null);
 }
 const graspSide = () => $<HTMLSelectElement>('grasp-side').value as 'left' | 'right';
 

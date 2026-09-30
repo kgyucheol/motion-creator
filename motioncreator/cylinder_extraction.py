@@ -221,11 +221,14 @@ def plan_scoop(scene, overrides=None):
         direction = math.cos(math.radians(degrees)) * far + math.sin(math.radians(degrees)) * up
         return math.atan2(direction[1], direction[0])
 
-    # Grasp point as the editor's candidateRamenGraspPoints puts it (roll and yaw are 0 here): the pitch
-    # tilts the inward axis toward world up, whichever side the robot stands on.
+    # Grasp point: its position comes from the cylinder like the editor's candidateRamenGraspPoints
+    # (toward the robot by radius + clearance, plus height). Its angle follows the box: the tool enters
+    # along the opening (-up) and the pitch tilts from there (toward up); without a box it is horizontal.
     start = center + toward_robot * (radius + params['clearance_m']) + np.array([0., params['height_m']])
     pitch = math.radians(params['pitch_deg'])
-    direction = -toward_robot * math.cos(pitch) + np.array([0., 1.]) * math.sin(pitch)
+    entry = -up if scene.get('box') else -toward_robot
+    lift_side = _rot90(entry) if _rot90(entry)[1] >= 0 else -_rot90(entry)  # positive pitch tilts upward
+    direction = entry * math.cos(pitch) + lift_side * math.sin(pitch)
     start_angle = math.atan2(direction[1], direction[0])
     if params['mode'] > 1.5:
         return _plan_clamp(scene, params, center, far, up, radius, toward_robot, world, local_angle, start, start_angle)
