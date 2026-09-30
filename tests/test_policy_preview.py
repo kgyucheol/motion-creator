@@ -288,3 +288,46 @@ def test_preview_api_validates_controller_and_preserves_default():
         PhysicsPreviewInput(project={}, controller='unknown')
     with pytest.raises(ValidationError):
         PhysicsPreviewInput(project={}, start_frame_index=-1)
+
+
+def test_identical_physics_request_reuses_the_finished_result(monkeypatch):
+    from pathlib import Path
+    import time
+    launches = []
+
+    class FakeProcess:
+        def __init__(self, args, **kwargs):
+            launches.append(args)
+            folder = Path(args[3])
+            preview.atomic_json(folder / 'result.json', {'controller': args[4], 'states': []})
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(preview.subprocess, 'Popen', FakeProcess)
+    jobs = preview.PreviewJobs()
+    project = new_project(Robot())
+    project['keyframes'].append({**json.loads(json.dumps(project['keyframes'][0])), 'name': 'Hold', 'duration': 1.})
+
+    def run(**kwargs):
+        job = jobs.start(json.loads(json.dumps(project)), **kwargs)
+        for _ in range(100):
+            if jobs.status(job['id'])['status'] != 'running':
+                break
+            time.sleep(.02)
+        return job
+
+    first = run(controller='objects', start_frame_index=0)
+    assert not first.get('cached') and len(launches) == 1
+    again = run(controller='objects', start_frame_index=0)
+    assert again['cached'] and again['id'] == first['id'] and again['status'] == 'completed' and len(launches) == 1
+    assert jobs.result(again['id'])['controller'] == 'objects'
+    assert not run(controller='pd', start_frame_index=0).get('cached')
+    assert len(launches) == 2
+    assert not run(controller='objects', start_frame_index=1).get('cached')  # other start frame
+    project['keyframes'][1]['duration'] += 1  # edited project
+    assert not run(controller='objects', start_frame_index=0).get('cached')
+    assert len(launches) == 4

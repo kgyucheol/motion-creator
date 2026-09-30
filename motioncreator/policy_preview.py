@@ -1,6 +1,7 @@
 """Isolated, cancellable PD or SONIC physics playback on a free G1."""
 import atexit
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -420,9 +421,18 @@ class PreviewJobs:
             raise ValueError(f'물리 미리보기는 {MAX_SECONDS}초 이하 모션을 지원합니다.')
         if controller == 'gear-sonic' and not runtime()['available']:
             raise ValueError('SONIC CPU 실행 환경 또는 모델이 없습니다. scripts/setup-task-cpu.sh를 확인하세요.')
+        # The same project, controller and start frame always simulate to the same result
+        # (the worker is deterministic), so a finished replay can be shown again as is.
+        key = hashlib.sha256(json.dumps([robot.fingerprint, controller, start_frame_index, project],
+                                        sort_keys=True, default=str).encode()).hexdigest()
         with self.lock:
             if any(job['status'] == 'running' for job in self.jobs.values()):
                 raise ValueError('물리 계산이 진행 중입니다. 완료하거나 취소한 뒤 다시 실행하세요.')
+            for identifier, job in self.jobs.items():
+                if job.get('key') == key and job['status'] == 'completed' and (job['folder'] / 'result.json').is_file():
+                    self.jobs[identifier] = self.jobs.pop(identifier)  # most recent, so it is evicted last
+                    return {'id': identifier, 'status': 'completed', 'progress': 1., 'cached': True,
+                            'start_frame_index': start_frame_index}
             # Keep a few recent replays without accumulating temporary data indefinitely.
             while len(self.jobs) >= 4:
                 old_id = next(iter(self.jobs))
@@ -458,7 +468,7 @@ class PreviewJobs:
                 raise ValueError(f'물리 CPU 작업을 시작할 수 없습니다: {exc}') from exc
             identifier = uuid.uuid4().hex
             job = {'status': 'running', 'process': process, 'folder': folder, 'temporary': temporary,
-                   'persistent': persistent}
+                   'persistent': persistent, 'key': key}
             self.jobs[identifier] = job
             threading.Thread(target=self._watch, args=(job,), daemon=True).start()
         return {'id': identifier, 'status': 'running', 'progress': 0., 'start_frame_index': start_frame_index}
