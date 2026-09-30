@@ -91,7 +91,7 @@ async function loadScene(targetId: string | undefined) {
   await new Promise(resolve => setTimeout(resolve, 10));
   scene = settled(baseScene);
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05; view.size = .9;
-  loadDrawing();
+  loadDrawing(); resetHistory();
   autoPath = null; clearResult();
   renderGraspInfo(); renderPoints(); draw(); status('');
 }
@@ -146,12 +146,42 @@ function renderPoints() {
 function editPoint(index: number, field: string, value: string) {
   const point = points[index];
   if (!point) return;
+  checkpoint();
   if (field === 'delete') { points.splice(index, 1); selected = Math.min(selected, points.length - 1); }
   else if (field === 'angle') point.angle = value === '' ? null : wrap(Number(value) * Math.PI / 180 + frameAxes().farAngle);
   else if (field === 'steps') point.steps = value === '' ? null : Math.max(1, Math.round(Number(value)));
   changed();
 }
 function changed() { clearResult(); saveDrawing(); renderPoints(); draw(); }
+
+// ---------------------------------------------------------------- undo / redo of drawing edits
+
+type Snapshot = { points: DrawnPoint[]; flip: string; selected: number };
+const undoStack: Snapshot[] = [], redoStack: Snapshot[] = [];
+const snapshot = (): Snapshot => ({ points: structuredClone(points), flip: input('flip').value, selected });
+/** Remember the drawing before an edit so Ctrl+Z can bring it back. */
+function checkpoint() {
+  undoStack.push(snapshot());
+  if (undoStack.length > 200) undoStack.shift();
+  redoStack.length = 0;
+}
+function restore(state: Snapshot) {
+  points = structuredClone(state.points); input('flip').value = state.flip; selected = Math.min(state.selected, points.length - 1);
+  changed();
+}
+function undo() {
+  const previous = undoStack.pop();
+  if (!previous) { status('더 되돌릴 편집이 없습니다.'); return; }
+  redoStack.push(snapshot()); restore(previous);
+  status(`되돌렸습니다 (남은 되돌리기 ${undoStack.length}).`);
+}
+function redo() {
+  const next = redoStack.pop();
+  if (!next) { status('다시 실행할 편집이 없습니다.'); return; }
+  undoStack.push(snapshot()); restore(next);
+  status(`다시 실행했습니다 (남은 다시 실행 ${redoStack.length}).`);
+}
+function resetHistory() { undoStack.length = 0; redoStack.length = 0; }
 function clearResult() {
   result = null; frame = 0; playing = false;
   $('result').className = 'result'; $('result').textContent = '아직 실행하지 않았습니다.';
@@ -378,13 +408,13 @@ function setupCanvas() {
     if (mode !== 'draw') return;
     const [px, py] = local(event);
     const found = hit(px, py);
-    if (found?.kind === 'move') { points.splice(found.index, 1); selected = Math.min(selected, points.length - 1); changed(); }
+    if (found?.kind === 'move') { checkpoint(); points.splice(found.index, 1); selected = Math.min(selected, points.length - 1); changed(); }
   });
   canvas.addEventListener('dblclick', event => {
     if (mode !== 'draw') return;
     const [px, py] = local(event);
     const found = hit(px, py);
-    if (found) { points[found.index].angle = null; changed(); }
+    if (found) { checkpoint(); points[found.index].angle = null; changed(); }
   });
   canvas.addEventListener('pointerdown', event => {
     if (event.button === 2) return;
@@ -395,9 +425,10 @@ function setupCanvas() {
       return;
     }
     const found = hit(px, py);
-    if (found) { selected = found.index; drag = { ...found, startX: px, startY: py, cx: 0, cz: 0 }; renderPoints(); draw(); return; }
+    if (found) { checkpoint(); selected = found.index; drag = { ...found, startX: px, startY: py, cx: 0, cz: 0 }; renderPoints(); draw(); return; }
     if (event.detail > 1) return; // second click of a double-click
     const p = placed(px, py);
+    checkpoint();
     points.push({ x: p.x, z: p.z, angle: null, steps: null });
     selected = points.length - 1;
     drag = { kind: 'move', index: selected, startX: px, startY: py, cx: 0, cz: 0 };
@@ -416,7 +447,15 @@ function setupCanvas() {
     else point.angle = Math.atan2(-(py - Z(point.z)), px - X(point.x));
     clearResult(); renderPoints(); draw();
   });
-  const end = () => { if (drag && drag.kind !== 'pan') saveDrawing(); drag = null; };
+  const end = () => {
+    if (drag && drag.kind !== 'pan') {
+      // A click that only selected a point leaves nothing to undo.
+      const last = undoStack[undoStack.length - 1];
+      if (last && JSON.stringify(last.points) === JSON.stringify(points)) undoStack.pop();
+      saveDrawing();
+    }
+    drag = null;
+  };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
   canvas.addEventListener('wheel', event => {
@@ -474,6 +513,7 @@ function applyStepping(value: DrawnStepping | undefined) {
 async function importDrawing(file: File) {
   const data = JSON.parse(await file.text());
   if (data?.format !== 'motioncreator.cylinder-drawn-path.v1' || !Array.isArray(data.points)) throw new Error('그린 경로 JSON이 아닙니다.');
+  checkpoint();
   points = data.points.map((p: DrawnPoint) => ({ x: Number(p.x), z: Number(p.z), angle: p.angle === null ? null : Number(p.angle),
     steps: p.steps === null ? null : Number(p.steps) }));
   input('flip').value = data.flip ? '1' : '0';
@@ -575,7 +615,7 @@ async function loadDemo(id: string) {
   await new Promise(resolve => setTimeout(resolve, 10));
   scene = settled(baseScene);
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05; view.size = .9;
-  loadDrawing();
+  loadDrawing(); resetHistory();
   renderParams({ ...defaults, ...demo.params });
   const soft = demo.options.soft, friction = demo.options.friction ?? {};
   $<HTMLSelectElement>('material').value = soft ? 'soft' : 'rigid';
@@ -594,6 +634,7 @@ async function loadDemo(id: string) {
 function copyToDrawing() {
   if (!autoPath?.blades.length) { status('먼저 자동 계획을 실행하거나 데모를 불러오세요.'); return; }
   const blade = autoPath.blades[0];
+  checkpoint();
   points = waypointsToPoints(blade.waypoints);
   input('flip').value = blade.flip ? '1' : '0';
   selected = points.length - 1;
@@ -643,13 +684,27 @@ async function init() {
   });
   $('tab-draw').onclick = () => setMode('draw');
   $('tab-auto').onclick = () => setMode('auto');
-  $('from-grasp').onclick = () => { const p = graspPoint(); if (p) { points.unshift(p); selected = 0; changed(); } };
+  $('from-grasp').onclick = () => { if (!scene) return; checkpoint(); const p = graspPoint(); if (p) { points.unshift(p); selected = 0; changed(); } };
   $('grasp-side').addEventListener('change', () => { renderGraspInfo(); draw(); });
   input('show-grasp').addEventListener('change', draw);
   // The editor may change the shared grasp coefficients in another tab.
   window.addEventListener('storage', event => { if (event.key === EDITOR_GRASP_KEY) { renderGraspInfo(); draw(); } });
-  $('undo-point').onclick = () => { points.pop(); selected = points.length - 1; changed(); };
-  $('clear-points').onclick = () => { points = []; selected = -1; changed(); };
+  $('undo-point').onclick = () => { if (!points.length) return; checkpoint(); points.pop(); selected = points.length - 1; changed(); };
+  $('clear-points').onclick = () => { if (!points.length) return; checkpoint(); points = []; selected = -1; changed(); };
+  let beforeFlip: Snapshot | null = null;
+  input('flip').addEventListener('focus', () => { beforeFlip = snapshot(); });
+  input('flip').addEventListener('change', () => {
+    if (beforeFlip) { undoStack.push(beforeFlip); redoStack.length = 0; }
+    beforeFlip = snapshot();
+  });
+  document.addEventListener('keydown', event => {
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const target = event.target;
+    if (target instanceof Element && target.matches('input:not([type=checkbox]), textarea, select')) return; // text fields keep their own undo
+    const key = event.key.toLowerCase();
+    if (key === 'z' && !event.shiftKey) { event.preventDefault(); if (mode === 'draw') undo(); }
+    else if ((key === 'z' && event.shiftKey) || key === 'y') { event.preventDefault(); if (mode === 'draw') redo(); }
+  });
   $('export').onclick = exportDrawing;
   $('import').onclick = () => input('import-file').click();
   input('import-file').onchange = event => {
