@@ -5,6 +5,7 @@ import DEMOS from '../lib/cylinder-demos.json';
 import { termFor } from '../lib/lab-glossary';
 import { EDITOR_GRASP_KEY, editorGraspCoefficients, sectionGrasps, type SectionGrasp } from '../lib/lab-grasp';
 import { pileAfter, retarget, type Attempt } from '../lib/lab-batch';
+import { boxPitchDeg, tiltScene } from '../lib/box-tilt';
 
 type Demo = { id: string; name: string; description: string; source: string; params: Record<string, number>; base_scene: LabScene;
   blades: BladePath[]; stage_steps: Record<string, number>;
@@ -33,6 +34,7 @@ const PARAM_LABELS: Record<string, [string, string?]> = {
 let project: Record<string, unknown> | null = null;
 let projectName = '';
 let baseScene: LabScene | null = null;
+let originalPitch: number | null = null; // the box pitch as loaded, for "원래 기울기로"
 let scene: LabScene | null = null;
 let defaults: Record<string, number> = {};
 let limits: Record<string, [number, number]> = {};
@@ -101,6 +103,7 @@ async function loadScene(targetId: string | undefined) {
   $<HTMLSelectElement>('target').innerHTML = response.targets.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
   $<HTMLSelectElement>('target').value = baseScene.target_id;
   renderParams({ ...defaults, ...Object.fromEntries(Object.entries(stored().params ?? {}).filter(([key]) => key in defaults)) });
+  syncPitch();
   status('정착 중…');
   await new Promise(resolve => setTimeout(resolve, 10));
   scene = settled(baseScene);
@@ -586,6 +589,38 @@ function setMode(next: 'draw' | 'auto') {
   remember({ mode }); clearResult(); renderPoints(); draw();
 }
 
+// ---------------------------------------------------------------- box tilt
+
+/** Show the loaded box pitch and remember it for "원래 기울기로". */
+function syncPitch() {
+  originalPitch = baseScene ? boxPitchDeg(baseScene) : null;
+  input('box-pitch').value = originalPitch === null ? '' : originalPitch.toFixed(1);
+  input('box-pitch').disabled = originalPitch === null;
+  $<HTMLButtonElement>('box-pitch-reset').disabled = originalPitch === null;
+}
+
+/** Turn the box and its contents to `pitch`, settle again, and carry the drawn points along. */
+async function applyPitch(pitch: number) {
+  if (!baseScene?.box || !Number.isFinite(pitch)) return;
+  const clamped = Math.max(-90, Math.min(90, pitch));
+  const { scene: tilted, delta, pivot } = tiltScene(baseScene, clamped);
+  if (Math.abs(delta) < 1e-9) return;
+  if (pickMode) setPickMode(false);
+  pile = null; attempts = []; renderAttempts(); autoPath = null;
+  resetHistory(); // earlier drawings belong to the old tilt
+  const c = Math.cos(delta), s = Math.sin(delta);
+  points = points.map(p => ({ ...p, x: pivot[0] + (p.x - pivot[0]) * c - (p.z - pivot[1]) * s,
+    z: pivot[1] + (p.x - pivot[0]) * s + (p.z - pivot[1]) * c, angle: p.angle === null ? null : p.angle + delta }));
+  baseScene = tilted;
+  input('box-pitch').value = clamped.toFixed(1);
+  status('기울인 상자를 정착시키는 중…');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  scene = settled(tilted);
+  view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05;
+  changed(); renderGraspInfo();
+  status(`상자 기울기 ${clamped.toFixed(1)}° · 상자와 용기를 함께 돌리고 다시 정착시켰습니다.`);
+}
+
 // ---------------------------------------------------------------- glossary (i icons)
 
 const TERM_TARGETS = 'label.row, label.check, h2, .points-head span, .metric span, .legend span';
@@ -666,6 +701,7 @@ async function loadDemo(id: string) {
   projectSelect.value = '';
   baseScene = demo.base_scene;
   $<HTMLSelectElement>('target').innerHTML = `<option value="${baseScene.target_id}">${baseScene.target.id === baseScene.target_id ? (baseScene.circles.find(c => c.id === baseScene!.target_id)?.name ?? '대상') : '대상'}</option>`;
+  syncPitch();
   status('정착 중…');
   await new Promise(resolve => setTimeout(resolve, 10));
   scene = settled(baseScene);
@@ -833,6 +869,8 @@ async function init() {
   $('reset').onclick = () => { remember({ params: {} }); renderParams(defaults); };
   $('to-draw').onclick = copyToDrawing;
   $('pick-mode').onclick = () => setPickMode(!pickMode);
+  input('box-pitch').addEventListener('change', () => void applyPitch(num('box-pitch')));
+  $('box-pitch-reset').onclick = () => { if (originalPitch !== null) void applyPitch(originalPitch); };
   $('pick-reset').onclick = resetPicks;
   $('batch-table').addEventListener('click', event => {
     const row = (event.target as HTMLElement).closest('.batch-row') as HTMLElement | null;

@@ -61,6 +61,8 @@ select,input{width:100%}
     <label class="row">프로젝트<select id="project"></select></label>
     <label class="row">대상 원통<select id="target"></select></label>
     <label class="row">예시 데모<select id="demo-select" aria-label="예시 데모"></select></label>
+    <label class="row">상자 기울기 (pitch, °)<small>상자와 안의 용기가 함께 회전</small><input id="box-pitch" type="number" step="1" min="-90" max="90"/></label>
+    <div class="buttons"><button id="box-pitch-reset">원래 기울기로</button></div>
     <div class="tabs" role="tablist"><button id="tab-draw" aria-pressed="true">직접 그리기</button><button id="tab-auto" aria-pressed="false">자동 계획</button></div>
     <section id="draw-panel">
       <p class="hint">빈 곳 클릭: 점 추가 · 점 드래그: 이동 · 점의 손잡이 드래그: 날 각도 · 점 더블클릭: 각도 자동 · 점 우클릭: 삭제 · 휠: 확대 · Shift+드래그: 화면 이동 · Ctrl+Z: 되돌리기 · Ctrl+Shift+Z: 다시 실행</p>
