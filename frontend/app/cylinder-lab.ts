@@ -603,7 +603,11 @@ function renderGraspInfo() {
     if (field.dataset.key! in mirror) field.value = String(mirror[field.dataset.key!]);
   });
   const grasp = currentGrasps()?.[graspSide()];
-  $('grasp-info').textContent = `에디터와 같은 공통 계수입니다. 바꾸면 바로 저장되고 에디터에도 반영됩니다.`
+  const boxPitch = scene ? boxPitchDeg(scene) : null;
+  const entry = boxPitch === null ? '상자가 없어 수평 진입(아래로 0°)'
+    : `상자 입구에 수직 진입: 아래로 90 + (${boxPitch.toFixed(0)}°) = ${(90 + boxPitch).toFixed(0)}°`;
+  const final = grasp ? ` · pitch 계수 ${c.pitch}° 적용 후 아래로 ${(-grasp.angle * 180 / Math.PI).toFixed(0)}°` : '';
+  $('grasp-info').textContent = `${entry}${final}. 계수는 에디터와 공통이며 바꾸면 바로 저장됩니다(pitch는 +가 위쪽).`
     + (grasp && grasp.inPlane < .5 ? ' yaw/roll 때문에 날이 단면 밖을 크게 향합니다(단면에서는 짧게 보임).' : '');
 }
 

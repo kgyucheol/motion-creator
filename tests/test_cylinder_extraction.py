@@ -96,3 +96,12 @@ def test_physics_clamp_lifts_the_top_bundle_and_the_single_scoop_does_not():
     assert by_mode[2.]['success'], by_mode[2.]['reason']
     assert by_mode[2.]['liftM'] > by_mode[2.]['requiredLiftM'] and by_mode[2.]['neighborMaxM'] < .02
     assert not by_mode[1.]['success']
+
+
+def test_planned_grasp_enters_perpendicular_to_the_box_opening():
+    scene = scene_2d(ramen_box_project())  # box pitch -50 deg
+    start = plan_scoop(scene, {'pitch_deg': 0})['waypoints'][0]
+    assert math.degrees(start['angle']) == pytest.approx(-(90 - 50), abs=.1)  # down by 90 + box pitch
+    assert math.degrees(plan_scoop(scene, {'pitch_deg': 10})['waypoints'][0]['angle']) == pytest.approx(-30, abs=.1)
+    flat = {**scene, 'box': None}
+    assert math.degrees(plan_scoop(flat)['waypoints'][0]['angle']) == pytest.approx(0, abs=1e-9)

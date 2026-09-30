@@ -28,9 +28,10 @@ export function sectionGrasps(target: { center: number[]; radius: number }, plan
   const object = { id: 'section-target', name: 'section target', shape: 'cylinder', position: [target.center[0], planeY, target.center[1]],
     quaternion_xyzw: [0, 0, 0, 1], size: [2 * target.radius, 1, 2 * target.radius] } as unknown as SceneObject;
   const points = candidateRamenGraspPoints(object, robotPosition, robotQuaternion, coefficients);
-  // The editor aims the tool horizontally at the cylinder. In a tilted box the tool should enter along the
-  // opening instead (-up), so turn the whole grasp frame about the cylinder axis (world Y) by the angle
-  // between the two; the pitch coefficient then tilts from the entry direction. The position stays.
+  // The editor aims the tool horizontally at the cylinder. In a tilted box the tool must enter perpendicular
+  // to the opening (-up), i.e. tilted down by 90 + box pitch (40 deg for a -50 deg box), so turn the whole
+  // grasp frame about the cylinder axis (world Y) by that angle; the pitch coefficient then tilts from the
+  // entry direction (+ up). The position stays.
   let tilt = new THREE.Quaternion();
   if (boxUp) {
     const inward = new THREE.Vector3(target.center[0] - robotPosition[0], 0, 0).normalize();

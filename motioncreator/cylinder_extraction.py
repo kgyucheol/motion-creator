@@ -223,7 +223,8 @@ def plan_scoop(scene, overrides=None):
 
     # Grasp point: its position comes from the cylinder like the editor's candidateRamenGraspPoints
     # (toward the robot by radius + clearance, plus height). Its angle follows the box: the tool enters
-    # along the opening (-up) and the pitch tilts from there (toward up); without a box it is horizontal.
+    # perpendicular to the opening (-up), tilted down by 90 + box pitch (40 deg for a -50 deg box), and
+    # the pitch tilts from there (+ up); without a box it is horizontal.
     start = center + toward_robot * (radius + params['clearance_m']) + np.array([0., params['height_m']])
     pitch = math.radians(params['pitch_deg'])
     entry = -up if scene.get('box') else -toward_robot

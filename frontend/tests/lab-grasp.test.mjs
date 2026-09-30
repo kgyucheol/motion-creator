@@ -33,3 +33,11 @@ test('in a tilted box the grasp angle follows the box: along the opening, plus t
   assert.equal(entry.flip, false);
   assert.equal(boxed({ ...grasp('left'), roll: 180 }).flip, true);
 });
+
+test('the grasp enters perpendicular to the box opening: tilted down by 90 + box pitch', () => {
+  for (const boxPitch of [-30, -50, -70]) {
+    const tilt = -boxPitch * Math.PI / 180, up = [-Math.sin(tilt), Math.cos(tilt)];
+    const g = sectionGrasps(target, 0, [0, 0, .79], [0, 0, 0, 1], { left: grasp('left'), right: grasp('right') }, up).left;
+    assert.ok(Math.abs(-deg(g.angle) - (90 + boxPitch)) < 1e-6, `box ${boxPitch}: down ${-deg(g.angle)}`);
+  }
+});
