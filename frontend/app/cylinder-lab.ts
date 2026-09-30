@@ -2,12 +2,14 @@
 import { restingScene, simulateScoop, NSE_SCOOP_PROFILE, DEFAULT_SOFTNESS, type BladePath, type Scene, type SimResult, type SoftShape, type Waypoint } from '../lib/cylinder-sim';
 import { autoSteps, drawnWaypoints, pointAngles, snapToCircle, waypointsToPoints, type DrawnPoint, type DrawnStepping } from '../lib/drawn-path';
 import DEMOS from '../lib/cylinder-demos.json';
+import { termFor } from '../lib/lab-glossary';
+import { EDITOR_GRASP_KEY, editorGraspCoefficients, sectionGrasps, type SectionGrasp } from '../lib/lab-grasp';
 
 type Demo = { id: string; name: string; description: string; source: string; params: Record<string, number>; base_scene: LabScene;
   blades: BladePath[]; stage_steps: Record<string, number>;
   options: { soft?: { mmPer10N: number; scope: 'neighbors' | 'all'; shape: SoftShape }; friction?: Record<string, number> } };
 
-type LabScene = Scene & { toward_robot?: number[] };
+type LabScene = Scene & { toward_robot?: number[]; plane_y?: number; robot_position?: number[]; robot_quaternion_xyzw?: number[] };
 type AutoPath = { waypoints: Waypoint[]; stage_steps: Record<string, number>; blades: BladePath[] };
 type Stored = { project?: string; mode?: string; params?: Record<string, number>; stepping?: DrawnStepping;
   drawings?: Record<string, { points: DrawnPoint[]; flip: boolean }>;
@@ -17,7 +19,6 @@ const $ = <T = HTMLElement>(id: string) => document.getElementById(id) as unknow
 const input = (id: string) => $<HTMLInputElement>(id);
 const num = (id: string) => Number(input(id).value);
 const STORAGE_KEY = 'motioncreator-cylinder-lab-v2';
-const EDITOR_GRASP_KEY = 'motioncreator-editor-ramen-grasp-v1';
 const PARAM_LABELS: Record<string, [string, string?]> = {
   mode: ['방식', '0 = 둘레 감기, 1 = 지렛대, 2 = 양쪽 집기(양손)'], side: ['진입 쪽', '-1 = 로봇 쪽, +1 = 먼 쪽'],
   clearance_m: ['파지점 거리 (m)'], height_m: ['파지점 높이 (m)'], pitch_deg: ['파지점 피치 (°)'],
@@ -92,7 +93,7 @@ async function loadScene(targetId: string | undefined) {
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05; view.size = .9;
   loadDrawing();
   autoPath = null; clearResult();
-  renderPoints(); draw(); status('');
+  renderGraspInfo(); renderPoints(); draw(); status('');
 }
 
 // ---------------------------------------------------------------- frame helpers
@@ -120,6 +121,7 @@ function renderParams(values: Record<string, number>) {
     const [low, high] = limits[key] ?? [-1e9, 1e9];
     return `<label class="row">${label}${note ? `<small>${note}</small>` : ''}<input data-key="${key}" type="number" step="any" min="${low}" max="${high}" value="${values[key]}"/></label>`;
   }).join('');
+  decorateTerms($('params'));
 }
 const readParams = () => Object.fromEntries([...document.querySelectorAll<HTMLInputElement>('#params input')].map(i => [i.dataset.key!, Number(i.value)]));
 
@@ -217,6 +219,7 @@ function showResult() {
     + row('접촉 중 덜 간 거리', `${(result.stalledM * 1000).toFixed(0)} mm`) + row('끝 자세 오차', `${(result.finalErrorM * 1000).toFixed(0)} mm`)
     + row('이웃 최대 이동', `${(result.neighborMaxM * 1000).toFixed(0)} mm`)
     + (result.maxSquashMm > 0 ? row('최대 찌그러짐', `${result.maxSquashMm.toFixed(1)} mm`) : '');
+  decorateTerms(box);
 }
 
 // ---------------------------------------------------------------- drawing
@@ -281,6 +284,20 @@ function draw() {
     ctx.lineWidth = 1.5 / scale; ctx.setLineDash(dashed ? [4 / scale, 3 / scale] : []); ctx.strokeStyle = stroke; ctx.stroke(); ctx.restore();
   };
   const flipped = input('flip').value === '1';
+  const grasps = input('show-grasp').checked ? currentGrasps() : null;
+  if (grasps) {
+    for (const [side, color] of [['left', '#55e7c1'], ['right', '#ffbd70']] as const) {
+      const g = grasps[side], px = X(g.x), pz = Z(g.z);
+      const dx = Math.cos(g.angle), dz = -Math.sin(g.angle); // screen y points down
+      const nx = (g.flip ? 1 : -1) * dz, nz = (g.flip ? -1 : 1) * dx; // top-face side: +90 deg of travel unless flipped
+      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(px, pz); ctx.lineTo(px + dx * 34, pz + dz * 34); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(px + dx * 34, pz + dz * 34); ctx.lineTo(px + dx * 26 - dz * 5, pz + dz * 26 + dx * 5); ctx.lineTo(px + dx * 26 + dz * 5, pz + dz * 26 - dx * 5); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(px, pz); ctx.lineTo(px + nx * 14, pz + nz * 14); ctx.stroke();
+      ctx.beginPath(); ctx.arc(px, pz, 5, 0, Math.PI * 2); ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.font = '11px sans-serif'; ctx.fillText(side === 'left' ? 'L 파지점' : 'R 파지점', px - 22, pz + (side === 'left' ? -10 : 18));
+    }
+  }
   if (mode === 'draw') {
     if (input('snap').checked) {
       ctx.setLineDash([3, 4]); ctx.strokeStyle = '#ffd16655'; ctx.beginPath();
@@ -415,17 +432,28 @@ function setupCanvas() {
 
 // ---------------------------------------------------------------- misc actions
 
-function graspPoint(): DrawnPoint | null {
+/** Both hands' grasp points from the editor's calculation, projected onto this section. */
+function currentGrasps(): Record<'left' | 'right', SectionGrasp> | null {
   if (!scene) return null;
-  let coefficients = { clearance: .1, height: 0, pitch: 0 };
-  try {
-    const saved = JSON.parse(localStorage.getItem(EDITOR_GRASP_KEY) ?? 'null');
-    if (saved?.left) coefficients = { ...coefficients, ...saved.left };
-  } catch { /* use defaults */ }
-  const toward = scene.toward_robot ?? [-1, 0];
-  const [cx, cz] = scene.target.center, r = scene.target.radius;
-  return { x: cx + toward[0] * (r + coefficients.clearance), z: cz + toward[1] * (r + coefficients.clearance) + coefficients.height,
-    angle: Math.atan2(-toward[1], -toward[0]) + coefficients.pitch * Math.PI / 180, steps: null };
+  const [cx, cz] = scene.target.center, toward = scene.toward_robot ?? [-1, 0];
+  const planeY = scene.plane_y ?? 0;
+  const robotPosition = scene.robot_position ?? [cx + toward[0], planeY, cz + toward[1]];
+  return sectionGrasps(scene.target, planeY, robotPosition, scene.robot_quaternion_xyzw ?? [0, 0, 0, 1], editorGraspCoefficients());
+}
+const graspSide = () => $<HTMLSelectElement>('grasp-side').value as 'left' | 'right';
+
+function renderGraspInfo() {
+  const c = editorGraspCoefficients()[graspSide()];
+  const grasp = currentGrasps()?.[graspSide()];
+  $('grasp-info').textContent = `에디터 계수 · lateral ${c.lateral} m · clearance ${c.clearance} m · height ${c.height} m · roll ${c.roll}° · pitch ${c.pitch}° · yaw ${c.yaw}°`
+    + (grasp && grasp.inPlane < .5 ? ' · yaw/roll 때문에 날이 단면 밖을 크게 향합니다(단면에서는 짧게 보임).' : '');
+}
+
+function graspPoint(): DrawnPoint | null {
+  const grasp = currentGrasps()?.[graspSide()];
+  if (!grasp) return null;
+  input('flip').value = grasp.flip ? '1' : '0';
+  return { x: grasp.x, z: grasp.z, angle: grasp.angle, steps: null };
 }
 
 function exportDrawing() {
@@ -463,11 +491,73 @@ function setMode(next: 'draw' | 'auto') {
   remember({ mode }); clearResult(); renderPoints(); draw();
 }
 
+// ---------------------------------------------------------------- glossary (i icons)
+
+const TERM_TARGETS = 'label.row, label.check, h2, .points-head span, .metric span, .legend span';
+
+/** Put an (i) button after every label that has a glossary entry, inside `root`. */
+function decorateTerms(root: unknown = document) {
+  (root as Document).querySelectorAll<HTMLElement>(TERM_TARGETS).forEach(element => {
+    if (element.querySelector(':scope > .term-icon, :scope > .term-label')) return;
+    const node = [...element.childNodes].find(child => child.nodeType === Node.TEXT_NODE && child.textContent!.trim());
+    const label = node?.textContent?.trim();
+    const term = label ? termFor(label) : undefined;
+    if (!node || !label || !term) return;
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'term-icon'; button.textContent = 'i';
+    button.dataset.term = label; button.setAttribute('aria-label', `용어 설명: ${label}`); button.setAttribute('aria-expanded', 'false');
+    if (element.matches('label.row')) {
+      // Keep the label's grid to two cells: [text + icon + note] [control].
+      const wrapper = document.createElement('span');
+      wrapper.className = 'term-label';
+      element.insertBefore(wrapper, node);
+      wrapper.appendChild(node); wrapper.appendChild(button);
+      const note = element.querySelector(':scope > small');
+      if (note) wrapper.appendChild(note);
+    } else node.after(button);
+  });
+}
+
+let openTerm: HTMLElement | null = null;
+function closeTerm() {
+  $('term-pop').hidden = true;
+  openTerm?.setAttribute('aria-expanded', 'false');
+  openTerm = null;
+}
+function showTerm(button: HTMLElement) {
+  if (openTerm === button) { closeTerm(); return; }
+  closeTerm();
+  const label = button.dataset.term!, term = termFor(label)!;
+  const pop = $('term-pop');
+  const escape = (value: string) => value.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!);
+  pop.innerHTML = `<b>${escape(term.title ?? label)}</b><div>${escape(term.text)}</div>`;
+  pop.hidden = false;
+  const icon = button.getBoundingClientRect(), box = pop.getBoundingClientRect();
+  const left = Math.max(8, Math.min(window.innerWidth - box.width - 8, icon.left - 12));
+  const below = icon.bottom + 6 + box.height < window.innerHeight;
+  pop.style.left = `${left}px`;
+  pop.style.top = `${below ? icon.bottom + 6 : Math.max(8, icon.top - box.height - 6)}px`;
+  button.setAttribute('aria-expanded', 'true');
+  openTerm = button;
+}
+function setupTerms() {
+  document.addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest('.term-icon') as HTMLElement | null;
+    if (button) { event.preventDefault(); event.stopPropagation(); showTerm(button); return; }
+    if (!(event.target as HTMLElement).closest('#term-pop')) closeTerm();
+  }, true);
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') closeTerm(); });
+  document.querySelectorAll('aside').forEach(panel => panel.addEventListener('scroll', closeTerm));
+  decorateTerms();
+}
+
 // ---------------------------------------------------------------- demos
 
 function renderDemos(active?: string) {
-  $('demos').innerHTML = (DEMOS as unknown as Demo[]).map(demo =>
-    `<button data-demo="${demo.id}" class="${demo.id === active ? 'active' : ''}" title="${demo.description}">${demo.name}<small>${demo.source}</small></button>`).join('');
+  const select = $<HTMLSelectElement>('demo-select');
+  select.innerHTML = `<option value="">데모 선택…</option>` + (DEMOS as unknown as Demo[])
+    .map(demo => `<option value="${demo.id}" title="${demo.description}">${demo.name}</option>`).join('');
+  select.value = active ?? '';
 }
 
 /** Load a verified case: its scene, planner parameters, physics settings and planned path, then replay it. */
@@ -496,7 +586,7 @@ async function loadDemo(id: string) {
   $('material').dispatchEvent(new Event('change'));
   setMode('auto');
   autoPath = { waypoints: demo.blades[0].waypoints, stage_steps: demo.stage_steps, blades: demo.blades };
-  renderDemos(demo.id); renderPoints(); draw();
+  renderDemos(demo.id); renderGraspInfo(); renderPoints(); draw();
   status(demo.description);
   await simulate(demo.blades);
 }
@@ -547,13 +637,17 @@ async function init() {
   $('reset').onclick = () => { remember({ params: {} }); renderParams(defaults); };
   $('to-draw').onclick = copyToDrawing;
   renderDemos();
-  $('demos').addEventListener('click', event => {
-    const button = (event.target as HTMLElement).closest('button[data-demo]') as HTMLElement | null;
-    if (button) void loadDemo(button.dataset.demo!).catch(error => status(error.message));
+  $<HTMLSelectElement>('demo-select').addEventListener('change', event => {
+    const id = (event.target as HTMLSelectElement).value;
+    if (id) void loadDemo(id).catch(error => status(error.message));
   });
   $('tab-draw').onclick = () => setMode('draw');
   $('tab-auto').onclick = () => setMode('auto');
   $('from-grasp').onclick = () => { const p = graspPoint(); if (p) { points.unshift(p); selected = 0; changed(); } };
+  $('grasp-side').addEventListener('change', () => { renderGraspInfo(); draw(); });
+  input('show-grasp').addEventListener('change', draw);
+  // The editor may change the shared grasp coefficients in another tab.
+  window.addEventListener('storage', event => { if (event.key === EDITOR_GRASP_KEY) { renderGraspInfo(); draw(); } });
   $('undo-point').onclick = () => { points.pop(); selected = points.length - 1; changed(); };
   $('clear-points').onclick = () => { points = []; selected = -1; changed(); };
   $('export').onclick = exportDrawing;
@@ -584,6 +678,7 @@ async function init() {
   for (const id of ['material', 'soft-scope']) $(id).addEventListener('change', syncMaterial);
   syncMaterial();
   window.addEventListener('resize', draw);
+  setupTerms();
   setupCanvas();
   setMode(saved.mode === 'auto' ? 'auto' : 'draw');
   requestAnimationFrame(tick);

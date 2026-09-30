@@ -96,9 +96,21 @@ def _spans_plane(item, y):
     return abs(float(item['position'][1]) - y) <= extent + 1e-9
 
 
-def scene_2d(project, target_id=None, robot_xz=(0., 0.)):
+def _robot_pose(project):
+    """Pelvis position and xyzw quaternion of the project's current pose (or first keyframe), else the origin."""
+    frames = project.get('keyframes') or []
+    qpos = project.get('current_qpos') or (frames[0].get('qpos') if frames else None)
+    if not qpos or len(qpos) < 7:
+        return [0., 0., 0.], [0., 0., 0., 1.]
+    return [float(v) for v in qpos[:3]], [float(qpos[4]), float(qpos[5]), float(qpos[6]), float(qpos[3])]
+
+
+def scene_2d(project, target_id=None, robot_xz=None):
     """Cut the project's scene at the target cylinder: circles, rectangles and box walls in XZ."""
     objects = project.get('scene_objects') or []
+    robot_position, robot_quaternion = _robot_pose(project)
+    if robot_xz is None:
+        robot_xz = (robot_position[0], robot_position[2])
     cylinders = [(item, _lying_cylinder(item)) for item in objects if not item.get('fixed')]
     cylinders = [(item, found) for item, found in cylinders if found]
     if not cylinders:
@@ -161,7 +173,9 @@ def scene_2d(project, target_id=None, robot_xz=(0., 0.)):
     return {'format': 'motioncreator.cylinder-section.v1', 'plane_y': plane_y, 'target_id': target['id'],
             'target': target, 'circles': circles, 'rectangles': rectangles, 'walls': walls, 'box': box,
             'frame': {'origin': center.tolist(), 'far': far.tolist(), 'up': up.tolist(), 'rim_up_m': rim},
-            'toward_robot': toward_robot.tolist()}
+            'toward_robot': toward_robot.tolist(),
+            # The robot pose the editor's grasp-point calculation takes (pelvis position, xyzw quaternion).
+            'robot_position': robot_position, 'robot_quaternion_xyzw': robot_quaternion}
 
 
 def with_positions(scene, positions):
@@ -207,8 +221,12 @@ def plan_scoop(scene, overrides=None):
         direction = math.cos(math.radians(degrees)) * far + math.sin(math.radians(degrees)) * up
         return math.atan2(direction[1], direction[0])
 
+    # Grasp point as the editor's candidateRamenGraspPoints puts it (roll and yaw are 0 here): the pitch
+    # tilts the inward axis toward world up, whichever side the robot stands on.
     start = center + toward_robot * (radius + params['clearance_m']) + np.array([0., params['height_m']])
-    start_angle = math.atan2(-toward_robot[1], -toward_robot[0]) + math.radians(params['pitch_deg'])
+    pitch = math.radians(params['pitch_deg'])
+    direction = -toward_robot * math.cos(pitch) + np.array([0., 1.]) * math.sin(pitch)
+    start_angle = math.atan2(direction[1], direction[0])
     if params['mode'] > 1.5:
         return _plan_clamp(scene, params, center, far, up, radius, toward_robot, world, local_angle, start, start_angle)
     rho = radius - params['wedge_m']  # the blade's top face (TCP) runs on this circle

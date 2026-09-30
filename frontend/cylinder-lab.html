@@ -18,6 +18,7 @@ h1{font-size:15px;margin:0 0 4px}h2{font-size:11px;letter-spacing:.8px;color:var
 .hint{color:var(--muted);font-size:11px;line-height:1.5;margin:4px 0}
 label.row{display:grid;grid-template-columns:1fr 92px;gap:6px;align-items:center;margin:4px 0;font-size:12px}
 label.row small{display:block;color:var(--muted);font-size:10px}
+.term-label{display:block;min-width:0}
 label.check{display:flex;gap:6px;align-items:center;margin:6px 0;font-size:12px}label.check input{width:auto}
 select,input{width:100%}
 .tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:12px 0 4px}.tabs button[aria-pressed=true]{border-color:#80efc5;background:#203f36;color:#a4f0d3}
@@ -37,8 +38,10 @@ select,input{width:100%}
 .point.selected{border-color:#80efc5;background:#15302a}.point input{padding:3px 4px;font-size:11px}.point button{padding:2px 4px;font-size:11px}
 .point .xy{color:var(--muted);font-variant-numeric:tabular-nums}
 .points-head{display:grid;grid-template-columns:22px 1fr 58px 44px 22px;gap:4px;font-size:10px;color:var(--muted)}
-.demos{display:grid;gap:5px}.demos button{text-align:left;font-size:12px;line-height:1.35;padding:7px 9px}.demos button small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
-.demos button.active{border-color:#80efc5;background:#15302a}
+.term-icon{display:inline-grid;place-items:center;width:15px;height:15px;min-height:0;margin:0 0 0 4px;padding:0;border:1px solid #4d6173;border-radius:50%;background:transparent;color:#8fb3c9;font:italic 600 10px Georgia,serif;line-height:1;vertical-align:1px;cursor:help}
+.term-icon:hover,.term-icon[aria-expanded=true]{border-color:#80efc5;color:#a4f0d3;background:#1b332d}
+.term-pop{position:fixed;z-index:50;max-width:290px;padding:10px 12px;border:1px solid #4d6173;border-radius:7px;background:#1b2631;box-shadow:0 10px 26px #000a;font-size:12px;line-height:1.55;color:#dce5ee}
+.term-pop b{display:block;margin-bottom:4px;color:#a4f0d3;font-size:12px}
 .legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--muted);padding:6px 12px}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 [hidden]{display:none!important}
@@ -53,11 +56,14 @@ select,input{width:100%}
     <h2>장면</h2>
     <label class="row">프로젝트<select id="project"></select></label>
     <label class="row">대상 원통<select id="target"></select></label>
-    <h2>예시 데모</h2>
-    <div class="demos" id="demos"></div>
+    <label class="row">예시 데모<select id="demo-select" aria-label="예시 데모"></select></label>
     <div class="tabs" role="tablist"><button id="tab-draw" aria-pressed="true">직접 그리기</button><button id="tab-auto" aria-pressed="false">자동 계획</button></div>
     <section id="draw-panel">
       <p class="hint">빈 곳 클릭: 점 추가 · 점 드래그: 이동 · 점의 손잡이 드래그: 날 각도 · 점 더블클릭: 각도 자동 · 점 우클릭: 삭제 · 휠: 확대 · Shift+드래그: 화면 이동</p>
+      <h2>파지점</h2>
+      <label class="row">손<select id="grasp-side"><option value="left">왼손</option><option value="right">오른손</option></select></label>
+      <label class="check"><input type="checkbox" id="show-grasp" checked/>파지점 표시</label>
+      <p class="hint" id="grasp-info"></p>
       <div class="buttons"><button id="from-grasp">파지점에서 시작</button><button id="undo-point">마지막 점 삭제</button><button id="clear-points">모두 지우기</button></div>
       <label class="row">날 윗면<small>원통을 받치는 면</small><select id="flip"><option value="0">진행 방향 왼쪽</option><option value="1">진행 방향 오른쪽</option></select></label>
       <label class="check"><input type="checkbox" id="snap" checked/>원통 표면에 붙이기</label>
@@ -89,7 +95,7 @@ select,input{width:100%}
   </aside>
   <main class="stage">
     <div class="canvas-wrap"><canvas id="view"></canvas></div>
-    <div class="legend"><span><i style="background:#e8a33d"></i>대상 원통</span><span><i style="background:#56708a"></i>다른 원통</span><span><i style="background:#8a6b4a"></i>상자</span><span><i style="background:#80efc5"></i>날</span><span><i style="background:transparent;border:1px dashed #d9f"></i>날 (명령)</span><span><i style="background:#ffd166"></i>그린 점</span><span>● 나뉜 단계</span></div>
+    <div class="legend"><span><i style="background:#e8a33d"></i>대상 원통</span><span><i style="background:#56708a"></i>다른 원통</span><span><i style="background:#8a6b4a"></i>상자</span><span><i style="background:#80efc5"></i>날</span><span><i style="background:transparent;border:1px dashed #d9f"></i><span>날 (명령)</span></span><span><i style="background:#ffd166"></i>그린 점</span><span><i style="background:#55e7c1;border-radius:50%"></i>파지점</span><span>● <span>나뉜 단계</span></span><span>TCP</span></div>
     <div class="transport"><button id="play">▶</button><input id="scrub" type="range" min="0" max="0" value="0"/><span id="time">0.00 s</span></div>
   </main>
   <aside class="right">
@@ -105,6 +111,7 @@ select,input{width:100%}
     <div class="steps" id="steps"></div>
   </aside>
 </div>
+<div class="term-pop" id="term-pop" role="dialog" aria-live="polite" hidden></div>
 <script type="module" src="/app/cylinder-lab.ts"></script>
 </body>
 </html>

@@ -12,7 +12,7 @@
     "lint": "oxlint",
     "format": "oxfmt",
     "test:scene": "node --experimental-transform-types --test tests/robot-scene.test.mjs",
-    "test:lab": "node --experimental-transform-types --test tests/drawn-path.test.mjs tests/cylinder-sim.test.mjs"
+    "test:lab": "node --experimental-transform-types --test tests/drawn-path.test.mjs tests/cylinder-sim.test.mjs tests/lab-grasp.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
