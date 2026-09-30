@@ -40,6 +40,7 @@ let projectName = '';
 let baseScene: LabScene | null = null;
 let originalPitch: number | null = null; // the box pitch as loaded, for "원래 기울기로"
 let scene: LabScene | null = null;
+let loadedTargetDiameter: number | null = null;
 let defaults: Record<string, number> = {};
 let limits: Record<string, [number, number]> = {};
 let toolModelId = 'g1';
@@ -147,6 +148,7 @@ async function loadScene(targetId: string | undefined) {
   const response = await api<{ scene: LabScene; defaults: Record<string, number>; limits: Record<string, [number, number]>; targets: { id: string; name: string }[] }>(
     'cylinder-lab/scene', { project, target_id: targetId ?? null });
   baseScene = response.scene; defaults = response.defaults; limits = response.limits;
+  syncCylinderDiameter();
   $<HTMLSelectElement>('target').innerHTML = response.targets.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
   $<HTMLSelectElement>('target').value = baseScene.target_id;
   renderParams({ ...defaults, ...Object.fromEntries(Object.entries(savedSections().auto ?? {}).filter(([key]) => key in defaults)) as Record<string, number> });
@@ -158,6 +160,33 @@ async function loadScene(targetId: string | undefined) {
   loadDrawing(); resetHistory();
   autoPath = null; clearResult(); if (pickMode) setPickMode(false); pile = null; attempts = []; renderAttempts();
   renderGraspInfo(); renderPoints(); draw(); status('');
+}
+
+/** Reset the Lab-only diameter control when a project, target, or demo is loaded. */
+function syncCylinderDiameter() {
+  loadedTargetDiameter = baseScene?.target.radius ? baseScene.target.radius * 2 : null;
+  input('cylinder-diameter').value = loadedTargetDiameter === null ? '' : loadedTargetDiameter.toFixed(3);
+  input('cylinder-diameter').disabled = loadedTargetDiameter === null;
+  $<HTMLButtonElement>('cylinder-diameter-reset').disabled = loadedTargetDiameter === null;
+}
+
+/** Resize only the selected target in this in-memory Lab scene, then settle its new geometry. */
+function applyCylinderDiameter(diameter: number) {
+  if (!baseScene || !scene || !Number.isFinite(diameter)) return;
+  const nextDiameter = Math.max(.01, Math.min(.5, diameter));
+  const radius = nextDiameter / 2;
+  const target = { ...baseScene.target, radius };
+  baseScene = { ...baseScene, target,
+    circles: baseScene.circles.map(circle => circle.id === baseScene!.target_id ? { ...circle, radius } : circle) };
+  input('cylinder-diameter').value = nextDiameter.toFixed(3);
+  if (pickMode) setPickMode(false);
+  pile = null; attempts = []; renderAttempts(); autoPath = null;
+  clearResult();
+  status('변경한 지름으로 원통을 다시 정착시키는 중…');
+  scene = settled(baseScene);
+  view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05;
+  renderGraspInfo(); renderPoints(); draw();
+  status(`대상 원통 지름 ${(nextDiameter * 1000).toFixed(0)} mm · 질량 유지 · Lab 장면에 적용했습니다.`);
 }
 
 // ---------------------------------------------------------------- frame helpers
@@ -868,6 +897,7 @@ async function loadDemo(id: string) {
   projectSelect.insertAdjacentHTML('afterbegin', `<option data-demo value="">데모 · ${demo.source}</option>`);
   projectSelect.value = '';
   baseScene = demo.base_scene;
+  syncCylinderDiameter();
   $<HTMLSelectElement>('target').innerHTML = `<option value="${baseScene.target_id}">${baseScene.target.id === baseScene.target_id ? (baseScene.circles.find(c => c.id === baseScene!.target_id)?.name ?? '대상') : '대상'}</option>`;
   syncPitch();
   status('정착 중…');
@@ -1037,6 +1067,14 @@ async function init() {
   $('pick-mode').onclick = () => setPickMode(!pickMode);
   input('box-pitch').addEventListener('change', () => void applyPitch(num('box-pitch')));
   $('box-pitch-reset').onclick = () => { if (originalPitch !== null) void applyPitch(originalPitch); };
+  input('cylinder-diameter').addEventListener('change', () => {
+    const value = input('cylinder-diameter').value.trim();
+    if (!value) return;
+    applyCylinderDiameter(Number(value));
+  });
+  $('cylinder-diameter-reset').onclick = () => {
+    if (loadedTargetDiameter !== null) applyCylinderDiameter(loadedTargetDiameter);
+  };
   $('pick-reset').onclick = resetPicks;
   $('batch-table').addEventListener('click', event => {
     const row = (event.target as HTMLElement).closest('.batch-row') as HTMLElement | null;

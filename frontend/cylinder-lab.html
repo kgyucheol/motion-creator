@@ -64,6 +64,8 @@ select,input{width:100%}
     <h2>장면</h2>
     <label class="row">장면 프로젝트<select id="project"></select></label>
     <label class="row">대상 원통<select id="target"></select></label>
+    <label class="row">대상 원통 지름 (m)<small>이 Lab 장면에서만 변경 · 질량은 유지</small><input id="cylinder-diameter" type="number" step="0.001" min="0.01" max="0.5"/></label>
+    <div class="buttons"><button id="cylinder-diameter-reset">불러온 지름으로</button></div>
     <label class="row">예시 데모<select id="demo-select" aria-label="예시 데모"></select></label>
     <label class="row">상자 기울기 (pitch, °)<small>상자와 안의 용기가 함께 회전</small><input id="box-pitch" type="number" step="1" min="-90" max="90"/></label>
     <div class="buttons"><button id="box-pitch-reset">원래 기울기로</button></div>
