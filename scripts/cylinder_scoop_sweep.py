@@ -89,10 +89,19 @@ def main():
     parser.add_argument('--remove', action='append', default=[], help='object id already taken out (repeatable)')
     parser.add_argument('--soft', type=float, help='soft cylinders: squash in mm under 10 N between plates')
     parser.add_argument('--soft-all', action='store_true', help='make every cylinder soft, not only the target and its neighbours')
+    parser.add_argument('--soft-shape', choices=('smooth', 'beads'), default='smooth')
+    parser.add_argument('--mu-cylinder', type=float)
+    parser.add_argument('--mu-blade', type=float)
+    parser.add_argument('--mu-wall', type=float)
+    parser.add_argument('--rolling', type=float, help='rolling resistance of rigid cylinders (angular damping, 1/s)')
     args = parser.parse_args()
     project = json.loads(Path(args.project).read_text(encoding='utf-8'))
     project['scene_objects'] = [item for item in project.get('scene_objects', []) if item['id'] not in args.remove]
-    options = {'soft': {'mmPer10N': args.soft, 'scope': 'all' if args.soft_all else 'neighbors', 'nodes': 16}} if args.soft else {}
+    options = {'soft': {'mmPer10N': args.soft, 'scope': 'all' if args.soft_all else 'neighbors', 'shape': args.soft_shape}} if args.soft else {}
+    friction = {key: value for key, value in (('cylinder', args.mu_cylinder), ('blade', args.mu_blade), ('wall', args.mu_wall),
+                                             ('rolling', args.rolling)) if value is not None}
+    if friction:
+        options['friction'] = friction
     grid = CLAMP if args.clamp else WRAP if args.wrap else QUICK if args.quick else GRID
     results = sweep(project, args.target or [None], grid, options)
     if args.out:

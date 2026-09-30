@@ -21,17 +21,22 @@ export type BladeProfile = { tipAhead: number; length: number; thickness: number
 // NSE scoop: blade 0.025–0.32 m, neck 0.018–0.065 m, TCP at the tip.
 export const NSE_SCOOP_PROFILE: BladeProfile = { tipAhead: 0, length: .295, thickness: .006, heelLength: .047, heelHeight: .02, friction: .5 };
 /**
- * Paper cups give way: a soft cylinder is a ring of small discs sprung to a hub. `mmPer10N` is how far
- * the cylinder squashes between two flat plates under 10 N; `scope` makes only the target and the
- * cylinders touching it soft (faster) or every cylinder.
+ * Paper cups give way: a soft cylinder is a ring of discs sprung to a hub. `mmPer10N` is how far the
+ * cylinder squashes between two flat plates under 10 N; `scope` makes only the target and the
+ * cylinders touching it soft (faster) or every cylinder. `shape` is the outline: 'smooth' packs 48
+ * overlapping discs for a round surface (about 1 mm ripple), 'beads' uses 16 (about 5 mm bumps).
  */
-export type Softness = { mmPer10N: number; scope: 'neighbors' | 'all'; nodes: number };
-export const DEFAULT_SOFTNESS: Softness = { mmPer10N: 5, scope: 'neighbors', nodes: 16 };
+export type SoftShape = 'smooth' | 'beads';
+export type Softness = { mmPer10N: number; scope: 'neighbors' | 'all'; shape: SoftShape };
+export const DEFAULT_SOFTNESS: Softness = { mmPer10N: 5, scope: 'neighbors', shape: 'smooth' };
+/** Friction overrides (Box2D mixes two surfaces as sqrt(a*b)); `rolling` damps a rigid cylinder's spin (1/s). */
+export type Friction = { cylinder?: number; blade?: number; wall?: number; rolling?: number };
 /** The robot moves the blade through a force-limited pose tracker; a jammed blade falls behind its path. */
 export type SimOptions = { settleSeconds: number; holdSeconds: number; dt: number; forceLimitN: number; torqueLimitNm: number;
-  trackingLimitM: number; trackingLimitDeg: number; neighborLimitM: number; bladeMassKg: number; frameEvery: number; soft: Softness | null };
+  trackingLimitM: number; trackingLimitDeg: number; neighborLimitM: number; bladeMassKg: number; frameEvery: number; soft: Softness | null;
+  friction: Friction };
 export const DEFAULT_SIM: SimOptions = { settleSeconds: 1, holdSeconds: 1.5, dt: 1 / 240, forceLimitN: 60, torqueLimitNm: 8,
-  trackingLimitM: .01, trackingLimitDeg: 5, neighborLimitM: .02, bladeMassKg: .3, frameEvery: 8, soft: null };
+  trackingLimitM: .01, trackingLimitDeg: 5, neighborLimitM: .02, bladeMassKg: .3, frameEvery: 8, soft: null, friction: {} };
 
 export type Pose = { x: number; z: number; angle: number };
 export type Frame = { t: number; stage: string; blade: Pose; command: Pose; blades: Pose[]; commands: Pose[];
@@ -68,14 +73,24 @@ export const pathSeconds = (waypoints: Waypoint[]) => waypoints.slice(1).reduce(
 
 // ---------------------------------------------------------------- soft cylinders
 
-type SoftCylinder = { hub: Body; nodes: Body[]; radius: number };
+type SoftCylinder = { hub: Body; nodes: Body[]; radius: number; nodeRadius: number };
 
-/** Build a soft cylinder: `nodes` discs on a ring, neighbours tied rigidly, each sprung to a stiff hub. */
-function softCylinder(world: World, center: number[], radius: number, mass: number, friction: number, nodes: number,
+/** Ring layout for a shape: node count, ring radius and disc radius, with the outline at `radius`. */
+export function softLayout(radius: number, shape: SoftShape) {
+  if (shape === 'smooth') {
+    const nodes = 48;
+    const ring = radius / (1 + 2 * Math.PI / nodes); // discs twice as wide as their spacing
+    return { nodes, ring, nodeRadius: radius - ring };
+  }
+  const nodes = 16, nodeRadius = Math.PI * radius / nodes * 1.05;
+  return { nodes, ring: radius - nodeRadius, nodeRadius };
+}
+
+/** Build a soft cylinder: discs on a ring, neighbours tied rigidly, each sprung to a stiff hub. */
+function softCylinder(world: World, center: number[], radius: number, mass: number, friction: number, shape: SoftShape,
   frequencyHz: number, group: number): SoftCylinder {
   const s = SCALE;
-  const nodeRadius = Math.PI * radius / nodes * 1.05;
-  const ring = radius - nodeRadius;
+  const { nodes, ring, nodeRadius } = softLayout(radius, shape);
   const hubRadius = radius * .35; // the nested cups' walls: the stack cannot collapse flat
   const hub = world.createDynamicBody({ position: Vec2(center[0] * s, center[1] * s), bullet: true });
   hub.createFixture(new Circle(hubRadius * s), { density: mass * .4 / (Math.PI * (hubRadius * s) ** 2), friction, filterGroupIndex: group });
@@ -87,23 +102,24 @@ function softCylinder(world: World, center: number[], radius: number, mass: numb
     body.setFixedRotation(true);
     nodeBodies.push(body);
   }
+  const bend = Math.max(2, Math.round(nodes / 8)); // bending springs span about 45 degrees whatever the node count
   for (let i = 0; i < nodes; i++) {
-    const a = nodeBodies[i], b = nodeBodies[(i + 1) % nodes], c = nodeBodies[(i + 2) % nodes];
+    const a = nodeBodies[i], b = nodeBodies[(i + 1) % nodes], c = nodeBodies[(i + bend) % nodes];
     world.createJoint(new DistanceJoint({ frequencyHz: 0, dampingRatio: 0 }, a, b, a.getPosition(), b.getPosition())); // paper does not stretch
     world.createJoint(new DistanceJoint({ frequencyHz: frequencyHz * 1.5, dampingRatio: .7 }, a, c, a.getPosition(), c.getPosition())); // bending
     world.createJoint(new DistanceJoint({ frequencyHz, dampingRatio: .7 }, hub, a, hub.getPosition(), a.getPosition()));
   }
-  return { hub, nodes: nodeBodies, radius };
+  return { hub, nodes: nodeBodies, radius, nodeRadius };
 }
 
 const frequencyCache = new Map<string, number>();
 
 /** Squash (mm) of a soft cylinder pressed with `forceN` between a floor and a plate, zero gravity. */
-function squashUnder(radius: number, mass: number, nodes: number, frequencyHz: number, forceN: number) {
+function squashUnder(radius: number, mass: number, shape: SoftShape, frequencyHz: number, forceN: number) {
   const s = SCALE;
   const world = new World({ gravity: Vec2(0, 0) });
   world.createBody().createFixture(new Box(.3 * s, .01 * s, Vec2(0, -.01 * s), 0));
-  softCylinder(world, [0, radius], radius, mass, .7, nodes, frequencyHz, -2);
+  softCylinder(world, [0, radius], radius, mass, .7, shape, frequencyHz, -2);
   const plate = world.createDynamicBody({ position: Vec2(0, (2 * radius + .01) * s), fixedRotation: true });
   plate.createFixture(new Box(.3 * s, .01 * s), { density: .5 / (.6 * .02 * s * s) });
   for (let t = 0; t < 1.2; t += 1 / 240) {
@@ -115,13 +131,13 @@ function squashUnder(radius: number, mass: number, nodes: number, frequencyHz: n
 
 /** Spring frequency that gives the requested squash, found by bisection and cached. */
 export function softFrequency(radius: number, mass: number, soft: Softness) {
-  const key = `${radius.toFixed(4)}:${mass}:${soft.nodes}:${soft.mmPer10N}`;
+  const key = `${radius.toFixed(4)}:${mass}:${soft.shape}:${soft.mmPer10N}`;
   const cached = frequencyCache.get(key);
   if (cached) return cached;
   let low = .5, high = 150; // softer below, stiffer above
   for (let i = 0; i < 14; i++) {
     const middle = Math.sqrt(low * high);
-    if (squashUnder(radius, mass, soft.nodes, middle, 10) > soft.mmPer10N) low = middle; else high = middle;
+    if (squashUnder(radius, mass, soft.shape, middle, 10) > soft.mmPer10N) low = middle; else high = middle;
   }
   const result = Math.sqrt(low * high);
   frequencyCache.set(key, result);
@@ -139,31 +155,33 @@ function softIds(scene: Scene, soft: Softness | null) {
   return new Set(scene.circles.filter(c => Math.hypot(c.center[0] - tx, c.center[1] - tz) < c.radius + scene.target.radius + .02).map(c => c.id));
 }
 
-function buildScene(scene: Scene, soft: Softness | null): Built {
+function buildScene(scene: Scene, soft: Softness | null, friction: Friction = {}): Built {
   const s = SCALE;
   const world = new World({ gravity: Vec2(0, -9.81 * s) });
   for (const wall of scene.walls) {
     world.createBody().createFixture(new Box(wall.half[0] * s, wall.half[1] * s, Vec2(wall.center[0] * s, wall.center[1] * s), wall.angle),
-      { friction: wall.friction });
+      { friction: friction.wall ?? wall.friction });
   }
   const bodies: Record<string, Body> = {}, softBodies: Record<string, SoftCylinder> = {};
   const softSet = softIds(scene, soft);
   let group = -2; // -1 is the blades
   for (const circle of scene.circles) {
+    const mu = friction.cylinder ?? circle.friction;
     if (soft && softSet.has(circle.id)) {
-      const cylinder = softCylinder(world, circle.center, circle.radius, circle.mass_kg, circle.friction, soft.nodes,
+      const cylinder = softCylinder(world, circle.center, circle.radius, circle.mass_kg, mu, soft.shape,
         softFrequency(circle.radius, circle.mass_kg, soft), group--);
       softBodies[circle.id] = cylinder;
       bodies[circle.id] = cylinder.hub;
       continue;
     }
-    const body = world.createDynamicBody({ position: Vec2(circle.center[0] * s, circle.center[1] * s), bullet: true });
-    body.createFixture(new Circle(circle.radius * s), { density: circle.mass_kg / (Math.PI * (circle.radius * s) ** 2), friction: circle.friction });
+    const body = world.createDynamicBody({ position: Vec2(circle.center[0] * s, circle.center[1] * s), bullet: true,
+      angularDamping: friction.rolling ?? 0 });
+    body.createFixture(new Circle(circle.radius * s), { density: circle.mass_kg / (Math.PI * (circle.radius * s) ** 2), friction: mu });
     bodies[circle.id] = body;
   }
   for (const rect of scene.rectangles) {
     const body = world.createDynamicBody({ position: Vec2(rect.center[0] * s, rect.center[1] * s), angle: rect.angle });
-    body.createFixture(new Box(rect.half[0] * s, rect.half[1] * s), { density: rect.mass_kg / (4 * rect.half[0] * rect.half[1] * s * s), friction: rect.friction });
+    body.createFixture(new Box(rect.half[0] * s, rect.half[1] * s), { density: rect.mass_kg / (4 * rect.half[0] * rect.half[1] * s * s), friction: friction.cylinder ?? rect.friction });
     bodies[rect.id] = body;
   }
   return { world, bodies, soft: softBodies };
@@ -200,8 +218,9 @@ export function simulateScoop(scene: Scene, paths: BladePath[] | Waypoint[], pro
   const opt = { ...DEFAULT_SIM, ...options };
   const plans: BladePath[] = paths.length && 'waypoints' in paths[0] ? paths as BladePath[] : [{ waypoints: paths as Waypoint[], flip }];
   const s = SCALE;
-  const built = buildScene(scene, opt.soft);
+  const built = buildScene(scene, opt.soft, opt.friction);
   const { world, bodies } = built;
+  if (opt.friction.blade !== undefined) profile = { ...profile, friction: opt.friction.blade };
   const ground = world.createBody();
   const bladeArea = (profile.length * profile.thickness + profile.heelLength * (profile.thickness + profile.heelHeight)) * s * s;
   const blades = plans.map(plan => {
@@ -222,8 +241,14 @@ export function simulateScoop(scene: Scene, paths: BladePath[] | Waypoint[], pro
     const p = body.getPosition();
     return [id, { x: p.x / s, z: p.y / s, angle: body.getAngle() }];
   }));
-  const shapes = () => Object.fromEntries(Object.entries(built.soft).map(([id, cylinder]) =>
-    [id, cylinder.nodes.map(node => { const p = node.getPosition(); return [p.x / s, p.y / s]; })]));
+  // Outline of each soft cylinder: every disc pushed out from the hub by its radius.
+  const shapes = () => Object.fromEntries(Object.entries(built.soft).map(([id, cylinder]) => {
+    const hub = cylinder.hub.getPosition();
+    return [id, cylinder.nodes.map(node => {
+      const p = node.getPosition(), d = Vec2.distance(p, hub) || 1, k = (d + cylinder.nodeRadius * s) / d;
+      return [(hub.x + (p.x - hub.x) * k) / s, (hub.y + (p.y - hub.y) * k) / s];
+    })];
+  }));
   const squashMm = () => Math.max(0, ...Object.values(built.soft).map(cylinder => {
     const hub = cylinder.hub.getPosition();
     const radii = cylinder.nodes.map(node => Vec2.distance(node.getPosition(), hub) / s);
@@ -298,9 +323,9 @@ export function simulateScoop(scene: Scene, paths: BladePath[] | Waypoint[], pro
 }
 
 /** Let the authored scene settle under gravity (no blade) and return it with the resting positions. */
-export function settleScene(scene: Scene, seconds = 1.5, dt = 1 / 240, soft: Softness | null = null): Scene {
+export function settleScene(scene: Scene, seconds = 1.5, dt = 1 / 240, soft: Softness | null = null, friction: Friction = {}): Scene {
   const s = SCALE;
-  const built = buildScene(scene, soft);
+  const built = buildScene(scene, soft, friction);
   for (let t = 0; t < seconds; t += dt) built.world.step(dt, 16, 8);
   const at = (id: string) => { const p = built.bodies[id].getPosition(); return [p.x / s, p.y / s]; };
   const circles = scene.circles.map(circle => ({ ...circle, center: at(circle.id) }));

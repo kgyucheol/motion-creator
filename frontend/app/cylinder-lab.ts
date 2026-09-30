@@ -1,12 +1,13 @@
 // 2-D lab page: draw (or auto-plan) a TCP path in the cylinder cross-section and check it with Box2D.
-import { settleScene, simulateScoop, NSE_SCOOP_PROFILE, DEFAULT_SOFTNESS, type BladePath, type Scene, type SimResult, type Waypoint } from '../lib/cylinder-sim';
+import { settleScene, simulateScoop, NSE_SCOOP_PROFILE, DEFAULT_SOFTNESS, type BladePath, type Scene, type SimResult, type SoftShape, type Waypoint } from '../lib/cylinder-sim';
 import { autoSteps, drawnWaypoints, pointAngles, snapToCircle, type DrawnPoint, type DrawnStepping } from '../lib/drawn-path';
 
 type LabScene = Scene & { toward_robot?: number[] };
 type AutoPath = { waypoints: Waypoint[]; stage_steps: Record<string, number>; blades: BladePath[] };
 type Stored = { project?: string; mode?: string; params?: Record<string, number>; stepping?: DrawnStepping;
   drawings?: Record<string, { points: DrawnPoint[]; flip: boolean }>;
-  physics?: { material?: string; softMm?: number; scope?: string; force?: number; tracking?: number } };
+  physics?: { material?: string; softMm?: number; scope?: string; shape?: string; force?: number; tracking?: number;
+    muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number } };
 const $ = <T = HTMLElement>(id: string) => document.getElementById(id) as unknown as T;
 const input = (id: string) => $<HTMLInputElement>(id);
 const num = (id: string) => Number(input(id).value);
@@ -175,13 +176,17 @@ async function run() {
       renderPoints();
     }
     const soft = $<HTMLSelectElement>('material').value === 'soft'
-      ? { ...DEFAULT_SOFTNESS, mmPer10N: Math.max(.5, num('soft-mm')), scope: $<HTMLSelectElement>('soft-scope').value as 'neighbors' | 'all' } : null;
+      ? { ...DEFAULT_SOFTNESS, mmPer10N: Math.max(.5, num('soft-mm')), scope: $<HTMLSelectElement>('soft-scope').value as 'neighbors' | 'all',
+        shape: $<HTMLSelectElement>('soft-shape').value as SoftShape } : null;
+    const friction = { cylinder: Math.max(0, num('mu-cylinder')), blade: Math.max(0, num('mu-blade')), wall: Math.max(0, num('mu-wall')),
+      rolling: Math.max(0, num('rolling')) };
     remember({ physics: { material: $<HTMLSelectElement>('material').value, softMm: num('soft-mm'), scope: $<HTMLSelectElement>('soft-scope').value,
-      force: num('force'), tracking: num('tracking') } });
+      shape: $<HTMLSelectElement>('soft-shape').value, force: num('force'), tracking: num('tracking'),
+      muCylinder: friction.cylinder, muBlade: friction.blade, muWall: friction.wall, rolling: friction.rolling } });
     status(soft ? '말랑한 원통으로 물리 계산 중… (몇 초 걸립니다)' : '물리 계산 중…');
     await new Promise(resolve => setTimeout(resolve, 20));
     result = simulateScoop(scene, simBlades, NSE_SCOOP_PROFILE,
-      { forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4, soft });
+      { forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4, soft, friction });
     frame = 0; input('scrub').max = String(result.frames.length - 1);
     showResult(); status(''); playing = true;
   } catch (error) {
@@ -242,11 +247,10 @@ function draw() {
   for (const circle of scene.circles) {
     const fill = circle.id === scene.target_id ? '#e8a33d' : '#56708a';
     const shape = current?.shapes[circle.id];
-    if (shape) { // soft: the ring of discs
-      const nodeRadius = Math.PI * circle.radius / shape.length * 1.05;
+    if (shape) { // soft: the outline traced over the ring of discs
       ctx.fillStyle = fill;
       ctx.beginPath(); shape.forEach(([x, z], i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, X(x), Z(z))); ctx.closePath(); ctx.fill();
-      for (const [x, z] of shape) { ctx.beginPath(); ctx.arc(X(x), Z(z), nodeRadius * scale, 0, Math.PI * 2); ctx.fill(); }
+      ctx.strokeStyle = '#0e141b66'; ctx.stroke();
       continue;
     }
     const pose = current?.bodies[circle.id];
@@ -469,6 +473,9 @@ async function init() {
     $<HTMLSelectElement>('material').value = saved.physics.material ?? 'rigid'; input('soft-mm').value = String(saved.physics.softMm ?? 5);
     $<HTMLSelectElement>('soft-scope').value = saved.physics.scope ?? 'neighbors'; input('force').value = String(saved.physics.force ?? 60);
     input('tracking').value = String(saved.physics.tracking ?? 10);
+    $<HTMLSelectElement>('soft-shape').value = saved.physics.shape ?? 'smooth';
+    input('mu-cylinder').value = String(saved.physics.muCylinder ?? .7); input('mu-blade').value = String(saved.physics.muBlade ?? .5);
+    input('mu-wall').value = String(saved.physics.muWall ?? .7); input('rolling').value = String(saved.physics.rolling ?? 0);
   }
   const names = await api<string[]>('saved');
   const select = $<HTMLSelectElement>('project');
@@ -503,6 +510,13 @@ async function init() {
   });
   $('play').onclick = () => { if (!result) return; if (frame >= result.frames.length - 1) frame = 0; playing = !playing; };
   input('scrub').oninput = event => { frame = Number((event.target as HTMLInputElement).value); playing = false; draw(); };
+  const syncMaterial = () => {
+    const soft = $<HTMLSelectElement>('material').value === 'soft';
+    for (const id of ['soft-shape', 'soft-mm', 'soft-scope']) $<HTMLSelectElement>(id).disabled = !soft;
+    input('rolling').disabled = soft && $<HTMLSelectElement>('soft-scope').value === 'all';
+  };
+  for (const id of ['material', 'soft-scope']) $(id).addEventListener('change', syncMaterial);
+  syncMaterial();
   window.addEventListener('resize', draw);
   setupCanvas();
   setMode(saved.mode === 'auto' ? 'auto' : 'draw');

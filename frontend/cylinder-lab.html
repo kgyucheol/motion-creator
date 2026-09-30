@@ -69,8 +69,15 @@ select,input{width:100%}
     <section id="auto-panel" hidden><div id="params"></div><button id="reset">기본값</button></section>
     <h2>물리</h2>
     <label class="row">원통 재질<select id="material"><option value="rigid">강체</option><option value="soft">말랑 (종이 용기)</option></select></label>
+    <label class="row">형상<small>말랑할 때 원통 외곽</small><select id="soft-shape"><option value="smooth">원 (매끈)</option><option value="beads">구슬 고리 (울퉁불퉁)</option></select></label>
     <label class="row">찌그러짐 (mm)<small>10 N으로 누를 때</small><input id="soft-mm" type="number" step="0.5" value="5"/></label>
     <label class="row">말랑 범위<select id="soft-scope"><option value="neighbors">대상 + 이웃</option><option value="all">전체</option></select></label>
+    <h2>마찰</h2>
+    <label class="row">원통 마찰계수<small>원통끼리, 원통 쪽 값</small><input id="mu-cylinder" type="number" step="0.05" min="0" value="0.7"/></label>
+    <label class="row">날 마찰계수<input id="mu-blade" type="number" step="0.05" min="0" value="0.5"/></label>
+    <label class="row">상자 마찰계수<input id="mu-wall" type="number" step="0.05" min="0" value="0.7"/></label>
+    <label class="row">구름 저항 (1/s)<small>강체 원통의 회전 감쇠</small><input id="rolling" type="number" step="0.5" min="0" value="0"/></label>
+    <p class="hint">두 면이 닿을 때 마찰은 √(a·b)로 섞입니다. 예: 원통 0.7 × 날 0.5 → 0.59.</p>
     <label class="row">최대 힘 (N)<input id="force" type="number" step="5" value="60"/></label>
     <label class="row">끝 자세 허용 (mm)<input id="tracking" type="number" step="1" value="10"/></label>
     <div style="display:flex;gap:6px;margin-top:12px"><button class="primary" id="run">시뮬레이션</button></div>
