@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="description" content="원통 꺼내기 궤적의 2D 물리 검증"/>
+<title>Cylinder Scoop Lab</title>
+<style>
+:root{font-family:Inter,'Noto Sans KR',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#dce5ee;background:#0e141b;font-size:13px;--line:#293440;--muted:#8799ab;--mint:#80efc5;--panel:#17202a}
+*{box-sizing:border-box}body{margin:0;background:#0e141b}
+button,input,select{font:inherit;color:#dce5ee;background:#222e3a;border:1px solid #35424f;border-radius:5px;padding:5px 8px}
+button{cursor:pointer}button:hover:not(:disabled){background:#304051}button:disabled{opacity:.45;cursor:default}
+button.primary{background:#80efc5;color:#0e141b;border-color:#80efc5;font-weight:600}
+.lab{display:grid;grid-template-columns:300px minmax(0,1fr) 280px;height:100vh}
+aside{padding:14px;overflow:auto;border-right:1px solid var(--line);background:var(--panel)}
+aside.right{border-right:0;border-left:1px solid var(--line)}
+h1{font-size:15px;margin:0 0 4px}h2{font-size:11px;letter-spacing:.8px;color:var(--muted);margin:16px 0 6px;text-transform:uppercase}
+.hint{color:var(--muted);font-size:11px;line-height:1.5;margin:4px 0}
+label.row{display:grid;grid-template-columns:1fr 92px;gap:6px;align-items:center;margin:4px 0;font-size:12px}
+label.row small{display:block;color:var(--muted);font-size:10px}
+select,input{width:100%}
+.stage{display:flex;flex-direction:column;min-width:0}
+.canvas-wrap{flex:1;position:relative;min-height:0}canvas{width:100%;height:100%;display:block}
+.transport{display:flex;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line)}
+.transport input[type=range]{flex:1}
+.result{padding:10px;border-radius:6px;border:1px solid #344657;background:#101820;margin:6px 0}
+.result.ok{border-color:#3f9c7c;background:#10251f}.result.fail{border-color:#9c5a3f;background:#261812}
+.metric{display:flex;justify-content:space-between;font-size:12px;margin:3px 0}.metric b{font-variant-numeric:tabular-nums;font-weight:500}
+.steps{max-height:40vh;overflow:auto;font-size:11px;border:1px solid var(--line);border-radius:5px}
+.steps div{padding:3px 6px;border-bottom:1px solid #1d2731;display:flex;justify-content:space-between;gap:6px}
+.steps div.now{background:#203832;color:#a4f0d3}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--muted);padding:6px 12px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+@media(max-width:900px){.lab{grid-template-columns:1fr;height:auto}.canvas-wrap{height:60vh}aside{border:0}}
+</style>
+</head>
+<body>
+<div class="lab">
+  <aside>
+    <h1>원통 꺼내기 2D 물리 검증</h1>
+    <p class="hint">원통 축(로봇 좌우)에 수직인 단면에서 궤적을 만들고, 힘이 제한된 날로 Box2D 물리를 돌립니다. 장면은 먼저 중력으로 정착시킨 뒤 계획합니다.</p>
+    <h2>장면</h2>
+    <label class="row">프로젝트<select id="project"></select></label>
+    <label class="row">대상 원통<select id="target"></select></label>
+    <h2>궤적 파라미터</h2>
+    <div id="params"></div>
+    <h2>물리</h2>
+    <label class="row">최대 힘 (N)<small>두 툴 합계</small><input id="force" type="number" step="5" value="60"/></label>
+    <label class="row">추종 허용 (mm)<input id="tracking" type="number" step="1" value="10"/></label>
+    <div style="display:flex;gap:6px;margin-top:12px"><button class="primary" id="run">계획 + 시뮬레이션</button><button id="reset">기본값</button></div>
+    <p class="hint" id="status"></p>
+  </aside>
+  <main class="stage">
+    <div class="canvas-wrap"><canvas id="view"></canvas></div>
+    <div class="legend"><span><i style="background:#e8a33d"></i>대상 원통</span><span><i style="background:#56708a"></i>다른 원통</span><span><i style="background:#8a6b4a"></i>상자</span><span><i style="background:#80efc5"></i>왼손 날</span><span><i style="background:#6ec3ff"></i>오른손 날</span><span><i style="background:transparent;border:1px dashed #d9f"></i>날 (명령)</span><span>● TCP 경로</span></div>
+    <div class="transport"><button id="play">▶</button><input id="scrub" type="range" min="0" max="0" value="0"/><span id="time">0.00 s</span></div>
+  </main>
+  <aside class="right">
+    <h2>결과</h2>
+    <div id="result" class="result">아직 실행하지 않았습니다.</div>
+    <h2>단계</h2>
+    <div class="steps" id="steps"></div>
+  </aside>
+</div>
+<script type="module" src="/app/cylinder-lab.ts"></script>
+</body>
+</html>

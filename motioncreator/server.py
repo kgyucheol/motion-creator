@@ -424,6 +424,36 @@ def open_saved_project(name: str):
     return checked(load)
 
 
+class CylinderSceneInput(BaseModel):
+    project: dict
+    target_id: str | None = None
+
+
+class CylinderPlanInput(BaseModel):
+    scene: dict
+    positions: dict[str, list[float]] = Field(default_factory=dict)
+    params: dict[str, float] = Field(default_factory=dict)
+
+
+@app.post('/api/cylinder-lab/scene')
+def cylinder_lab_scene(payload: CylinderSceneInput):
+    from .cylinder_extraction import DEFAULT_PARAMS, LIMITS, scene_2d
+    def run():
+        scene = scene_2d(payload.project, payload.target_id)
+        return {'scene': scene, 'defaults': DEFAULT_PARAMS, 'limits': LIMITS,
+                'targets': [{'id': c['id'], 'name': c['name']} for c in scene['circles']]}
+    return checked(run)
+
+
+@app.post('/api/cylinder-lab/plan')
+def cylinder_lab_plan(payload: CylinderPlanInput):
+    from .cylinder_extraction import plan_scoop, with_positions
+    def run():
+        scene = with_positions(payload.scene, payload.positions) if payload.positions else payload.scene
+        return {'scene': scene, 'path': plan_scoop(scene, payload.params)}
+    return checked(run)
+
+
 @app.get('/api/saved')
 def saved():
     folder = ROOT / 'motions'
