@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE, ANGLE_LOCKABLE
-from .motion import new_project, validate_project, compile_motion, enable_parallel_compile, project_from_motion_bytes, prepare_saved_project, save_bundle
+from .motion import new_project, validate_project, compile_motion, rename_project, enable_parallel_compile, project_from_motion_bytes, prepare_saved_project, save_bundle
 from .presets import GroupStore
 
 robot = Robot()
@@ -333,6 +333,17 @@ def policy_cancel(identifier: str):
 @app.post('/api/save')
 def save(payload: ProjectInput):
     return checked(lambda: save_bundle(robot, payload.project, payload.fps, protomotions=payload.protomotions))
+
+
+class RenameInput(BaseModel):
+    model_config = {'extra': 'forbid'}
+    project_id: str
+    name: str = Field(max_length=80)
+
+
+@app.post('/api/rename-project')
+def rename_project_endpoint(payload: RenameInput):
+    return checked(lambda: rename_project(payload.project_id, payload.name))
 
 
 @app.post('/api/save-as')

@@ -994,6 +994,23 @@ export default function Editor() {
     if (!Number.isFinite(value) || !limits[index]) return;
     setJointDraft(draft => draft.map((v, i) => i === index ? Math.max(limits[i][0], Math.min(limits[i][1], value)) : v));
   }
+  const nameOnFocus = useRef('');
+  // Renaming keeps the saved project's folder and contents; only its name and folder name change.
+  async function renameSavedProject() {
+    const value = current.current.project;
+    if (!value || value.name === nameOnFocus.current) return;
+    nameOnFocus.current = value.name;
+    if (!value.project_id) return;
+    try {
+      const result = await api<{ renamed: boolean; display_name?: string }>('rename-project', { project_id: value.project_id, name: value.name });
+      if (!alive.current) return;
+      if (result.renamed) {
+        setSaved(await api<string[]>('saved'));
+        setProject(previous => previous ? { ...previous, display_name: result.display_name } : previous);
+        setMessage(`저장된 파일 이름을 '${result.display_name}'(으)로 변경했습니다. 기존 파일은 그대로 유지됩니다.`);
+      } else setMessage('이름을 바꿨습니다. 처음 저장할 때 이 이름의 파일이 만들어집니다.');
+    } catch (failure) { setError((failure as Error).message); }
+  }
   function exportProject(saveAs = false) {
     if (!project || !state) return;
     void run(async () => {
@@ -1116,7 +1133,7 @@ export default function Editor() {
   return <div className="editor">
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><select aria-label="로봇 모델" title="이 서버의 모델을 변경합니다. 현재 모션은 모델별로 자동 보관됩니다." disabled={disabled} value={modelId} onChange={event => void switchModel(event.target.value)}><option value="g1">G1 · 기본 손</option><option value="g1-tools">G1 그리퍼 · 왼 주걱 / 오른 받침</option></select></div>
-      <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="비워 두면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onChange={e => setProject({ ...project, name: e.target.value, name_mode: e.target.value.trim() ? 'manual' : 'auto' })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
+      <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="이름을 바꾸고 Enter를 누르면 저장된 파일 이름도 바뀝니다(기존 파일 유지). 비우면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onFocus={e => { nameOnFocus.current = project.name; e.currentTarget.select(); }} onBlur={() => void renameSavedProject()} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setProject({ ...project, name: nameOnFocus.current, name_mode: nameOnFocus.current.trim() ? 'manual' : 'auto' }); e.currentTarget.blur(); } }} onChange={e => setProject({ ...project, name: e.target.value, name_mode: e.target.value.trim() ? 'manual' : 'auto' })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
       <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button></div>}</div></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
       <input ref={assetFile} type="file" accept=".blend,.glb" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => importSceneAsset(source)); e.target.value = ''; }}/>

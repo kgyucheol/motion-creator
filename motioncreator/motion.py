@@ -779,6 +779,51 @@ def _atomic_text(path, content):
     _atomic_bytes(path, content.encode('utf-8'))
 
 
+def _project_folder_name(project, display_name):
+    name = re.sub(r'[^\w-]', '_', display_name, flags=re.UNICODE).strip('_')[:72] or 'motion'
+    created = datetime.fromisoformat(project['created_at'])
+    if project['name_mode'] == 'auto':
+        name = f'{name}T{created.strftime("%H%M%S")}'
+    else:
+        name = f'{name}_{created.strftime("%Y%m%dT%H%M%S")}'
+    return f'{name}_{project["project_id"][:8]}'
+
+
+def rename_project(project_id, name, directory=None):
+    """Rename a saved project in place: same folder contents and project ID, new name and folder name.
+
+    An empty name switches the project back to its automatic name. Nothing is recompiled or copied.
+    """
+    if not isinstance(name, str) or len(name) > 80:
+        raise ValueError('Project name must be text of at most 80 characters')
+    if not isinstance(project_id, str) or not PROJECT_ID_PATTERN.fullmatch(project_id):
+        raise ValueError('Project ID must be 32 lowercase hexadecimal characters')
+    root_folder = Path(directory or ROOT / 'motions')
+    folder = _existing_project_folder(root_folder, project_id) if root_folder.is_dir() else None
+    if folder is None:
+        return {'renamed': False}
+    project_file = folder / 'project.json'
+    project = json.loads(project_file.read_text(encoding='utf-8'))
+    prepare_saved_project(project, project_file.relative_to(root_folder), project_file.stat().st_mtime)
+    project['name'] = name.strip()
+    project['name_mode'] = 'manual' if name.strip() else 'auto'
+    display_name = project_display_name(project)
+    project['display_name'] = display_name
+    desired = root_folder / _project_folder_name(project, display_name)
+    if desired != folder and desired.exists():
+        raise ValueError('A different saved project already uses the requested project name')
+    metadata_path = folder / 'metadata.json'
+    if metadata_path.is_file():
+        metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+        metadata['display_name'] = display_name
+        _atomic_text(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2))
+    _atomic_text(folder / 'project.json', json.dumps(project, ensure_ascii=False, indent=2))
+    if desired != folder:
+        folder.rename(desired)
+    return {'renamed': True, 'display_name': display_name, 'folder': desired.name, 'name': project['name'],
+            'name_mode': project['name_mode'], 'project_file': str(Path(desired.name) / 'project.json')}
+
+
 def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=False, save_as=False):
     """Create or atomically update one self-contained project folder."""
     if save_as:
@@ -791,15 +836,9 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     root_folder.mkdir(parents=True, exist_ok=True)
     display_name = project_display_name(project)
     project['display_name'] = display_name
-    name = re.sub(r'[^\w-]', '_', display_name, flags=re.UNICODE).strip('_')[:72] or 'motion'
-    created = datetime.fromisoformat(project['created_at'])
-    if project['name_mode'] == 'auto':
-        name = f'{name}T{created.strftime("%H%M%S")}'
-    else:
-        name = f'{name}_{created.strftime("%Y%m%dT%H%M%S")}'
     folder = _existing_project_folder(root_folder, project['project_id'])
     reused = folder is not None
-    desired_folder = root_folder / f'{name}_{project["project_id"][:8]}'
+    desired_folder = root_folder / _project_folder_name(project, display_name)
     if folder is None:
         folder = desired_folder
         folder.mkdir()
