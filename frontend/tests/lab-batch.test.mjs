@@ -39,3 +39,24 @@ test('the batch goes in order and stops at the first cylinder it cannot take out
   // each later attempt starts without the cylinders already taken out
   report.attempts.forEach((attempt, index) => assert.equal(attempt.scene.circles.length, scene.circles.length - index));
 });
+
+test('a carried-over drawn path lifts further for a deeper cylinder without touching the way down', async () => {
+  const { stretchLift } = await import('../lib/lab-batch.ts');
+  const w = (x, z) => ({ stage: 'draw', label: '', tcp: [x, z], angle: 0, duration: .2 });
+  const path = [{ flip: false, waypoints: [w(0, .1), w(0, 0), w(0, -.05), w(0, .05), w(0, .2), w(.1, .2)] }];
+  const [stretched] = stretchLift(path, [0, 1], [0, 0], .1);
+  const z = stretched.waypoints.map(p => +p.tcp[1].toFixed(6));
+  assert.deepEqual(z.slice(0, 3), [.1, 0, -.05]); // down to the deepest point: unchanged
+  assert.ok(Math.abs(z[3] - (.05 + .1 * (.1 / .25))) < 1e-9); // part way up: part of the extra lift
+  assert.deepEqual(z.slice(4), [.3, .3]); // from the peak on: the full extra lift
+  assert.equal(stretchLift(path, [0, 1], [0, 0], -.1), path); // a shallower cylinder keeps the path
+});
+
+test('the cylinder mass option changes how much force lifting takes', async () => {
+  const { simulateScoop, restingScene } = await import('../lib/cylinder-sim.ts');
+  const scene = restingScene(clamp.base_scene);
+  const light = simulateScoop(scene, clamp.blades, undefined, { ...clamp.options, cylinderMassKg: .2 });
+  const heavy = simulateScoop(scene, clamp.blades, undefined, { ...clamp.options, cylinderMassKg: 6 });
+  assert.ok(light.success, light.reason);
+  assert.ok(!heavy.success || heavy.liftM < light.liftM - .01, `a 6 kg bundle is harder to lift (${heavy.liftM} vs ${light.liftM})`);
+});

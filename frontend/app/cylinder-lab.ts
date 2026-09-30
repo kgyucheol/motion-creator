@@ -4,7 +4,7 @@ import { autoSteps, drawnWaypoints, pointAngles, snapToCircle, waypointsToPoints
 import DEMOS from '../lib/cylinder-demos.json';
 import { termFor } from '../lib/lab-glossary';
 import { EDITOR_GRASP_KEY, editorGraspCoefficients, sectionGrasps, type SectionGrasp } from '../lib/lab-grasp';
-import { pileAfter, type Attempt } from '../lib/lab-batch';
+import { pileAfter, retarget, type Attempt } from '../lib/lab-batch';
 
 type Demo = { id: string; name: string; description: string; source: string; params: Record<string, number>; base_scene: LabScene;
   blades: BladePath[]; stage_steps: Record<string, number>;
@@ -15,7 +15,7 @@ type AutoPath = { waypoints: Waypoint[]; stage_steps: Record<string, number>; bl
 type Stored = { project?: string; mode?: string; params?: Record<string, number>; stepping?: DrawnStepping;
   drawings?: Record<string, { points: DrawnPoint[]; flip: boolean }>;
   physics?: { material?: string; softMm?: number; scope?: string; shape?: string; force?: number; tracking?: number;
-    muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number } };
+    muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number; mass?: string } };
 const $ = <T = HTMLElement>(id: string) => document.getElementById(id) as unknown as T;
 const input = (id: string) => $<HTMLInputElement>(id);
 const num = (id: string) => Number(input(id).value);
@@ -46,7 +46,9 @@ let frame = 0, playing = false, lastTick = 0;
 // Path generation by picking cylinders: the reference path, the pile left in the box, the attempts so far,
 // the one being replayed and the worker that simulates them.
 let pickMode = false;
-let template: { paths: BladePath[]; referenceCenter: number[] } | null = null;
+// Drawn paths are carried over (with the lift stretched to each cylinder's depth); auto plans are re-planned.
+let template: { kind: 'drawn'; paths: BladePath[]; referenceCenter: number[]; referenceRimUp: number }
+  | { kind: 'auto'; params: Record<string, number> } | null = null;
 let pile: LabScene | null = null; // null: the full box
 let pileNeedsSettle = false;
 let attempts: Attempt[] = [];
@@ -232,7 +234,8 @@ function physicsOptions() {
       shape: $<HTMLSelectElement>('soft-shape').value as SoftShape } : null;
   const friction = { cylinder: Math.max(0, num('mu-cylinder')), blade: Math.max(0, num('mu-blade')), wall: Math.max(0, num('mu-wall')),
     rolling: Math.max(0, num('rolling')) };
-  return { soft, friction, forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4 };
+  const mass = input('mass').value.trim() === '' ? null : Math.max(.01, num('mass'));
+  return { soft, friction, cylinderMassKg: mass, forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4 };
 }
 
 /** Run the physics for `blades` with the page's physics settings and start the replay. */
@@ -241,14 +244,14 @@ async function simulate(blades: BladePath[]) {
   simBlades = blades;
   $<HTMLButtonElement>('run').disabled = true;
   try {
-    const { soft, friction } = physicsOptions();
+    const { soft, friction, cylinderMassKg } = physicsOptions();
     remember({ physics: { material: $<HTMLSelectElement>('material').value, softMm: num('soft-mm'), scope: $<HTMLSelectElement>('soft-scope').value,
       shape: $<HTMLSelectElement>('soft-shape').value, force: num('force'), tracking: num('tracking'),
-      muCylinder: friction.cylinder, muBlade: friction.blade, muWall: friction.wall, rolling: friction.rolling } });
+      muCylinder: friction.cylinder, muBlade: friction.blade, muWall: friction.wall, rolling: friction.rolling, mass: input('mass').value } });
     status(soft ? '말랑한 원통으로 물리 계산 중… (몇 초 걸립니다)' : '물리 계산 중…');
     await new Promise(resolve => setTimeout(resolve, 20));
     result = simulateScoop(scene, simBlades, NSE_SCOOP_PROFILE,
-      { forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4, soft, friction });
+      { forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4, soft, friction, cylinderMassKg });
     frame = 0; input('scrub').max = String(result.frames.length - 1);
     showResult(); status(''); playing = true;
   } catch (error) {
@@ -674,7 +677,7 @@ async function loadDemo(id: string) {
   if (soft) { input('soft-mm').value = String(soft.mmPer10N); $<HTMLSelectElement>('soft-scope').value = soft.scope; $<HTMLSelectElement>('soft-shape').value = soft.shape; }
   input('mu-cylinder').value = String(friction.cylinder ?? .7); input('mu-blade').value = String(friction.blade ?? .5);
   input('mu-wall').value = String(friction.wall ?? .7); input('rolling').value = String(friction.rolling ?? 0);
-  input('force').value = '60'; input('tracking').value = '10';
+  input('force').value = '60'; input('tracking').value = '10'; input('mass').value = '';
   $('material').dispatchEvent(new Event('change'));
   setMode('auto');
   autoPath = { waypoints: demo.blades[0].waypoints, stage_steps: demo.stage_steps, blades: demo.blades };
@@ -706,11 +709,17 @@ const pickStatus = (text: string) => { $('pick-status').textContent = text; };
 
 function setPickMode(on: boolean) {
   if (on) {
-    const paths = currentPaths();
-    if (!paths || !scene) { pickStatus(mode === 'draw' ? '먼저 궤적을 그리세요(점 2개 이상).' : '먼저 자동 계획을 실행하거나 데모를 불러오세요.'); return; }
-    template = { paths, referenceCenter: [...scene.target.center] };
+    if (!scene) return;
+    if (mode === 'draw') {
+      const paths = currentPaths();
+      if (!paths) { pickStatus('먼저 궤적을 그리세요(점 2개 이상).'); return; }
+      template = { kind: 'drawn', paths, referenceCenter: [...scene.target.center], referenceRimUp: scene.frame.rim_up_m };
+      pickStatus(`그린 궤적(기준 ${scene.circles.find(c => c.id === scene!.target_id)?.name ?? '대상 원통'})을 옮겨 쓰고, 깊은 원통은 인양을 늘립니다. 꺼낼 라면용기를 클릭하세요.`);
+    } else {
+      template = { kind: 'auto', params: readParams() };
+      pickStatus('클릭한 라면용기마다 지금 파라미터로 다시 계획합니다. 꺼낼 라면용기를 클릭하세요.');
+    }
     if (!pile) { pile = scene; pileNeedsSettle = false; }
-    pickStatus(`기준 궤적: ${scene.circles.find(c => c.id === scene!.target_id)?.name ?? '대상 원통'} · 꺼낼 라면용기를 클릭하세요.`);
   } else {
     hoverId = null;
     pickStatus('꺼져 있습니다. 궤적을 고친 뒤 다시 켜면 남은 상자에서 이어서 합니다.');
@@ -722,13 +731,15 @@ function setPickMode(on: boolean) {
 }
 
 function resetPicks() {
-  pile = null; pileNeedsSettle = false; attempts = []; viewing = null; hoverId = null;
+  pile = pickMode ? scene : null; pileNeedsSettle = false; attempts = []; viewing = null; hoverId = null;
   clearResult(); renderAttempts(); draw();
   pickStatus(pickMode ? '상자를 처음 상태로 되돌렸습니다. 꺼낼 라면용기를 클릭하세요.' : '상자를 처음 상태로 되돌렸습니다.');
 }
 
 function pickCylinder(id: string) {
-  if (simulating || !template || !pile) return;
+  if (simulating || !template) return;
+  pile ??= scene;
+  if (!pile) return;
   const name = pile.circles.find(c => c.id === id)?.name ?? id, order = attempts.length + 1;
   simulating = true; hoverId = null;
   pickStatus(`#${order} ${name} · 파지점 계산과 시뮬레이션 중…`);
@@ -747,8 +758,20 @@ function pickCylinder(id: string) {
     }
     viewAttempt(attempt);
   };
-  worker.postMessage({ pile, targetId: id, paths: template.paths, referenceCenter: template.referenceCenter, order,
-    options: physicsOptions(), settle: pileNeedsSettle });
+  const options = physicsOptions();
+  if (template.kind === 'drawn') {
+    worker.postMessage({ pile, targetId: id, paths: template.paths, referenceCenter: template.referenceCenter, order,
+      options, settle: pileNeedsSettle, referenceRimUp: template.referenceRimUp });
+    return;
+  }
+  // Auto plan: settle the pile around the chosen cylinder here, plan for it on the server, simulate in the worker.
+  const aimed = retarget(pile, id);
+  const ready = (pileNeedsSettle ? restingScene(aimed) : aimed) as LabScene;
+  const send = worker;
+  api<{ path: AutoPath }>('cylinder-lab/plan', { scene: ready, params: template.params })
+    .then(planned => send.postMessage({ pile: ready, targetId: id, paths: planned.path.blades, referenceCenter: ready.target.center, order,
+      options, settle: false }))
+    .catch(error => { simulating = false; pickStatus(`#${order} ${name} 계획 실패: ${error instanceof Error ? error.message : error}`); });
 }
 
 function renderAttempts() {
@@ -798,6 +821,7 @@ async function init() {
     $<HTMLSelectElement>('soft-shape').value = saved.physics.shape ?? 'smooth';
     input('mu-cylinder').value = String(saved.physics.muCylinder ?? .7); input('mu-blade').value = String(saved.physics.muBlade ?? .5);
     input('mu-wall').value = String(saved.physics.muWall ?? .7); input('rolling').value = String(saved.physics.rolling ?? 0);
+    input('mass').value = saved.physics.mass ?? '';
   }
   const names = await api<string[]>('saved');
   const select = $<HTMLSelectElement>('project');

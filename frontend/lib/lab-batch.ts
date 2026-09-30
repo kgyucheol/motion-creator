@@ -42,18 +42,44 @@ export function translatePaths(paths: BladePath[], from: number[], to: number[])
   return paths.map(path => ({ ...path, waypoints: path.waypoints.map(w => ({ ...w, tcp: [w.tcp[0] + dx, w.tcp[1] + dz] })) }));
 }
 
+/**
+ * Raise the rising part of a path by `extraUp` (along the frame's `up`) so a deeper cylinder still clears
+ * the rim. From the path's deepest point the offset grows with the climb, reaching `extraUp` where the
+ * path first peaks, and stays there; the way down is untouched, so the path stays continuous.
+ */
+export function stretchLift(paths: BladePath[], up: number[], center: number[], extraUp: number): BladePath[] {
+  if (extraUp <= 0) return paths;
+  const [ux, uz] = up;
+  return paths.map(path => {
+    const heights = path.waypoints.map(w => (w.tcp[0] - center[0]) * ux + (w.tcp[1] - center[1]) * uz);
+    const deepest = heights.indexOf(Math.min(...heights));
+    let peak = deepest;
+    for (let i = deepest + 1; i < heights.length; i++) if (heights[i] >= heights[peak]) peak = i;
+    const climb = heights[peak] - heights[deepest];
+    if (peak === deepest || climb <= 1e-9) return path;
+    return { ...path, waypoints: path.waypoints.map((w, i) => {
+      if (i <= deepest) return w;
+      const f = i >= peak ? 1 : Math.max(0, Math.min(1, (heights[i] - heights[deepest]) / climb));
+      return { ...w, tcp: [w.tcp[0] + ux * extraUp * f, w.tcp[1] + uz * extraUp * f] };
+    }) };
+  });
+}
+
 export type Attempt = { order: number; id: string; name: string; scene: Scene; paths: BladePath[]; result: SimResult };
 export type BatchReport = { attempts: Attempt[]; extracted: number; total: number; stoppedAt: Numbered | null };
 
 /**
  * One extraction: aim the pile at `targetId`, carry the path over from the cylinder it was made for
- * (at `referenceCenter`) and simulate. Pass `settle` when the pile is not at rest yet (after a run).
+ * (at `referenceCenter`) and simulate. Pass `settle` when the pile is not at rest yet (after a run), and
+ * `referenceRimUp` (the reference cylinder's depth below the rim) to stretch the lift for deeper ones.
  */
 export function runAttempt(pile: Scene, targetId: string, paths: BladePath[], referenceCenter: number[], order: number,
-  options: Partial<SimOptions> = {}, settle = false, profile?: BladeProfile): Attempt {
+  options: Partial<SimOptions> = {}, settle = false, profile?: BladeProfile, referenceRimUp: number | null = null): Attempt {
   const aimed = retarget(pile, targetId);
   const scene = settle ? restingScene(aimed) : aimed;
-  const moved = translatePaths(paths, referenceCenter, scene.target.center);
+  let moved = translatePaths(paths, referenceCenter, scene.target.center);
+  // A hand-drawn path lifts as far as its own cylinder needed; a deeper one needs the difference more.
+  if (referenceRimUp !== null) moved = stretchLift(moved, scene.frame.up, scene.target.center, scene.frame.rim_up_m - referenceRimUp);
   const result = simulateScoop(scene, moved, profile, options);
   return { order, id: targetId, name: scene.circles.find(c => c.id === targetId)?.name ?? targetId, scene, paths: moved, result };
 }

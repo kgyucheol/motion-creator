@@ -3,12 +3,13 @@ import { runAttempt } from '../lib/lab-batch.ts';
 import type { BladePath, Scene, SimOptions } from '../lib/cylinder-sim.ts';
 
 type Request = { pile: Scene; targetId: string; paths: BladePath[]; referenceCenter: number[]; order: number;
-  options: Partial<SimOptions>; settle: boolean };
+  options: Partial<SimOptions>; settle: boolean; referenceRimUp?: number | null };
 
 self.onmessage = (event: MessageEvent<Request>) => {
-  const { pile, targetId, paths, referenceCenter, order, options, settle } = event.data;
+  const { pile, targetId, paths, referenceCenter, order, options, settle, referenceRimUp } = event.data;
   try {
-    self.postMessage({ type: 'attempt', attempt: runAttempt(pile, targetId, paths, referenceCenter, order, options, settle) });
+    self.postMessage({ type: 'attempt', attempt: runAttempt(pile, targetId, paths, referenceCenter, order, options, settle, undefined,
+      referenceRimUp ?? null) });
   } catch (error) {
     self.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
   }

@@ -36,9 +36,12 @@ export type Friction = { cylinder?: number; blade?: number; wall?: number; rolli
 /** The robot moves the blade through a force-limited pose tracker; a jammed blade falls behind its path. */
 export type SimOptions = { settleSeconds: number; holdSeconds: number; dt: number; forceLimitN: number; torqueLimitNm: number;
   trackingLimitM: number; trackingLimitDeg: number; neighborLimitM: number; bladeMassKg: number; frameEvery: number; soft: Softness | null;
-  friction: Friction };
+  friction: Friction;
+  /** Mass of every cylinder in kg (the whole bundle, carried by all tools together); null keeps the project's values. */
+  cylinderMassKg: number | null };
 export const DEFAULT_SIM: SimOptions = { settleSeconds: 1, holdSeconds: 1.5, dt: 1 / 240, forceLimitN: 60, torqueLimitNm: 8,
-  trackingLimitM: .01, trackingLimitDeg: 5, neighborLimitM: .02, bladeMassKg: .3, frameEvery: 8, soft: null, friction: {} };
+  trackingLimitM: .01, trackingLimitDeg: 5, neighborLimitM: .02, bladeMassKg: .3, frameEvery: 8, soft: null, friction: {},
+  cylinderMassKg: null };
 
 export type Pose = { x: number; z: number; angle: number };
 export type Frame = { t: number; stage: string; blade: Pose; command: Pose; blades: Pose[]; commands: Pose[];
@@ -170,7 +173,7 @@ function softIds(scene: Scene, soft: Softness | null) {
   return new Set(scene.circles.filter(c => Math.hypot(c.center[0] - tx, c.center[1] - tz) < c.radius + scene.target.radius + .02).map(c => c.id));
 }
 
-function buildScene(scene: Scene, soft: Softness | null, friction: Friction = {}): Built {
+function buildScene(scene: Scene, soft: Softness | null, friction: Friction = {}, massKg: number | null = null): Built {
   const s = SCALE;
   const world = new World({ gravity: Vec2(0, -9.81 * s) });
   for (const wall of scene.walls) {
@@ -180,7 +183,8 @@ function buildScene(scene: Scene, soft: Softness | null, friction: Friction = {}
   const bodies: Record<string, Body> = {}, softBodies: Record<string, SoftCylinder> = {};
   const softSet = softIds(scene, soft);
   let group = -2; // -1 is the blades
-  for (const circle of scene.circles) {
+  for (const source of scene.circles) {
+    const circle = massKg ? { ...source, mass_kg: massKg } : source;
     const mu = friction.cylinder ?? circle.friction;
     if (soft && softSet.has(circle.id)) {
       const cylinder = softCylinder(world, circle.center, circle.radius, circle.mass_kg, mu, soft.shape,
@@ -233,7 +237,7 @@ export function simulateScoop(scene: Scene, paths: BladePath[] | Waypoint[], pro
   const opt = { ...DEFAULT_SIM, ...options };
   const plans: BladePath[] = paths.length && 'waypoints' in paths[0] ? paths as BladePath[] : [{ waypoints: paths as Waypoint[], flip }];
   const s = SCALE;
-  const built = buildScene(scene, opt.soft, opt.friction);
+  const built = buildScene(scene, opt.soft, opt.friction, opt.cylinderMassKg);
   const { world, bodies } = built;
   if (opt.friction.blade !== undefined) profile = { ...profile, friction: opt.friction.blade };
   const ground = world.createBody();
