@@ -83,7 +83,23 @@ export default function Editor() {
   const [state, setState] = useState<PoseState | null>(null);
   const [project, setProject] = useState<Project | null>(null);
   const [modelId, setModelId] = useState('g1');
+  const [tools, setTools] = useState<[string, string] | null>(null);
+  const [toolOptions, setToolOptions] = useState<{ id: string; label: string }[]>([]);
   const draftKey = useRef('g1-motion-draft-v1');
+  // Swapping a hand's tool keeps the draft, like switching models: the server rebuilds the robot and the page reloads.
+  async function switchTool(side: 'left' | 'right', next: string) {
+    if (!tools || !project || !state || tools[side === 'left' ? 0 : 1] === next) return;
+    setBusy(true);
+    try {
+      const draft = JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects });
+      localStorage.setItem(draftKey.current, draft);
+      await api('tools', side === 'left' ? { left: next, right: tools[1] } : { left: tools[0], right: next });
+      location.reload();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '툴 교환 실패');
+      setBusy(false);
+    }
+  }
   async function switchModel(next: string) {
     if (next === modelId || !project || !state) return;
     setBusy(true);
@@ -632,10 +648,11 @@ export default function Editor() {
         scene.current = viewer;
       } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
     };
-    api<{ model_id: string; visual_revision: string; state: PoseState; project: Project; limits: number[][] }>('init').then(async init => {
+    api<{ model_id: string; visual_revision: string; state: PoseState; project: Project; limits: number[][]; tools?: [string, string] | null; tool_options?: { id: string; label: string }[] }>('init').then(async init => {
       if (!alive.current) return;
       createViewer(init.model_id, init.visual_revision);
       setModelId(init.model_id);
+      setTools(init.tools ?? null); setToolOptions(init.tool_options ?? []);
       draftKey.current = init.model_id === 'g1' ? 'g1-motion-draft-v1' : `g1-motion-draft-v1-${init.model_id}`;
       setLimits(init.limits.map(range => range.map(v => v * 180 / Math.PI)));
       let nextProject = init.project;
@@ -661,7 +678,7 @@ export default function Editor() {
       setPins(initialPins); current.current.pins = initialPins;
       setAnglePins(initialAnglePins); current.current.anglePins = initialAnglePins;
       applyState(initialState); setTarget(initialState.handles.pelvis.position);
-      setMessage(init.model_id === 'g1-tools' ? 'G1 그리퍼 모델: 왼손 주걱 · 오른손 받침. 양쪽 조작점은 그리퍼 TCP이며 Physics 재생을 지원합니다.' : '부위에 마우스를 올리고 축을 드래그하세요. 양발은 고정되어 있습니다.');
+      setMessage(init.model_id === 'g1-tools' ? `G1 그리퍼 모델: ${(init.tool_options ?? []).find(option => option.id === init.tools?.[0])?.label ?? '왼손 툴'} (왼손) · ${(init.tool_options ?? []).find(option => option.id === init.tools?.[1])?.label ?? '오른손 툴'} (오른손). 양쪽 조작점은 그리퍼 TCP이며 Physics 재생을 지원합니다. 위쪽 선택창에서 손마다 툴을 바꿀 수 있습니다.` : '부위에 마우스를 올리고 축을 드래그하세요. 양발은 고정되어 있습니다.');
     }).catch(e => setError(`계산 서버에 연결할 수 없습니다: ${e.message}`));
     api<string[]>('saved').then(setSaved).catch(() => {});
     api<{ available: boolean; physics_available?: boolean }>('policy-preview/runtime').then(result => {
@@ -1132,7 +1149,7 @@ export default function Editor() {
 
   return <div className="editor">
     <header className="topbar">
-      <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><select aria-label="로봇 모델" title="이 서버의 모델을 변경합니다. 현재 모션은 모델별로 자동 보관됩니다." disabled={disabled} value={modelId} onChange={event => void switchModel(event.target.value)}><option value="g1">G1 · 기본 손</option><option value="g1-tools">G1 그리퍼 · 왼 주걱 / 오른 받침</option></select></div>
+      <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><select aria-label="로봇 모델" title="이 서버의 모델을 변경합니다. 현재 모션은 모델별로 자동 보관됩니다." disabled={disabled} value={modelId} onChange={event => void switchModel(event.target.value)}><option value="g1">G1 · 기본 손</option><option value="g1-tools">G1 그리퍼 · 툴 교환</option></select>{modelId === 'g1-tools' && tools && (['left', 'right'] as const).map((side, index) => <select key={side} className="tool-select" aria-label={side === 'left' ? '왼손 툴' : '오른손 툴'} title={`${side === 'left' ? '왼손' : '오른손'}에 끼울 툴을 고릅니다. 현재 모션은 유지되고 서버가 모델을 다시 만듭니다.`} disabled={disabled} value={tools[index]} onChange={event => void switchTool(side, event.target.value)}>{toolOptions.map(option => <option key={option.id} value={option.id}>{side === 'left' ? '왼 ' : '오른 '}{option.label}</option>)}</select>)}</div>
       <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="이름을 바꾸고 Enter를 누르면 저장된 파일 이름도 바뀝니다(기존 파일 유지). 비우면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onFocus={e => { nameOnFocus.current = project.name; e.currentTarget.select(); }} onBlur={() => void renameSavedProject()} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setProject({ ...project, name: nameOnFocus.current, name_mode: nameOnFocus.current.trim() ? 'manual' : 'auto' }); e.currentTarget.blur(); } }} onChange={e => setProject({ ...project, name: e.target.value, name_mode: e.target.value.trim() ? 'manual' : 'auto' })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
       <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button></div>}</div></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>

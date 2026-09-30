@@ -29,18 +29,15 @@ class ModelInput(BaseModel):
     model_id: Literal['g1', 'g1-tools']
 
 
-@app.post('/api/model')
-def select_model(payload: ModelInput):
+def _replace_robot(candidate):
+    """Swap the server's robot; refuse while WBC sessions or physics jobs use the current one."""
     global robot
     from .policy_preview import jobs
     from .decoupled_wbc import sessions
     with sessions.lock, jobs.lock:
         if sessions.sessions or any(job['status'] == 'running' for job in jobs.jobs.values()):
             raise HTTPException(409, 'WBC 세션을 닫고 물리 계산을 완료한 뒤 모델을 변경하세요.')
-        if robot.model_id == payload.model_id:
-            return {'model_id': robot.model_id}
         try:
-            candidate = Robot(payload.model_id)
             candidate.export_visual(ROOT / f'assets/g1/robot-{candidate.model_id}.glb')
         except (ValueError, OSError) as exc:
             raise HTTPException(422, detail=f'모델을 불러오지 못했습니다: {exc}') from exc
@@ -49,9 +46,56 @@ def select_model(payload: ModelInput):
             jobs.sonic_process.wait(timeout=5)
             jobs.sonic_process = None
         os.environ['MOTIONCREATOR_MODEL'] = candidate.model_id
+        if candidate.tools is not None:
+            os.environ['MOTIONCREATOR_TOOLS'] = ':'.join(candidate.tools)
         robot = candidate
         sessions.robot = None
+
+
+@app.post('/api/model')
+def select_model(payload: ModelInput):
+    if robot.model_id == payload.model_id:
+        return {'model_id': robot.model_id}
+    try:
+        candidate = Robot(payload.model_id)
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, detail=f'모델을 불러오지 못했습니다: {exc}') from exc
+    _replace_robot(candidate)
     return {'model_id': robot.model_id}
+
+
+def tool_options():
+    from .tool_model import TOOLS
+    return [{'id': key, 'label': spec['label']} for key, spec in TOOLS.items()]
+
+
+class ToolsInput(BaseModel):
+    model_config = {'extra': 'forbid'}
+    left: str
+    right: str
+
+
+@app.get('/api/tools')
+def get_tools():
+    return {'model_id': robot.model_id, 'tools': list(robot.tools) if robot.tools else None, 'options': tool_options()}
+
+
+@app.post('/api/tools')
+def select_tools(payload: ToolsInput):
+    if robot.model_id != 'g1-tools':
+        raise HTTPException(409, '툴 교환은 G1 그리퍼 모델에서만 사용할 수 있습니다.')
+    from .tool_model import parse_tools
+    try:
+        tools = parse_tools(f'{payload.left}:{payload.right}')
+    except ValueError as exc:
+        raise HTTPException(422, detail=str(exc)) from exc
+    if tools != robot.tools:
+        try:
+            candidate = Robot('g1-tools', tools)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, detail=f'툴을 불러오지 못했습니다: {exc}') from exc
+        _replace_robot(candidate)
+    return {'model_id': robot.model_id, 'tools': list(robot.tools)}
 
 
 class SolveInput(PoseInput):
@@ -165,8 +209,9 @@ def health():
 
 @app.get('/api/init')
 def initialize():
-    return {'model_id': robot.model_id, 'visual_revision': robot.fingerprint[:16],
+    return {'model_id': robot.model_id, 'visual_revision': robot.visual_revision,
             'state': robot.state(robot.home), 'project': new_project(robot), 'joint_names': robot.names,
+            'tools': list(robot.tools) if robot.tools else None, 'tool_options': tool_options(),
             'limits': robot.model.jnt_range[1:].tolist()}
 
 

@@ -3,6 +3,7 @@ from pathlib import Path
 import hashlib
 import os
 import copy
+from functools import lru_cache
 import xml.etree.ElementTree as ET
 import numpy as np
 import mujoco
@@ -96,13 +97,22 @@ ATTENTION_ELBOW = 1.3  # rad; pi/2 would hang the forearm perfectly straight
 ATTENTION_SHOULDER_ROLL = .2  # rad, keeps the hands off the thighs
 
 
+@lru_cache(maxsize=1)
+def _stock_tool_identity():
+    from .tool_model import DEFAULT_TOOLS
+    stock = Robot('g1-tools', DEFAULT_TOOLS)
+    return stock.fingerprint, frozenset(stock.compatible_fingerprints)
+
+
 class Robot:
-    def __init__(self, model_id=None):
+    def __init__(self, model_id=None, tools=None):
         self.model_id = model_id or os.environ.get('MOTIONCREATOR_MODEL', 'g1')
+        self.tools = None
         self.handles = dict(HANDLES)
         if self.model_id == 'g1-tools':
-            from .tool_model import tool_model_xml
-            self.xml, tool_handles = tool_model_xml()
+            from .tool_model import tool_model_xml, parse_tools
+            self.tools = tuple(tools) if tools else parse_tools(os.environ.get('MOTIONCREATOR_TOOLS'))
+            self.xml, tool_handles = tool_model_xml(self.tools)
             self.handles.update(tool_handles)
             self.model = mujoco.MjModel.from_xml_string(ET.tostring(self.xml, encoding='unicode'))
         elif self.model_id == 'g1':
@@ -169,6 +179,29 @@ class Robot:
             for mesh in legacy_xml.findall('./asset/mesh'):
                 mesh.set('content_type', 'model/stl')
             self.compatible_fingerprints.add(hashlib.sha256(ET.tostring(legacy_xml)).hexdigest())
+
+        self.model_revision = self.fingerprint
+        if self.model_id == 'g1-tools':
+            from .tool_model import DEFAULT_TOOLS
+            if self.tools != DEFAULT_TOOLS:
+                # Any tool pair keeps the same 29 joints and qpos layout, so authored motions must stay
+                # portable between pairs (that is the point of swapping tools to verify a motion): every
+                # pair shares the stock pair's project identity. Caches and visuals still key on the pair.
+                identity, compatible = _stock_tool_identity()
+                self.fingerprint, self.compatible_fingerprints = identity, set(compatible)
+
+    @property
+    def visual_revision(self):
+        """Cache-busting id for the served GLB; stock models keep the plain fingerprint prefix."""
+        from .tool_model import DEFAULT_TOOLS
+        if self.tools is None or self.tools == DEFAULT_TOOLS:
+            return self.fingerprint[:16]
+        return hashlib.sha256(self.cache_key.encode()).hexdigest()[:16]
+
+    @property
+    def cache_key(self):
+        """Identity for cached kinematics/physics: the motion identity plus the mounted tools."""
+        return self.fingerprint if self.tools is None else f'{self.fingerprint}:{":".join(self.tools)}'
 
     def xml_root(self):
         return copy.deepcopy(self.xml)

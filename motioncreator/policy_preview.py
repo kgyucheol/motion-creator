@@ -423,7 +423,7 @@ class PreviewJobs:
             raise ValueError('SONIC CPU 실행 환경 또는 모델이 없습니다. scripts/setup-task-cpu.sh를 확인하세요.')
         # The same project, controller and start frame always simulate to the same result
         # (the worker is deterministic), so a finished replay can be shown again as is.
-        key = hashlib.sha256(json.dumps([robot.fingerprint, controller, start_frame_index, project],
+        key = hashlib.sha256(json.dumps([robot.cache_key, controller, start_frame_index, project],
                                         sort_keys=True, default=str).encode()).hexdigest()
         with self.lock:
             if any(job['status'] == 'running' for job in self.jobs.values()):

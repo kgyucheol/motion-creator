@@ -526,7 +526,7 @@ _IK_SKIP_ANGLE_RAD = np.deg2rad(.25)
 
 def compile_motion(robot: Robot, project, fps=30):
     """Compile keyframes to a dense motion, reusing the result while the project is unchanged."""
-    key = hashlib.sha256(json.dumps([robot.fingerprint, fps, project], sort_keys=True, default=str).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([robot.cache_key, fps, project], sort_keys=True, default=str).encode()).hexdigest()
     validate_project(robot, project)
     if key not in _COMPILE_CACHE:
         _COMPILE_CACHE[key] = _compile_motion(robot, project, fps)
