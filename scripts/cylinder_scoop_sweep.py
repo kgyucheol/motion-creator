@@ -1,7 +1,8 @@
 """Sweep scoop parameters in the 2-D physics check and list the variants that lift the cylinder out.
 
 Usage: .conda/bin/python scripts/cylinder_scoop_sweep.py <project.json> [--target ID ...] [--remove ID ...]
-       [--quick | --clamp]   (default grid: single-tool pry; --clamp: two-tool clamp; --quick: clamp defaults)
+       [--quick | --wrap | --clamp] [--soft MM [--soft-all]]
+       default grid: single-tool pry; --wrap: single-tool wrap; --clamp: two-tool clamp; --quick: small pry grid
 Paths come from motioncreator.cylinder_extraction (the same code the editor uses); the physics runs
 in frontend/lib/cylinder-sim.ts under Node, several processes in parallel.
 """
@@ -24,15 +25,17 @@ from motioncreator.cylinder_extraction import plan_scoop, scene_2d, with_positio
 GRID = {
     'mode': [1.],
     'side': [-1., 1.],
-    'step_deg': [35., 20., 10., 5.],
+    'step_deg': [20., 5.],
     'wedge_m': [0., .003, .006],
     'insert_depth': [.3, .6, .9],
     'pivot_up': [.3, .7, 1.1],
     'pry_deg': [20., 35., 50.],
 }
+WRAP = {'mode': [0.], 'side': [-1., 1.], 'step_deg': [10.], 'wedge_m': [0., .004, .008, .012], 'wrap_end_deg': [240., 270.],
+        'slide_extent': [0., .35], 'tilt_deg': [-20., 0., 20.]}
 CLAMP = {'mode': [2.], 'side': [-1.], 'step_deg': [10.], 'step_m': [.3, .15, .08, .04, .02, .01], 'wedge_m': [0., .001, .002, .003, .004, .008],
          'insert_depth': [0., .3, .6, .9]}
-QUICK = {'mode': [2.], 'side': [-1.], 'wedge_m': [.001], 'insert_depth': [.3], 'step_m': [.3, .04]}
+QUICK = {'mode': [1.], 'side': [-1., 1.], 'wedge_m': [.003], 'insert_depth': [.9], 'pivot_up': [.7, 1.1], 'pry_deg': [20., 35.], 'step_deg': [5.]}
 
 
 def run_chunk(scene, chunk, options):
@@ -51,7 +54,7 @@ def settled(scene):
         source.write_text(json.dumps(scene))
         subprocess.run(['node', '--no-warnings', '--experimental-transform-types', 'scripts/cylinder-settle.ts',
                         str(source), str(output)], cwd=ROOT / 'frontend', check=True)
-        rest = json.loads(output.read_text())
+        rest = json.loads(output.read_text())  # settled as rigid bodies: a soft pile rests within a few mm of this
     return with_positions(scene, {circle['id']: circle['center'] for circle in rest['circles']})
 
 
@@ -81,12 +84,17 @@ def main():
     parser.add_argument('--target', action='append', help='cylinder object id (repeatable); default: the top one')
     parser.add_argument('--quick', action='store_true')
     parser.add_argument('--clamp', action='store_true', help='sweep the two-tool clamp mode')
+    parser.add_argument('--wrap', action='store_true', help='sweep the single-tool wrap (surface following) mode')
     parser.add_argument('--out', help='write all results as JSON')
     parser.add_argument('--remove', action='append', default=[], help='object id already taken out (repeatable)')
+    parser.add_argument('--soft', type=float, help='soft cylinders: squash in mm under 10 N between plates')
+    parser.add_argument('--soft-all', action='store_true', help='make every cylinder soft, not only the target and its neighbours')
     args = parser.parse_args()
     project = json.loads(Path(args.project).read_text(encoding='utf-8'))
     project['scene_objects'] = [item for item in project.get('scene_objects', []) if item['id'] not in args.remove]
-    results = sweep(project, args.target or [None], CLAMP if args.clamp else QUICK if args.quick else GRID)
+    options = {'soft': {'mmPer10N': args.soft, 'scope': 'all' if args.soft_all else 'neighbors', 'nodes': 16}} if args.soft else {}
+    grid = CLAMP if args.clamp else WRAP if args.wrap else QUICK if args.quick else GRID
+    results = sweep(project, args.target or [None], grid, options)
     if args.out:
         Path(args.out).write_text(json.dumps(results, ensure_ascii=False, indent=1), encoding='utf-8')
     wins = [r for r in results if r['success']]

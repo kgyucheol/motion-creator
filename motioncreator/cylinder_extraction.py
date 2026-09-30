@@ -31,7 +31,7 @@ DEFAULT_PARAMS = {
     # 1 = pry (lever the blade about the slit mouth so the part below it swings under the target),
     # 2 = clamp (both tools go down opposite sides - left tool robot side, right tool far side - squeeze
     # the target through the wedge and lift it by friction; `side` is ignored).
-    'mode': 2.,
+    'mode': 1.,
     # Pry: how deep the tip goes down the slit and where the lever pivots, as fractions of the radius
     # below / above the target centre, and how far the blade swings.
     'insert_depth': .3, 'pivot_up': .6, 'pry_deg': 35.,
