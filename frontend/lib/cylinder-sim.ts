@@ -10,11 +10,13 @@ Settings.linearSlop = .005;
 export type Waypoint = { stage: string; label: string; tcp: number[]; angle: number; duration: number };
 export type Scene = {
   target_id: string;
-  target: { id: string; center: number[]; radius: number };
+  target: { id: string; center: number[]; radius: number; name?: string };
   circles: { id: string; name: string; center: number[]; radius: number; mass_kg: number; friction: number }[];
   rectangles: { id: string; center: number[]; half: number[]; angle: number; mass_kg: number; friction: number }[];
   walls: { id: string; center: number[]; half: number[]; angle: number; friction: number }[];
   frame: { origin: number[]; far: number[]; up: number[]; rim_up_m: number };
+  /** The open box the target sits in (null when it is not in one). */
+  box?: { center: number[]; angle: number; width: number; height: number; thickness: number } | null;
 };
 /** Tool section in its own frame: x forward, y = top-face normal, TCP at the origin on the top face. */
 export type BladeProfile = { tipAhead: number; length: number; thickness: number; heelLength: number; heelHeight: number; friction: number };
@@ -47,8 +49,21 @@ export type SimResult = {
   success: boolean; reason: string; steps: number; seconds: number;
   liftM: number; requiredLiftM: number; targetOnBlade: boolean; targetTouchesOthers: boolean;
   neighborMaxM: number; peakForceN: number; trackingMaxM: number; trackingMaxDeg: number; jamStage: string | null; stalledM: number;
-  finalErrorM: number; maxSquashMm: number; frames: Frame[];
+  finalErrorM: number; maxSquashMm: number; outsideBox: boolean; warnings: string[]; frames: Frame[];
 };
+
+/**
+ * Whether a cylinder has left the box: its whole section is above the rim, or it is past a side wall.
+ * Without a box, being lifted by the required height counts as out.
+ */
+export function isOutsideBox(scene: Scene, center: number[], radius: number, liftM: number, requiredLiftM: number) {
+  const box = scene.box;
+  if (!box) return liftM >= requiredLiftM;
+  const dx = center[0] - box.center[0], dz = center[1] - box.center[1];
+  const c = Math.cos(box.angle), s = Math.sin(box.angle);
+  const along = dx * c + dz * s, up = -dx * s + dz * c; // box axes: along the floor, out of the opening
+  return up > box.height / 2 + radius || Math.abs(along) > box.width / 2 + radius;
+}
 
 const ease = (u: number) => u * u * u * (10 + u * (-15 + 6 * u)); // quintic, like the editor's keyframes
 const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
@@ -308,18 +323,22 @@ export function simulateScoop(scene: Scene, paths: BladePath[] | Waypoint[], pro
   const targetTouchesOthers = touchingAny(targetList, others);
   const neighborMaxM = Math.max(0, ...Object.keys(bodies).filter(id => id !== scene.target_id)
     .map(id => Math.hypot(final[id].x - settled[id].x, final[id].z - settled[id].z)));
-  const reasons = [
-    liftM < requiredLiftM ? `상자 밖으로 못 나옴 (들린 높이 ${(liftM * 1000).toFixed(0)} / 필요 ${(requiredLiftM * 1000).toFixed(0)} mm)` : '',
-    !targetOnBlade ? '끝에서 날 위에 없음' : '',
-    targetTouchesOthers ? '다른 원통에 걸려 있음' : '',
+  // Success is only whether the target ended up out of the box; everything else is a warning.
+  const finalCenter = [final[scene.target_id].x, final[scene.target_id].z];
+  const outsideBox = isOutsideBox(scene, finalCenter, scene.target.radius, liftM, requiredLiftM);
+  const warnings = [
+    outsideBox && !targetOnBlade ? '날 위가 아니라 상자 밖으로 떨어짐' : '',
+    targetTouchesOthers ? '끝에서 다른 원통에 닿아 있음' : '',
     neighborMaxM > opt.neighborLimitM ? `이웃 원통이 ${(neighborMaxM * 1000).toFixed(0)} mm 밀림` : '',
     // A blade may lag while it drags the load; it has jammed only if it never reaches the end of its path.
     finalErrorM > opt.trackingLimitM || finalErrorDeg > opt.trackingLimitDeg
       ? `날이 끝 자세에 못 감 (${(finalErrorM * 1000).toFixed(0)} mm / ${finalErrorDeg.toFixed(0)}°${jamStage ? `, 처음 밀린 단계 '${jamStage}'` : ''})` : '',
   ].filter(Boolean);
-  return { success: reasons.length === 0, reason: reasons.join(' · ') || '성공', steps: plans[0].waypoints.length - 1, seconds: motion,
+  const reason = outsideBox ? ['성공 · 상자 밖으로 나옴', ...warnings].join(' · ')
+    : [`경로가 끝났는데 상자 안에 있음 (들린 높이 ${(liftM * 1000).toFixed(0)} / 필요 ${(requiredLiftM * 1000).toFixed(0)} mm)`, ...warnings].join(' · ');
+  return { success: outsideBox, reason, steps: plans[0].waypoints.length - 1, seconds: motion,
     liftM, requiredLiftM, targetOnBlade, targetTouchesOthers, neighborMaxM, peakForceN: peakForce, trackingMaxM, trackingMaxDeg, jamStage,
-    stalledM, finalErrorM, maxSquashMm, frames };
+    stalledM, finalErrorM, maxSquashMm, outsideBox, warnings, frames };
 }
 
 /** Let the authored scene settle under gravity (no blade) and return it with the resting positions. */

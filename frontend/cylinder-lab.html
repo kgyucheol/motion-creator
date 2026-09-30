@@ -22,6 +22,7 @@ label.row small{display:block;color:var(--muted);font-size:10px}
 label.check{display:flex;gap:6px;align-items:center;margin:6px 0;font-size:12px}label.check input{width:auto}
 select,input{width:100%}
 .tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:12px 0 4px}.tabs button[aria-pressed=true]{border-color:#80efc5;background:#203f36;color:#a4f0d3}
+#pick-mode[aria-pressed=true]{border-color:#ffd166;background:#3a3020;color:#ffe3a3}
 .buttons{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}.buttons button{flex:1 1 auto;font-size:12px}
 .stage{display:flex;flex-direction:column;min-width:0}
 .canvas-wrap{flex:1;position:relative;min-height:0}canvas{width:100%;height:100%;display:block;touch-action:none}
@@ -94,10 +95,9 @@ select,input{width:100%}
     <label class="row">최대 힘 (N)<input id="force" type="number" step="5" value="60"/></label>
     <label class="row">끝 자세 허용 (mm)<input id="tracking" type="number" step="1" value="10"/></label>
     <div style="display:flex;gap:6px;margin-top:12px"><button class="primary" id="run">시뮬레이션</button></div>
-    <h2>전체 원통 테스트</h2>
-    <label class="check"><input type="checkbox" id="show-order" checked/>원통 번호 표시</label>
-    <div class="buttons"><button id="batch-run">전체 원통 테스트</button><button id="batch-stop" disabled>중지</button></div>
-    <p class="hint" id="batch-status"></p>
+    <h2>경로 생성</h2>
+    <div class="buttons"><button id="pick-mode" aria-pressed="false">경로 생성</button><button id="pick-reset">처음부터</button></div>
+    <p class="hint" id="pick-status">켜고 캔버스에서 꺼낼 라면용기를 클릭하세요.</p>
     <p class="hint" id="status"></p>
   </aside>
   <main class="stage">
@@ -109,7 +109,7 @@ select,input{width:100%}
     <h2>결과</h2>
     <div id="result" class="result">아직 실행하지 않았습니다.</div>
     <section id="batch-panel" hidden>
-      <h2>전체 결과</h2>
+      <h2>경로 생성 기록</h2>
       <p class="hint" id="batch-summary"></p>
       <div class="batch-table" id="batch-table"></div>
     </section>

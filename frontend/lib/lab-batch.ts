@@ -1,5 +1,5 @@
-// Every cylinder in the box, one after another: number them, carry one path over to each, and simulate
-// the extraction in order, starting each attempt from where the previous one left the pile.
+// Take cylinders out of the box one after another with one path: carry the path over to each chosen
+// cylinder and simulate, starting each attempt from where the previous one left the pile.
 import { restingScene, simulateScoop, type BladePath, type Scene, type SimOptions, type SimResult, type BladeProfile } from './cylinder-sim.ts';
 
 export type Numbered = { id: string; name: string; order: number; layer: number };
@@ -46,32 +46,47 @@ export type Attempt = { order: number; id: string; name: string; scene: Scene; p
 export type BatchReport = { attempts: Attempt[]; extracted: number; total: number; stoppedAt: Numbered | null };
 
 /**
- * Take the cylinders out in order with one path; `start` must be at rest (restingScene). After a
- * success the cylinder leaves the scene and
- * the rest keep the positions the simulation left them in (then settle again). A failure leaves the
- * cylinder count unchanged, so the run stops there.
+ * One extraction: aim the pile at `targetId`, carry the path over from the cylinder it was made for
+ * (at `referenceCenter`) and simulate. Pass `settle` when the pile is not at rest yet (after a run).
+ */
+export function runAttempt(pile: Scene, targetId: string, paths: BladePath[], referenceCenter: number[], order: number,
+  options: Partial<SimOptions> = {}, settle = false, profile?: BladeProfile): Attempt {
+  const aimed = retarget(pile, targetId);
+  const scene = settle ? restingScene(aimed) : aimed;
+  const moved = translatePaths(paths, referenceCenter, scene.target.center);
+  const result = simulateScoop(scene, moved, profile, options);
+  return { order, id: targetId, name: scene.circles.find(c => c.id === targetId)?.name ?? targetId, scene, paths: moved, result };
+}
+
+/** The pile after a successful attempt: the target gone, the rest where the simulation left them. */
+export function pileAfter(attempt: Attempt): Scene | null {
+  const { scene, result } = attempt;
+  const last = result.frames[result.frames.length - 1].bodies;
+  const circles = scene.circles.filter(c => c.id !== attempt.id).map(c => ({ ...c, center: last[c.id] ? [last[c.id].x, last[c.id].z] : c.center }));
+  if (!circles.length) return null;
+  const rectangles = scene.rectangles.map(r => ({ ...r, center: last[r.id] ? [last[r.id].x, last[r.id].z] : r.center, angle: last[r.id]?.angle ?? r.angle }));
+  return { ...scene, circles, rectangles, target: circles[0], target_id: circles[0].id };
+}
+
+/**
+ * Take the cylinders out in the numbered order with one path; `start` must be at rest
+ * (restingScene). A failure leaves the cylinder count unchanged, so the run stops there.
  */
 export function runBatch(start: Scene, paths: BladePath[], referenceId: string, options: Partial<SimOptions> = {},
   profile?: BladeProfile, onAttempt: (attempt: Attempt, index: number, total: number) => void = () => {}): BatchReport {
   const reference = start.circles.find(c => c.id === referenceId);
   if (!reference) throw new Error('The path reference cylinder is not in the scene');
   const plan = numberCylinders(start);
-  let pile: Scene = start;
+  let pile: Scene | null = start;
   const attempts: Attempt[] = [];
   for (const item of plan) {
+    if (!pile) break;
     // `start` is already at rest; later piles are where the last run left them, so settle those again.
-    const scene = attempts.length ? restingScene(retarget(pile, item.id)) : retarget(pile, item.id);
-    const moved = translatePaths(paths, reference.center, scene.target.center);
-    const result = simulateScoop(scene, moved, profile, options);
-    const attempt = { order: item.order, id: item.id, name: item.name, scene, paths: moved, result };
+    const attempt = runAttempt(pile, item.id, paths, reference.center, item.order, options, attempts.length > 0, profile);
     attempts.push(attempt);
     onAttempt(attempt, attempts.length - 1, plan.length);
-    if (!result.success) return { attempts, extracted: attempts.length - 1, total: plan.length, stoppedAt: item };
-    const last = result.frames[result.frames.length - 1].bodies;
-    const circles = scene.circles.filter(c => c.id !== item.id).map(c => ({ ...c, center: last[c.id] ? [last[c.id].x, last[c.id].z] : c.center }));
-    const rectangles = scene.rectangles.map(r => ({ ...r, center: last[r.id] ? [last[r.id].x, last[r.id].z] : r.center, angle: last[r.id]?.angle ?? r.angle }));
-    if (!circles.length) break;
-    pile = { ...scene, circles, rectangles, target: circles[0], target_id: circles[0].id };
+    if (!attempt.result.success) return { attempts, extracted: attempts.length - 1, total: plan.length, stoppedAt: item };
+    pile = pileAfter(attempt);
   }
   return { attempts, extracted: attempts.length, total: plan.length, stoppedAt: null };
 }

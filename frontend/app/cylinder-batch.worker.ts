@@ -1,15 +1,14 @@
-// Runs the all-cylinder test off the page's main thread and reports each attempt as it finishes.
-import { runBatch } from '../lib/lab-batch.ts';
+// Runs extraction attempts off the page's main thread.
+import { runAttempt } from '../lib/lab-batch.ts';
 import type { BladePath, Scene, SimOptions } from '../lib/cylinder-sim.ts';
 
-type Request = { scene: Scene; paths: BladePath[]; referenceId: string; options: Partial<SimOptions> };
+type Request = { pile: Scene; targetId: string; paths: BladePath[]; referenceCenter: number[]; order: number;
+  options: Partial<SimOptions>; settle: boolean };
 
 self.onmessage = (event: MessageEvent<Request>) => {
-  const { scene, paths, referenceId, options } = event.data;
+  const { pile, targetId, paths, referenceCenter, order, options, settle } = event.data;
   try {
-    const report = runBatch(scene, paths, referenceId, options, undefined, (attempt, index, total) =>
-      self.postMessage({ type: 'attempt', attempt, index, total }));
-    self.postMessage({ type: 'done', extracted: report.extracted, total: report.total, stoppedAt: report.stoppedAt });
+    self.postMessage({ type: 'attempt', attempt: runAttempt(pile, targetId, paths, referenceCenter, order, options, settle) });
   } catch (error) {
     self.postMessage({ type: 'error', message: error instanceof Error ? error.message : String(error) });
   }
