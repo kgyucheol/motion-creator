@@ -18,8 +18,9 @@ export type Scene = {
   /** The open box the target sits in (null when it is not in one). */
   box?: { center: number[]; angle: number; width: number; height: number; thickness: number } | null;
 };
-/** Tool section in its own frame: x forward, y = top-face normal, TCP at the origin on the top face. */
-export type BladeProfile = { tipAhead: number; length: number; thickness: number; heelLength: number; heelHeight: number; friction: number };
+/** Tool section in its own frame: x forward, y = top-face normal, with the TCP at [0, 0]. */
+export type BladeProfile = { tipAhead?: number; length?: number; thickness?: number; heelLength?: number; heelHeight?: number;
+  outlines?: number[][][]; fixtures?: number[][][]; area_m2?: number; friction: number };
 // NSE scoop: blade 0.025–0.32 m, neck 0.018–0.065 m, TCP at the tip.
 export const NSE_SCOOP_PROFILE: BladeProfile = { tipAhead: 0, length: .295, thickness: .006, heelLength: .047, heelHeight: .02, friction: .5 };
 /**
@@ -214,15 +215,24 @@ function partsOf(built: Built, id: string) {
 
 function bladeFixtures(body: Body, profile: BladeProfile, flip: boolean, density: number) {
   const s = SCALE;
+  if (profile.fixtures?.length) {
+    for (const fixture of profile.fixtures) {
+      const points = fixture.map(([x, y]) => Vec2(x * s, (flip ? -y : y) * s));
+      body.createFixture(new Polygon(flip ? points.reverse() : points), { friction: profile.friction, density, filterGroupIndex: -1 });
+    }
+    return;
+  }
   const y = (value: number) => (flip ? -value : value) * s; // a rolled-over tool has its top face on the other side
-  const back = profile.tipAhead - profile.length;
+  const tipAhead = profile.tipAhead ?? 0, length = profile.length ?? 0, thickness = profile.thickness ?? 0;
+  const heelLength = profile.heelLength ?? 0, heelHeight = profile.heelHeight ?? 0;
+  const back = tipAhead - length;
   const quad = (x0: number, y0: number, x1: number, y1: number) => {
     const points = [Vec2(x0 * s, y(y0)), Vec2(x1 * s, y(y0)), Vec2(x1 * s, y(y1)), Vec2(x0 * s, y(y1))];
     return new Polygon(flip ? points.reverse() : points);
   };
-  body.createFixture(quad(back, -profile.thickness, profile.tipAhead, 0), { friction: profile.friction, density, filterGroupIndex: -1 });
-  if (profile.heelLength > 0 && profile.heelHeight > 0) {
-    body.createFixture(quad(back - profile.heelLength, -profile.thickness, back, profile.heelHeight), { friction: profile.friction, density, filterGroupIndex: -1 });
+  body.createFixture(quad(back, -thickness, tipAhead, 0), { friction: profile.friction, density, filterGroupIndex: -1 });
+  if (heelLength > 0 && heelHeight > 0) {
+    body.createFixture(quad(back - heelLength, -thickness, back, heelHeight), { friction: profile.friction, density, filterGroupIndex: -1 });
   }
 }
 
@@ -241,7 +251,8 @@ export function simulateScoop(scene: Scene, paths: BladePath[] | Waypoint[], pro
   const { world, bodies } = built;
   if (opt.friction.blade !== undefined) profile = { ...profile, friction: opt.friction.blade };
   const ground = world.createBody();
-  const bladeArea = (profile.length * profile.thickness + profile.heelLength * (profile.thickness + profile.heelHeight)) * s * s;
+  const bladeArea = (profile.area_m2 ?? ((profile.length ?? 0) * (profile.thickness ?? 0)
+    + (profile.heelLength ?? 0) * ((profile.thickness ?? 0) + (profile.heelHeight ?? 0)))) * s * s;
   const blades = plans.map(plan => {
     const start = poseAt(plan.waypoints, 0);
     const body = world.createDynamicBody({ position: Vec2(start.x * s, start.z * s), angle: start.angle, bullet: true });

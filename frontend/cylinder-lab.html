@@ -60,7 +60,7 @@ select,input{width:100%}
 <div class="lab">
   <aside>
     <h1>원통 꺼내기 2D 물리 검증</h1>
-    <p class="hint">원통 축(로봇 좌우)에 수직인 단면입니다. 프로젝트나 예시에서 장면을 불러오고, 파지점 손마다 장착 툴을 선택해 경로를 확인합니다. 2D 물리의 날 형상은 단순화된 NSE 주걱 프로필입니다.</p>
+    <p class="hint">원통 축(로봇 좌우)에 수직인 단면입니다. 프로젝트나 예시에서 장면을 불러오고, 파지점 손마다 장착 툴을 선택해 해당 툴의 충돌 메시 단면으로 경로를 확인합니다.</p>
     <h2>장면</h2>
     <label class="row">장면 프로젝트<select id="project"></select></label>
     <label class="row">대상 원통<select id="target"></select></label>
@@ -79,7 +79,7 @@ select,input{width:100%}
       <div class="buttons"><button id="grasp-defaults">이 손 계수 기본값</button></div>
       <p class="hint" id="grasp-info"></p>
       <div class="buttons"><button id="from-grasp">파지점에서 시작</button><button id="undo-point">마지막 점 삭제</button><button id="clear-points">모두 지우기</button></div>
-      <label class="row">날 윗면<small>원통을 받치는 면</small><select id="flip"><option value="0">진행 방향 왼쪽</option><option value="1">진행 방향 오른쪽</option></select></label>
+      <label class="row">접촉 면<small>경로 기준 위·아래로 툴 단면을 뒤집습니다.</small><select id="flip"><option value="0">윗면 접촉</option><option value="1">아랫면 접촉</option></select></label>
       <label class="check"><input type="checkbox" id="snap" checked/>원통 표면에 붙이기</label>
       <label class="row">쐐기 깊이 (m)<small>붙일 때 표면 안쪽으로</small><input id="snap-wedge" type="number" step="0.001" value="0.003"/></label>
       <h2>단계 나누기 <button type="button" class="save-section" data-save="stepping" title="이 칸의 현재 값을 저장합니다. 다음에 페이지를 열면 이 값으로 시작합니다.">저장</button></h2>

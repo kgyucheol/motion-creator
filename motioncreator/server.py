@@ -445,6 +445,12 @@ def cylinder_lab_scene(payload: CylinderSceneInput):
     return checked(run)
 
 
+@app.get('/api/cylinder-lab/tool-profile')
+def cylinder_lab_tool_profile(side: Literal['left', 'right'] = Query(...)):
+    from .tool_section import tool_section
+    return checked(lambda: tool_section(robot, side))
+
+
 @app.post('/api/cylinder-lab/plan')
 def cylinder_lab_plan(payload: CylinderPlanInput):
     from .cylinder_extraction import plan_scoop, with_positions

@@ -1,5 +1,5 @@
 // 2-D lab page: draw (or auto-plan) a TCP path in the cylinder cross-section and check it with Box2D.
-import { restingScene, simulateScoop, NSE_SCOOP_PROFILE, DEFAULT_SOFTNESS, type BladePath, type Scene, type SimResult, type SoftShape, type Waypoint } from '../lib/cylinder-sim';
+import { restingScene, simulateScoop, NSE_SCOOP_PROFILE, DEFAULT_SOFTNESS, type BladePath, type BladeProfile, type Scene, type SimResult, type SoftShape, type Waypoint } from '../lib/cylinder-sim';
 import { autoSteps, drawnWaypoints, movePoint, pointAngles, snapToCircle, waypointsToPoints, type DrawnPoint, type DrawnStepping } from '../lib/drawn-path';
 import DEMOS from '../lib/cylinder-demos.json';
 import { termFor } from '../lib/lab-glossary';
@@ -15,6 +15,7 @@ type Demo = { id: string; name: string; description: string; source: string; par
 type LabScene = Scene & { toward_robot?: number[]; plane_y?: number; robot_position?: number[]; robot_quaternion_xyzw?: number[] };
 type AutoPath = { waypoints: Waypoint[]; stage_steps: Record<string, number>; blades: BladePath[] };
 type ToolState = { model_id: string; tools: [string, string] | null; options: { id: string; label: string }[] };
+type ToolSection = { side: 'left' | 'right'; tool_id: string; section_y_m: number; outlines: number[][][]; fixtures: number[][][]; area_m2: number };
 type Stored = { project?: string; mode?: string; params?: Record<string, number>; stepping?: DrawnStepping;
   tools?: [string, string];
   drawings?: Record<string, { points: DrawnPoint[]; flip: boolean }>;
@@ -44,6 +45,7 @@ let limits: Record<string, [number, number]> = {};
 let toolModelId = 'g1';
 let mountedTools: [string, string] | null = null;
 let toolOptions: ToolState['options'] = [];
+const toolProfiles: Partial<Record<'left' | 'right', BladeProfile>> = {};
 let mode: 'draw' | 'auto' = 'draw';
 let points: DrawnPoint[] = [];
 let selected = -1;
@@ -296,13 +298,17 @@ function physicsOptions() {
 /** Run the physics for `blades` with the page's physics settings and start the replay. */
 async function simulate(blades: BladePath[]) {
   if (!scene) return;
+  if (toolModelId !== 'g1-tools' || !toolProfiles[graspSide()]) {
+    status('파지점 손에 장착 툴을 선택하고 실제 단면을 불러온 뒤 시뮬레이션하세요.');
+    return;
+  }
   simBlades = blades;
   $<HTMLButtonElement>('run').disabled = true;
   try {
     const { soft, friction, cylinderMassKg } = physicsOptions();
     status(soft ? '말랑한 원통으로 물리 계산 중… (몇 초 걸립니다)' : '물리 계산 중…');
     await new Promise(resolve => setTimeout(resolve, 20));
-    result = simulateScoop(scene, simBlades, NSE_SCOOP_PROFILE,
+    result = simulateScoop(scene, simBlades, activeToolProfile(),
       { forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4, soft, friction, cylinderMassKg });
     frame = 0; input('scrub').max = String(result.frames.length - 1);
     showResult(); status(''); playing = true;
@@ -389,11 +395,28 @@ function draw() {
     quad(pose ? [pose.x, pose.z] : r.center, r.half, pose ? pose.angle : r.angle, '#56708a');
   }
   const bladeShape = (pose: { x: number; z: number; angle: number }, fill: string | null, stroke: string, dashed: boolean, flipped: boolean) => {
-    const p = NSE_SCOOP_PROFILE, flip = flipped ? -1 : 1, back = p.tipAhead - p.length;
+    const p = activeToolProfile(), flip = flipped ? -1 : 1;
     ctx.save(); ctx.translate(X(pose.x), Z(pose.z)); ctx.rotate(-pose.angle); ctx.scale(scale, -scale * flip);
-    ctx.beginPath(); ctx.rect(back, -p.thickness, p.length, p.thickness); ctx.rect(back - p.heelLength, -p.thickness, p.heelLength, p.thickness + p.heelHeight);
-    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
-    ctx.lineWidth = 1.5 / scale; ctx.setLineDash(dashed ? [4 / scale, 3 / scale] : []); ctx.strokeStyle = stroke; ctx.stroke(); ctx.restore();
+    ctx.fillStyle = fill ?? 'transparent';
+    ctx.lineWidth = 1.5 / scale; ctx.setLineDash(dashed ? [4 / scale, 3 / scale] : []); ctx.strokeStyle = stroke;
+    if (p.outlines?.length) {
+      for (const outline of p.outlines) {
+        if (outline.length < 3) continue;
+        ctx.beginPath(); ctx.moveTo(outline[0][0], outline[0][1]);
+        for (const point of outline.slice(1)) ctx.lineTo(point[0], point[1]);
+        ctx.closePath();
+        if (fill) ctx.fill();
+        ctx.stroke();
+      }
+    } else {
+      const tipAhead = p.tipAhead ?? 0, length = p.length ?? 0, thickness = p.thickness ?? 0;
+      const heelLength = p.heelLength ?? 0, heelHeight = p.heelHeight ?? 0, back = tipAhead - length;
+      ctx.beginPath(); ctx.rect(back, -thickness, length, thickness);
+      if (heelLength > 0 && heelHeight > 0) ctx.rect(back - heelLength, -thickness, heelLength, thickness + heelHeight);
+      if (fill) ctx.fill();
+      ctx.stroke();
+    }
+    ctx.restore();
   };
   const flipped = input('flip').value === '1';
   const grasps = input('show-grasp').checked ? currentGrasps(viewing?.scene ?? scene) : null;
@@ -589,17 +612,34 @@ function currentGrasps(of: LabScene | null = scene): Record<'left' | 'right', Se
 }
 const graspSide = () => $<HTMLSelectElement>('grasp-side').value as 'left' | 'right';
 const handIndex = (side: 'left' | 'right') => side === 'left' ? 0 : 1;
+const activeToolProfile = (): BladeProfile => toolProfiles[graspSide()] ?? NSE_SCOOP_PROFILE;
 
 function renderMountedTool() {
   const side = graspSide(), select = $<HTMLSelectElement>('mounted-tool');
   const fallback = stored().tools ?? ['nse_scoop', 'nse_spatula'];
   const selected = mountedTools?.[handIndex(side)] ?? fallback[handIndex(side)];
-  select.innerHTML = toolOptions.map(option => `<option value="${option.id}">${option.label}</option>`).join('');
-  if (toolOptions.some(option => option.id === selected)) select.value = selected;
+  select.innerHTML = `<option value="">툴 선택…</option>`
+    + toolOptions.map(option => `<option value="${option.id}">${option.label}</option>`).join('');
+  if (toolModelId === 'g1-tools' && mountedTools && toolOptions.some(option => option.id === selected)) select.value = selected;
   const pair = mountedTools?.map(id => toolOptions.find(option => option.id === id)?.label ?? id);
+  const sectionStatus = toolProfiles[side] ? '단면 준비됨' : toolModelId === 'g1-tools' ? '단면을 가져오지 못함' : '툴 모델 선택 후 단면 사용';
   $('mounted-tool-info').textContent = toolModelId === 'g1-tools'
-    ? `G1 그리퍼 장착 구성 · 왼손 ${pair?.[0] ?? '—'} / 오른손 ${pair?.[1] ?? '—'}`
-    : '툴을 고르면 메인 편집기와 공유하는 G1 그리퍼 모델로 전환하고 해당 손에 장착합니다.';
+    ? `G1 그리퍼 장착 구성 · 왼손 ${pair?.[0] ?? '—'} / 오른손 ${pair?.[1] ?? '—'} · ${sectionStatus}`
+    : '툴을 고르면 메인 편집기와 공유하는 G1 그리퍼 모델로 전환하고 실제 충돌 메시 단면을 불러옵니다.';
+}
+
+async function refreshToolProfiles() {
+  await Promise.all((['left', 'right'] as const).map(async side => {
+    delete toolProfiles[side];
+    try {
+      const profile = await api<ToolSection>(`cylinder-lab/tool-profile?side=${side}`);
+      if (mountedTools?.[handIndex(side)] === profile.tool_id) {
+        toolProfiles[side] = { outlines: profile.outlines, fixtures: profile.fixtures, area_m2: profile.area_m2, friction: .5 };
+      }
+    } catch {
+      delete toolProfiles[side];
+    }
+  }));
 }
 
 async function changeMountedTool(toolId: string) {
@@ -618,7 +658,8 @@ async function changeMountedTool(toolId: string) {
     toolModelId = updated.model_id;
     mountedTools = updated.tools;
     remember({ tools: updated.tools });
-    renderMountedTool();
+    await refreshToolProfiles();
+    renderMountedTool(); resetPicks(); draw();
     const label = toolOptions.find(option => option.id === toolId)?.label ?? toolId;
     status(`${side === 'left' ? '왼손' : '오른손'}에 ${label}을 장착했습니다. 메인 편집기와 같은 로봇 모델 설정입니다.`);
   } catch (error) {
@@ -980,6 +1021,7 @@ async function init() {
   toolModelId = tools.model_id;
   mountedTools = tools.tools;
   toolOptions = tools.options;
+  if (toolModelId === 'g1-tools') await refreshToolProfiles();
   renderMountedTool();
   const select = $<HTMLSelectElement>('project');
   select.innerHTML = names.map(name => `<option value="${name}">${name.replace(/\/project\.json$/, '')}</option>`).join('');
@@ -1010,7 +1052,10 @@ async function init() {
   $('tab-auto').onclick = () => setMode('auto');
   $('from-grasp').onclick = () => { if (!scene) return; checkpoint(); const p = graspPoint(); if (p) { points.unshift(p); selected = 0; changed(); } };
   $('grasp-side').addEventListener('change', () => { renderGraspInfo(); renderMountedTool(); draw(); });
-  $('mounted-tool').addEventListener('change', event => void changeMountedTool((event.target as HTMLSelectElement).value));
+  $('mounted-tool').addEventListener('change', event => {
+    const selected = (event.target as HTMLSelectElement).value;
+    if (selected) void changeMountedTool(selected);
+  });
   $('grasp-coefficients').addEventListener('change', event => {
     const target = event.target as HTMLInputElement;
     if (target.dataset.coefficient) editCoefficient(target.dataset.coefficient as keyof RamenGraspCoefficients['left'], target.value);
