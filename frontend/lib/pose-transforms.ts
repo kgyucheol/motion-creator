@@ -7,6 +7,10 @@ export function canMirrorSelection(keys: string[]) {
 export function isJointPairSelection(keys: string[]) {
   return keys.length === 2 && keys.every(key => key.endsWith('_joint')) && counterpart(keys[0]) === keys[1];
 }
+/** Arms mirror across the torso's left/right plane (the waist can be turned away from the pelvis); legs use the pelvis. */
+export function mirrorFrameHandle(keys: string[]) {
+  return keys.length > 0 && keys.every(key => /shoulder|elbow|wrist|hand/.test(key)) ? 'waist' : 'pelvis';
+}
 export function mirroredJointSign(axis: number[], otherAxis: number[], rootQuaternion: number[]) {
   const normal = new Vector3(0, 1, 0).applyQuaternion(new Quaternion().fromArray(rootQuaternion)).normalize();
   const reflectedAxial = new Vector3().fromArray(axis).addScaledVector(normal, -2 * new Vector3().fromArray(axis).dot(normal)).negate();

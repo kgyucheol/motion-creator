@@ -8,7 +8,7 @@ import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes, PersonStanding } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
-import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
+import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 
@@ -523,7 +523,7 @@ export default function Editor() {
     anchorPositions.current = Object.fromEntries(controls.map(k => [k, [...current.current.state!.handles[k].position]]));
     anchorCenter.current = selectionPosition(current.current.state, current.current.members, current.current.selected);
     anchorMirror.current = current.current.mirror && current.current.transformMode === 'translate' && canMirrorSelection(controls)
-      ? { active: controlKey(current.current.members, current.current.selected), rootQuaternion: [...current.current.state.handles.pelvis.quaternion] } : undefined;
+      ? { active: controlKey(current.current.members, current.current.selected), rootQuaternion: [...current.current.state.handles[mirrorFrameHandle(controls)].quaternion] } : undefined;
     anchorOrientations.current = Object.fromEntries(controls.map(k => [k, [...current.current.state!.handles[k].quaternion]]));
     anchorQuaternion.current = [...current.current.state.handles[controlKey(current.current.members, current.current.selected)].quaternion];
     anchorHinges.current = structuredClone(current.current.state.hinges);
@@ -568,7 +568,7 @@ export default function Editor() {
       const other = current.current.state?.hinges?.[otherKey];
       const base = anchorHinges.current[key];
       const otherBase = anchorHinges.current[otherKey];
-      if (other && base && otherBase) Object.assign(joints, pairedJointTargets(base, otherBase, value, current.current.mirror, current.current.state!.handles.pelvis.quaternion));
+      if (other && base && otherBase) Object.assign(joints, pairedJointTargets(base, otherBase, value, current.current.mirror, current.current.state!.handles[mirrorFrameHandle([key, otherKey])].quaternion));
     }
     pending.current = { kind: 'joint', key, target: [], joints };
     void drain();
@@ -1146,7 +1146,7 @@ export default function Editor() {
         await api<null>(`groups/${encodeURIComponent(groupId)}`, undefined, 'DELETE');
         setGroups(await api<GroupPreset[]>('groups')); setGroupId(''); setGroupName(''); setMessage('그룹 프리셋을 삭제했습니다.');
       })}><Trash2 size={13}/>삭제</button></div>
-      <p className="hint">일반 이동은 함께 옮기고, 좌우 미러 이동은 짝을 벌리거나 모읍니다. 고정된 부위가 포함되면 먼저 해제하세요.</p>
+      <p className="hint">일반 이동은 함께 옮기고, 대칭 이동은 짝을 벌리거나 모읍니다. 고정된 부위가 포함되면 먼저 해제하세요.</p>
       <div className="section-divider"/>
       <div className="panel-heading"><span>IK BEHAVIOR</span></div>
       <div className="segmented"><button disabled={disabled} className={mode === 'elastic' ? 'chosen' : ''} onClick={() => setMode('elastic')}>유연하게 따라오기</button><button disabled={disabled} className={mode === 'free' ? 'chosen' : ''} onClick={() => setMode('free')}>고정 부위만 유지</button></div>
@@ -1184,8 +1184,8 @@ export default function Editor() {
       <div className="panel-heading"><span>TRANSFORM</span><small>{transformMode === 'rotate' && (hinge || ankle) ? '관절축' : space.toUpperCase()}</small></div>
       <div className="segmented transform-modes"><button className={transformMode === 'translate' ? 'chosen' : ''} disabled={disabled} onClick={() => changeTransformMode('translate')} aria-keyshortcuts="W" title="이동 모드 (W)">이동 W</button><button className={transformMode === 'rotate' ? 'chosen' : ''} disabled={disabled || !rotationAllowed} onClick={() => changeTransformMode('rotate')} aria-keyshortcuts="E" title="회전 모드 (E)">회전 E</button></div>
       <div className="segmented"><button className={space === 'world' ? 'chosen' : ''} disabled={disabled || transformMode === 'rotate' && (!!hinge || ankle)} onClick={() => setSpace('world')} title="장면에 고정된 XYZ 축으로 드래그">월드 축</button><button className={space === 'local' ? 'chosen' : ''} disabled={disabled || transformMode === 'rotate' && (!!hinge || ankle)} onClick={() => setSpace('local')} title="선택 부위의 방향을 따라가는 XYZ 축으로 드래그">로컬 축</button></div>
-      <div className="segmented"><button className={!mirror ? 'chosen' : ''} disabled={disabled} onClick={() => setMirror(false)}>일반 이동</button><button className={mirror ? 'chosen' : ''} disabled={disabled} aria-pressed={mirror} onClick={() => setMirror(true)}>좌우 미러 이동</button></div>
-      {mirror && <p className="hint">{mirrorActive ? transformMode === 'rotate' ? `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 선택한 관절 링의 변화량을 반대쪽 관절축에 좌우 대칭으로 적용합니다.` : `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 이쪽을 바깥/안쪽으로 드래그하면 반대쪽도 대칭 이동합니다. 골반의 좌우 평면을 기준으로 합니다.` : !mirrorAvailable ? '좌우 짝을 모두 선택하면 미러 이동이 활성화됩니다.' : 'W 이동 또는 대칭 관절 2개를 선택한 E 회전 모드에서 사용할 수 있습니다.'}</p>}
+      <div className="segmented"><button className={!mirror ? 'chosen' : ''} disabled={disabled} onClick={() => setMirror(false)}>일반 이동</button><button className={mirror ? 'chosen' : ''} disabled={disabled} aria-pressed={mirror} onClick={() => setMirror(true)}>대칭 이동</button></div>
+      {mirror && <p className="hint">{mirrorActive ? transformMode === 'rotate' ? `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 선택한 관절 링의 변화량을 반대쪽 관절축에 좌우 대칭으로 적용합니다.` : `기준: ${state?.handles[activeControl]?.label ?? activeControl}. 이쪽을 바깥/안쪽으로 드래그하면 반대쪽도 대칭 이동합니다. 로봇의 좌우 평면(팔은 몸통, 다리는 골반)을 기준으로 합니다.` : !mirrorAvailable ? '좌우 짝을 모두 선택하면 대칭 이동이 활성화됩니다.' : 'W 이동 또는 대칭 관절 2개를 선택한 E 회전 모드에서 사용할 수 있습니다.'}</p>}
       <h2>{selectedGroup?.label ?? (members.length > 1 ? `${members.length}개 부위` : state?.handles[selected].label ?? '골반')} <span>{selectionPinned ? '위치 고정 포함' : selectionAnglePinned ? '각도 고정 포함' : '이동 가능'}</span></h2>
       <p className="hint">{members.map(k => state?.handles[k].label ?? k).join(' · ')}</p>
       <button className="wide" disabled={!state} onClick={() => scene.current?.focusSelection()}>선택 부위 보기 <kbd>F</kbd></button>
@@ -1219,7 +1219,7 @@ export default function Editor() {
         <div className="nudge"><span>1° 회전</span>{['X', 'Y', 'Z'].map((a, i) => <div key={a}><button aria-label={`${a} 마이너스 1도`} disabled={disabled || rotationBlocked} onClick={() => nudgeRotation(i, -1)}>−</button><span>{a}</span><button aria-label={`${a} 플러스 1도`} disabled={disabled || rotationBlocked} onClick={() => nudgeRotation(i, 1)}>+</button></div>)}</div>
         <p className="hint">회전 링을 드래그하세요. 1° 버튼은 선택한 축 좌표계를 사용합니다. 숫자 입력은 월드 XYZ 순서의 Euler 각도입니다. {rotationBlocked ? '회전할 발 또는 그룹에 포함된 부위의 고정을 해제하세요.' : '단일 손·골반은 위치를 고정한 채 회전할 수 있습니다.'}</p>
       </> : <>
-        <label className="inspector-label">{mirrorActive ? '미러 기준 부위 목표 위치' : members.length > 1 ? '그룹 중심 목표 위치' : '목표 위치'} · 월드 XYZ <small>m</small></label>
+        <label className="inspector-label">{mirrorActive ? '대칭 기준 부위 목표 위치' : members.length > 1 ? '그룹 중심 목표 위치' : '목표 위치'} · 월드 XYZ <small>m</small></label>
         <div className="xyz">{target.map((v, i) => <label key={i}><span className={`axis-${i}`}>{'XYZ'[i]}</span><NumericInput aria-label={`목표 ${'XYZ'[i]} 위치`}  step="0.01" value={Number(v.toFixed(4))} disabled={disabled || selectionPinned} onChange={e => setTarget(t => t.map((n, j) => i === j ? +e.target.value : n))}/></label>)}</div>
         <button className="wide" disabled={disabled || selectionPinned} onClick={() => numericMove(target)}>목표 위치 적용</button>
         <div className="nudge"><span>1cm · 월드</span>{['X', 'Y', 'Z'].map((a, i) => <div key={a}><button aria-label={`${a} 마이너스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionPosition(state!, members, selected).map((n, j) => i === j ? n - .01 : n))}>−</button><span>{a}</span><button aria-label={`${a} 플러스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionPosition(state!, members, selected).map((n, j) => i === j ? n + .01 : n))}>+</button></div>)}</div>

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { RobotScene, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
-import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, isJointPairSelection, mirroredJointSign, pairedJointTargets, translatedTargets } from '../lib/pose-transforms.ts';
+import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, isJointPairSelection, mirrorFrameHandle, mirroredJointSign, pairedJointTargets, translatedTargets } from '../lib/pose-transforms.ts';
 
 test('a symmetric hinge pair supports one active ring and mirrored axis deltas', () => {
   const pair = ['left_shoulder_roll_joint', 'right_shoulder_roll_joint'];
@@ -754,4 +754,19 @@ test('both hand TCPs can rotate together while their positions are pinned', () =
   const result = rotatedGroupTargets(positions, orientations, [0, 0, 1], [0, 0, 0, 1], quaternionFromDegrees([0, 0, 30]), hands);
   assert.deepEqual(result.targets, {});
   assert.equal(Object.keys(result.orientations).length, 2);
+});
+
+test('symmetric translation mirrors across the torso plane for arms and the pelvis plane for legs', () => {
+  assert.equal(mirrorFrameHandle(['left_hand', 'right_hand']), 'waist');
+  assert.equal(mirrorFrameHandle(['left_shoulder_roll_joint', 'right_shoulder_roll_joint']), 'waist');
+  assert.equal(mirrorFrameHandle(['left_foot', 'right_foot']), 'pelvis');
+  assert.equal(mirrorFrameHandle(['left_hand', 'right_foot']), 'pelvis');
+  // The torso is turned 90 deg from the pelvis: its lateral axis is world X, so dragging along X spreads the hands.
+  const torso = [0, 0, Math.SQRT1_2, Math.SQRT1_2];
+  const positions = { left_hand: [-.24, .5, .7], right_hand: [.25, .5, .7] };
+  const along = (delta) => translatedTargets(positions, delta, { active: 'right_hand', rootQuaternion: torso });
+  const spread = along([.01, 0, 0]);
+  assert.ok(Math.abs(spread.right_hand[0] - .26) < 1e-9 && Math.abs(spread.left_hand[0] + .25) < 1e-9);
+  const forward = along([0, .01, 0]);
+  assert.ok(Math.abs(forward.right_hand[1] - .51) < 1e-9 && Math.abs(forward.left_hand[1] - .51) < 1e-9);
 });
