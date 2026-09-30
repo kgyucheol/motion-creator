@@ -1,6 +1,11 @@
 // 2-D lab page: draw (or auto-plan) a TCP path in the cylinder cross-section and check it with Box2D.
-import { settleScene, simulateScoop, NSE_SCOOP_PROFILE, DEFAULT_SOFTNESS, type BladePath, type Scene, type SimResult, type SoftShape, type Waypoint } from '../lib/cylinder-sim';
-import { autoSteps, drawnWaypoints, pointAngles, snapToCircle, type DrawnPoint, type DrawnStepping } from '../lib/drawn-path';
+import { restingScene, simulateScoop, NSE_SCOOP_PROFILE, DEFAULT_SOFTNESS, type BladePath, type Scene, type SimResult, type SoftShape, type Waypoint } from '../lib/cylinder-sim';
+import { autoSteps, drawnWaypoints, pointAngles, snapToCircle, waypointsToPoints, type DrawnPoint, type DrawnStepping } from '../lib/drawn-path';
+import DEMOS from '../lib/cylinder-demos.json';
+
+type Demo = { id: string; name: string; description: string; source: string; params: Record<string, number>; base_scene: LabScene;
+  blades: BladePath[]; stage_steps: Record<string, number>;
+  options: { soft?: { mmPer10N: number; scope: 'neighbors' | 'all'; shape: SoftShape }; friction?: Record<string, number> } };
 
 type LabScene = Scene & { toward_robot?: number[] };
 type AutoPath = { waypoints: Waypoint[]; stage_steps: Record<string, number>; blades: BladePath[] };
@@ -66,13 +71,7 @@ async function api<T>(url: string, body?: unknown): Promise<T> {
 }
 const status = (text: string) => { $('status').textContent = text; };
 
-/** Resting scene: settle, then move the target frame with the target (like with_positions on the server). */
-function settled(source: LabScene): LabScene {
-  const rest = settleScene(source) as LabScene;
-  const [ox, oz] = source.frame.origin, [nx, nz] = rest.target.center, [ux, uz] = source.frame.up;
-  return { ...rest, toward_robot: source.toward_robot,
-    frame: { ...source.frame, origin: [nx, nz], rim_up_m: source.frame.rim_up_m - ((nx - ox) * ux + (nz - oz) * uz) } };
-}
+const settled = (source: LabScene): LabScene => restingScene(source);
 
 async function loadProject(name: string) {
   projectName = name;
@@ -175,6 +174,18 @@ async function run() {
       autoPath = planned.path; simBlades = planned.path.blades;
       renderPoints();
     }
+    await simulate(simBlades);
+  } catch (error) {
+    status(error instanceof Error ? error.message : String(error));
+  } finally { $<HTMLButtonElement>('run').disabled = false; }
+}
+
+/** Run the physics for `blades` with the page's physics settings and start the replay. */
+async function simulate(blades: BladePath[]) {
+  if (!scene) return;
+  simBlades = blades;
+  $<HTMLButtonElement>('run').disabled = true;
+  try {
     const soft = $<HTMLSelectElement>('material').value === 'soft'
       ? { ...DEFAULT_SOFTNESS, mmPer10N: Math.max(.5, num('soft-mm')), scope: $<HTMLSelectElement>('soft-scope').value as 'neighbors' | 'all',
         shape: $<HTMLSelectElement>('soft-shape').value as SoftShape } : null;
@@ -452,6 +463,55 @@ function setMode(next: 'draw' | 'auto') {
   remember({ mode }); clearResult(); renderPoints(); draw();
 }
 
+// ---------------------------------------------------------------- demos
+
+function renderDemos(active?: string) {
+  $('demos').innerHTML = (DEMOS as unknown as Demo[]).map(demo =>
+    `<button data-demo="${demo.id}" class="${demo.id === active ? 'active' : ''}" title="${demo.description}">${demo.name}<small>${demo.source}</small></button>`).join('');
+}
+
+/** Load a verified case: its scene, planner parameters, physics settings and planned path, then replay it. */
+async function loadDemo(id: string) {
+  const demo = (DEMOS as unknown as Demo[]).find(item => item.id === id);
+  if (!demo) return;
+  projectName = `데모:${demo.id}`;
+  const projectSelect = $<HTMLSelectElement>('project');
+  projectSelect.querySelector('option[data-demo]')?.remove();
+  projectSelect.insertAdjacentHTML('afterbegin', `<option data-demo value="">데모 · ${demo.source}</option>`);
+  projectSelect.value = '';
+  baseScene = demo.base_scene;
+  $<HTMLSelectElement>('target').innerHTML = `<option value="${baseScene.target_id}">${baseScene.target.id === baseScene.target_id ? (baseScene.circles.find(c => c.id === baseScene!.target_id)?.name ?? '대상') : '대상'}</option>`;
+  status('정착 중…');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  scene = settled(baseScene);
+  view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05; view.size = .9;
+  loadDrawing();
+  renderParams({ ...defaults, ...demo.params });
+  const soft = demo.options.soft, friction = demo.options.friction ?? {};
+  $<HTMLSelectElement>('material').value = soft ? 'soft' : 'rigid';
+  if (soft) { input('soft-mm').value = String(soft.mmPer10N); $<HTMLSelectElement>('soft-scope').value = soft.scope; $<HTMLSelectElement>('soft-shape').value = soft.shape; }
+  input('mu-cylinder').value = String(friction.cylinder ?? .7); input('mu-blade').value = String(friction.blade ?? .5);
+  input('mu-wall').value = String(friction.wall ?? .7); input('rolling').value = String(friction.rolling ?? 0);
+  input('force').value = '60'; input('tracking').value = '10';
+  $('material').dispatchEvent(new Event('change'));
+  setMode('auto');
+  autoPath = { waypoints: demo.blades[0].waypoints, stage_steps: demo.stage_steps, blades: demo.blades };
+  renderDemos(demo.id); renderPoints(); draw();
+  status(demo.description);
+  await simulate(demo.blades);
+}
+
+function copyToDrawing() {
+  if (!autoPath?.blades.length) { status('먼저 자동 계획을 실행하거나 데모를 불러오세요.'); return; }
+  const blade = autoPath.blades[0];
+  points = waypointsToPoints(blade.waypoints);
+  input('flip').value = blade.flip ? '1' : '0';
+  selected = points.length - 1;
+  setMode('draw');
+  changed();
+  status(autoPath.blades.length > 1 ? '왼손 날의 경로만 옮겼습니다(그리기는 날 하나를 씁니다).' : '계획된 경로를 그린 점으로 옮겼습니다. 점을 고친 뒤 시뮬레이션하세요.');
+}
+
 function tick(time: number) {
   if (playing && result) {
     const period = result.frames.length > 1 ? (result.frames[1].t - result.frames[0].t) * 1000 : 16;
@@ -481,10 +541,16 @@ async function init() {
   const select = $<HTMLSelectElement>('project');
   select.innerHTML = names.map(name => `<option value="${name}">${name.replace(/\/project\.json$/, '')}</option>`).join('');
   select.value = saved.project && names.includes(saved.project) ? saved.project : names[0];
-  select.onchange = () => void loadProject(select.value).catch(error => status(error.message));
+  select.onchange = () => { if (!select.value) return; renderDemos(); select.querySelector('option[data-demo]')?.remove(); void loadProject(select.value).catch(error => status(error.message)); };
   $<HTMLSelectElement>('target').onchange = event => void loadScene((event.target as HTMLSelectElement).value).catch(error => status(error.message));
   $('run').onclick = () => void run();
   $('reset').onclick = () => { remember({ params: {} }); renderParams(defaults); };
+  $('to-draw').onclick = copyToDrawing;
+  renderDemos();
+  $('demos').addEventListener('click', event => {
+    const button = (event.target as HTMLElement).closest('button[data-demo]') as HTMLElement | null;
+    if (button) void loadDemo(button.dataset.demo!).catch(error => status(error.message));
+  });
   $('tab-draw').onclick = () => setMode('draw');
   $('tab-auto').onclick = () => setMode('auto');
   $('from-grasp').onclick = () => { const p = graspPoint(); if (p) { points.unshift(p); selected = 0; changed(); } };

@@ -37,6 +37,8 @@ select,input{width:100%}
 .point.selected{border-color:#80efc5;background:#15302a}.point input{padding:3px 4px;font-size:11px}.point button{padding:2px 4px;font-size:11px}
 .point .xy{color:var(--muted);font-variant-numeric:tabular-nums}
 .points-head{display:grid;grid-template-columns:22px 1fr 58px 44px 22px;gap:4px;font-size:10px;color:var(--muted)}
+.demos{display:grid;gap:5px}.demos button{text-align:left;font-size:12px;line-height:1.35;padding:7px 9px}.demos button small{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+.demos button.active{border-color:#80efc5;background:#15302a}
 .legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--muted);padding:6px 12px}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
 [hidden]{display:none!important}
@@ -51,6 +53,8 @@ select,input{width:100%}
     <h2>장면</h2>
     <label class="row">프로젝트<select id="project"></select></label>
     <label class="row">대상 원통<select id="target"></select></label>
+    <h2>예시 데모</h2>
+    <div class="demos" id="demos"></div>
     <div class="tabs" role="tablist"><button id="tab-draw" aria-pressed="true">직접 그리기</button><button id="tab-auto" aria-pressed="false">자동 계획</button></div>
     <section id="draw-panel">
       <p class="hint">빈 곳 클릭: 점 추가 · 점 드래그: 이동 · 점의 손잡이 드래그: 날 각도 · 점 더블클릭: 각도 자동 · 점 우클릭: 삭제 · 휠: 확대 · Shift+드래그: 화면 이동</p>
@@ -66,7 +70,7 @@ select,input{width:100%}
       <label class="row">단계 최소 시간 (s)<input id="min-step" type="number" step="0.05" value="0.15"/></label>
       <div class="buttons"><button id="export">JSON 내보내기</button><button id="import">JSON 불러오기</button><input id="import-file" type="file" accept="application/json" hidden/></div>
     </section>
-    <section id="auto-panel" hidden><div id="params"></div><button id="reset">기본값</button></section>
+    <section id="auto-panel" hidden><div id="params"></div><div class="buttons"><button id="reset">기본값</button><button id="to-draw" title="계획된 경로(왼손)를 그린 점으로 바꿔 직접 고칩니다">그리기로 옮기기</button></div></section>
     <h2>물리</h2>
     <label class="row">원통 재질<select id="material"><option value="rigid">강체</option><option value="soft">말랑 (종이 용기)</option></select></label>
     <label class="row">형상<small>말랑할 때 원통 외곽</small><select id="soft-shape"><option value="smooth">원 (매끈)</option><option value="beads">구슬 고리 (울퉁불퉁)</option></select></label>

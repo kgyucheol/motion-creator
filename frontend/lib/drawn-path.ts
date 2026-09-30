@@ -53,3 +53,22 @@ export function snapToCircle(x: number, z: number, center: number[], radius: num
   if (distance < 1e-9 || Math.abs(distance - radius) > tolerance) return null;
   return { x: center[0] + dx / distance * radius, z: center[1] + dz / distance * radius };
 }
+
+/**
+ * Turn planned waypoints back into drawn points to edit by hand. A straight stage becomes its end
+ * point with the stage's step count; arc-like stages (pry, wrap) keep every step so the arc survives.
+ */
+export function waypointsToPoints(waypoints: Waypoint[]): DrawnPoint[] {
+  if (!waypoints.length) return [];
+  const points: DrawnPoint[] = [{ x: waypoints[0].tcp[0], z: waypoints[0].tcp[1], angle: waypoints[0].angle, steps: null }];
+  for (let i = 1; i < waypoints.length; i++) {
+    const w = waypoints[i];
+    const arc = w.stage === 'pry' || w.stage === 'wrap';
+    let end = i;
+    if (!arc) while (end + 1 < waypoints.length && waypoints[end + 1].stage === w.stage) end++;
+    const last = waypoints[end];
+    points.push({ x: last.tcp[0], z: last.tcp[1], angle: last.angle, steps: end - i + 1 });
+    i = end;
+  }
+  return points;
+}

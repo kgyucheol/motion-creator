@@ -25,3 +25,14 @@ test('snapping pulls a nearby point onto the circle only within the tolerance', 
   assert.deepEqual(snapToCircle(.105, 0, [0, 0], .1, .01), { x: .1, z: 0 });
   assert.equal(snapToCircle(.13, 0, [0, 0], .1, .01), null);
 });
+
+test('planned waypoints become editable points that replay the same path', async () => {
+  const { waypointsToPoints } = await import('../lib/drawn-path.ts');
+  const w = (stage, x, angle = 0) => ({ stage, label: stage, tcp: [x, 0], angle, duration: .2 });
+  const planned = [w('start', 0), w('approach', .02), w('approach', .04), w('pry', .05, .1), w('pry', .06, .2), w('lift', .08, .2), w('lift', .1, .2)];
+  const points = waypointsToPoints(planned);
+  assert.deepEqual(points.map(p => [p.tcp?.[0] ?? p.x, p.steps]), [[0, null], [.04, 2], [.05, 1], [.06, 1], [.1, 2]]);
+  const replay = drawnWaypoints(points, { stepM: 1, stepDeg: 90, speedMS: 1, turnDegS: 90, minStepS: .1 });
+  assert.deepEqual(replay.map(r => r.tcp[0]).map(v => +v.toFixed(3)), planned.map(p => p.tcp[0]));
+  assert.deepEqual(replay.map(r => +r.angle.toFixed(3)), planned.map(p => p.angle));
+});

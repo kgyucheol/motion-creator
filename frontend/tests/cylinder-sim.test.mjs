@@ -39,3 +39,14 @@ test('a smooth soft cylinder keeps a round outline at its radius', () => {
   const radii = outline.map(([x, z]) => Math.hypot(x - hx, z - hz));
   assert.ok(Math.max(...radii) < .0675 + .003 && Math.min(...radii) > .0675 - .012, `outline radii ${Math.min(...radii)}..${Math.max(...radii)}`);
 });
+
+test('every lab demo still lifts the cylinder out (re-run scripts/cylinder_lab_demos.py after planner changes)', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { restingScene } = await import('../lib/cylinder-sim.ts');
+  const demos = JSON.parse(readFileSync(new URL('../lib/cylinder-demos.json', import.meta.url), 'utf8'));
+  assert.ok(demos.length >= 3);
+  for (const demo of demos) {
+    const result = simulateScoop(restingScene(demo.base_scene), demo.blades, undefined, demo.options);
+    assert.ok(result.success, `${demo.id}: ${result.reason}`);
+  }
+});

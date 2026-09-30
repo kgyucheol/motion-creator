@@ -334,3 +334,11 @@ export function settleScene(scene: Scene, seconds = 1.5, dt = 1 / 240, soft: Sof
 }
 
 export { squashUnder as softSquashMm };
+
+/** The scene at rest with its target frame moved along (mirrors cylinder_extraction.with_positions). */
+export function restingScene<T extends Scene>(source: T): T {
+  const rest = settleScene(source);
+  const [ox, oz] = source.frame.origin, [nx, nz] = rest.target.center, [ux, uz] = source.frame.up;
+  return { ...source, ...rest,
+    frame: { ...source.frame, origin: [nx, nz], rim_up_m: source.frame.rim_up_m - ((nx - ox) * ux + (nz - oz) * uz) } };
+}
