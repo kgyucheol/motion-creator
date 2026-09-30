@@ -65,10 +65,49 @@ const view = { cx: 0, cz: 0, size: .9 };
 function stored(): Stored { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}'); } catch { return {}; } }
 function remember(values: Stored) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...stored(), ...values })); } catch { /* optional */ } }
 const drawKey = () => `${projectName}|${scene?.target_id ?? ''}`;
+
+// ---------------------------------------------------------------- saved form sections ("저장" next to a heading)
+
+const SAVED_KEY = 'motioncreator-cylinder-lab-saved-v1';
+const SAVE_GROUPS: Record<string, string[]> = {
+  grasp: ['grasp-side', 'show-grasp', 'snap', 'snap-wedge'], // the blade face (flip) belongs to each drawing
+  stepping: ['step-m', 'step-deg', 'speed', 'turn', 'min-step'],
+  physics: ['material', 'soft-shape', 'soft-mm', 'soft-scope', 'mass', 'force', 'tracking'],
+  friction: ['mu-cylinder', 'mu-blade', 'mu-wall', 'rolling'],
+};
+type SavedSections = Partial<Record<string, Record<string, string | boolean | number>>>;
+function savedSections(): SavedSections { try { return JSON.parse(localStorage.getItem(SAVED_KEY) ?? '{}'); } catch { return {}; } }
+
+/** Store the section's current inputs; the page starts from them next time it opens. */
+function saveSection(group: string, button: HTMLElement) {
+  const values: Record<string, string | boolean | number> = group === 'auto' ? readParams()
+    : Object.fromEntries(SAVE_GROUPS[group].map(id => { const el = input(id); return [id, el.type === 'checkbox' ? el.checked : el.value]; }));
+  try {
+    localStorage.setItem(SAVED_KEY, JSON.stringify({ ...savedSections(), [group]: values }));
+  } catch { status('브라우저 저장소를 쓸 수 없어 저장하지 못했습니다.'); return; }
+  button.textContent = '저장됨'; button.classList.add('saved');
+  setTimeout(() => { button.textContent = '저장'; button.classList.remove('saved'); }, 1500);
+  status('저장했습니다. 다음에 페이지를 열면 이 값으로 시작합니다.');
+}
+
+/** Put saved section values back into the form (the auto parameters are applied in renderParams). */
+function restoreSections() {
+  const saved = savedSections();
+  for (const [group, ids] of Object.entries(SAVE_GROUPS)) {
+    const values = saved[group];
+    if (!values) continue;
+    for (const id of ids) {
+      if (!(id in values)) continue;
+      const el = input(id);
+      if (el.type === 'checkbox') el.checked = Boolean(values[id]); else el.value = String(values[id]);
+      el.dispatchEvent(new Event('change'));
+    }
+  }
+}
 function saveDrawing() {
   const drawings = stored().drawings ?? {};
   drawings[drawKey()] = { points, flip: input('flip').value === '1' };
-  remember({ drawings, stepping: stepping() });
+  remember({ drawings });
 }
 function loadDrawing() {
   const saved = (stored().drawings ?? {})[drawKey()];
@@ -102,7 +141,7 @@ async function loadScene(targetId: string | undefined) {
   baseScene = response.scene; defaults = response.defaults; limits = response.limits;
   $<HTMLSelectElement>('target').innerHTML = response.targets.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
   $<HTMLSelectElement>('target').value = baseScene.target_id;
-  renderParams({ ...defaults, ...Object.fromEntries(Object.entries(stored().params ?? {}).filter(([key]) => key in defaults)) });
+  renderParams({ ...defaults, ...Object.fromEntries(Object.entries(savedSections().auto ?? {}).filter(([key]) => key in defaults)) as Record<string, number> });
   syncPitch();
   status('정착 중…');
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -217,7 +256,6 @@ async function run() {
       simBlades = [{ waypoints: drawnWaypoints(points, stepping()), flip: input('flip').value === '1', side: 'drawn' }];
     } else {
       const params = readParams();
-      remember({ params });
       status('궤적 계획 중…');
       const planned = await api<{ scene: LabScene; path: AutoPath }>('cylinder-lab/plan', {
         scene: baseScene, params, positions: Object.fromEntries(scene.circles.map(c => [c.id, c.center])) });
@@ -248,9 +286,6 @@ async function simulate(blades: BladePath[]) {
   $<HTMLButtonElement>('run').disabled = true;
   try {
     const { soft, friction, cylinderMassKg } = physicsOptions();
-    remember({ physics: { material: $<HTMLSelectElement>('material').value, softMm: num('soft-mm'), scope: $<HTMLSelectElement>('soft-scope').value,
-      shape: $<HTMLSelectElement>('soft-shape').value, force: num('force'), tracking: num('tracking'),
-      muCylinder: friction.cylinder, muBlade: friction.blade, muWall: friction.wall, rolling: friction.rolling, mass: input('mass').value } });
     status(soft ? '말랑한 원통으로 물리 계산 중… (몇 초 걸립니다)' : '물리 계산 중…');
     await new Promise(resolve => setTimeout(resolve, 20));
     result = simulateScoop(scene, simBlades, NSE_SCOOP_PROFILE,
@@ -850,16 +885,6 @@ function tick(time: number) {
 
 async function init() {
   const saved = stored();
-  applyStepping(saved.stepping);
-  if (saved.physics) {
-    $<HTMLSelectElement>('material').value = saved.physics.material ?? 'rigid'; input('soft-mm').value = String(saved.physics.softMm ?? 5);
-    $<HTMLSelectElement>('soft-scope').value = saved.physics.scope ?? 'neighbors'; input('force').value = String(saved.physics.force ?? 60);
-    input('tracking').value = String(saved.physics.tracking ?? 10);
-    $<HTMLSelectElement>('soft-shape').value = saved.physics.shape ?? 'smooth';
-    input('mu-cylinder').value = String(saved.physics.muCylinder ?? .7); input('mu-blade').value = String(saved.physics.muBlade ?? .5);
-    input('mu-wall').value = String(saved.physics.muWall ?? .7); input('rolling').value = String(saved.physics.rolling ?? 0);
-    input('mass').value = saved.physics.mass ?? '';
-  }
   const names = await api<string[]>('saved');
   const select = $<HTMLSelectElement>('project');
   select.innerHTML = names.map(name => `<option value="${name}">${name.replace(/\/project\.json$/, '')}</option>`).join('');
@@ -867,7 +892,10 @@ async function init() {
   select.onchange = () => { if (!select.value) return; renderDemos(); select.querySelector('option[data-demo]')?.remove(); void loadProject(select.value).catch(error => status(error.message)); };
   $<HTMLSelectElement>('target').onchange = event => void loadScene((event.target as HTMLSelectElement).value).catch(error => status(error.message));
   $('run').onclick = () => void run();
-  $('reset').onclick = () => { remember({ params: {} }); renderParams(defaults); };
+  $('reset').onclick = () => renderParams(defaults);
+  document.querySelectorAll<HTMLElement>('.save-section').forEach(button => button.addEventListener('click', event => {
+    event.preventDefault(); event.stopPropagation(); saveSection(button.dataset.save!, button);
+  }));
   $('to-draw').onclick = copyToDrawing;
   $('pick-mode').onclick = () => setPickMode(!pickMode);
   input('box-pitch').addEventListener('change', () => void applyPitch(num('box-pitch')));
@@ -936,6 +964,7 @@ async function init() {
   window.addEventListener('resize', draw);
   setupTerms();
   setupCanvas();
+  restoreSections();
   setMode(saved.mode === 'auto' ? 'auto' : 'draw');
   requestAnimationFrame(tick);
   if (select.value) await loadProject(select.value);
