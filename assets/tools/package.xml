@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>nse_gripper</name>
+  <version>0.1.0</version>
+  <description>NSE scoop / spatula grippers with Unitree G1 docking adapters (generated from nse-assembly-mm.step).</description>
+  <maintainer email="jykim2@superbin.co.kr">NSE</maintainer>
+  <license>Proprietary</license>
+  <export/>
+</package>
