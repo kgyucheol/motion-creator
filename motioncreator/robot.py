@@ -157,6 +157,13 @@ class Robot:
             fingerprint_xml = copy.deepcopy(self.xml)
             for element in fingerprint_xml.iter():
                 element.attrib.pop('content_type', None)
+            # Mesh paths are absolute; drop the checkout root so every clone gets the same identity.
+            local_xml = copy.deepcopy(fingerprint_xml)
+            root = f'{ROOT}/'
+            for element in fingerprint_xml.iter():
+                for key, value in element.attrib.items():
+                    if value.startswith(root):
+                        element.set(key, value[len(root):])
             fingerprint_source = ET.tostring(fingerprint_xml)
         self.fingerprint = hashlib.sha256(fingerprint_source).hexdigest()
         self.compatible_fingerprints = {self.fingerprint}
@@ -175,7 +182,9 @@ class Robot:
             })
             # Projects created by the first gripper-model load in older builds
             # may contain MuJoCo's inferred STL content_type attributes.
-            legacy_xml = copy.deepcopy(fingerprint_xml)
+            # Projects saved before the paths were made relative carry this checkout's absolute paths.
+            self.compatible_fingerprints.add(hashlib.sha256(ET.tostring(local_xml)).hexdigest())
+            legacy_xml = copy.deepcopy(local_xml)
             for mesh in legacy_xml.findall('./asset/mesh'):
                 mesh.set('content_type', 'model/stl')
             self.compatible_fingerprints.add(hashlib.sha256(ET.tostring(legacy_xml)).hexdigest())
