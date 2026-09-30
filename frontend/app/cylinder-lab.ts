@@ -4,6 +4,7 @@ import { autoSteps, drawnWaypoints, pointAngles, snapToCircle, waypointsToPoints
 import DEMOS from '../lib/cylinder-demos.json';
 import { termFor } from '../lib/lab-glossary';
 import { EDITOR_GRASP_KEY, editorGraspCoefficients, sectionGrasps, type SectionGrasp } from '../lib/lab-grasp';
+import { numberCylinders, type Attempt } from '../lib/lab-batch';
 
 type Demo = { id: string; name: string; description: string; source: string; params: Record<string, number>; base_scene: LabScene;
   blades: BladePath[]; stage_steps: Record<string, number>;
@@ -42,6 +43,11 @@ let autoPath: AutoPath | null = null;
 let simBlades: BladePath[] = [];
 let result: SimResult | null = null;
 let frame = 0, playing = false, lastTick = 0;
+// The all-cylinder test: attempts so far, the one being viewed, and the worker running it.
+let attempts: Attempt[] = [];
+let viewing: Attempt | null = null;
+let worker: Worker | null = null;
+let outcome: { stoppedAt: { order: number; name: string } | null; total: number } | null = null; // set when a run finishes
 const view = { cx: 0, cz: 0, size: .9 };
 
 // ---------------------------------------------------------------- storage
@@ -92,7 +98,7 @@ async function loadScene(targetId: string | undefined) {
   scene = settled(baseScene);
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05; view.size = .9;
   loadDrawing(); resetHistory();
-  autoPath = null; clearResult();
+  autoPath = null; clearResult(); attempts = []; outcome = null; renderBatch();
   renderGraspInfo(); renderPoints(); draw(); status('');
 }
 
@@ -183,7 +189,8 @@ function redo() {
 }
 function resetHistory() { undoStack.length = 0; redoStack.length = 0; }
 function clearResult() {
-  result = null; frame = 0; playing = false;
+  result = null; frame = 0; playing = false; viewing = null;
+  document.querySelectorAll('.batch-row.viewing').forEach(row => row.classList.remove('viewing'));
   $('result').className = 'result'; $('result').textContent = '아직 실행하지 않았습니다.';
   input('scrub').max = '0';
 }
@@ -212,17 +219,23 @@ async function run() {
   } finally { $<HTMLButtonElement>('run').disabled = false; }
 }
 
+/** The page's physics settings as simulator options. */
+function physicsOptions() {
+  const soft = $<HTMLSelectElement>('material').value === 'soft'
+    ? { ...DEFAULT_SOFTNESS, mmPer10N: Math.max(.5, num('soft-mm')), scope: $<HTMLSelectElement>('soft-scope').value as 'neighbors' | 'all',
+      shape: $<HTMLSelectElement>('soft-shape').value as SoftShape } : null;
+  const friction = { cylinder: Math.max(0, num('mu-cylinder')), blade: Math.max(0, num('mu-blade')), wall: Math.max(0, num('mu-wall')),
+    rolling: Math.max(0, num('rolling')) };
+  return { soft, friction, forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4 };
+}
+
 /** Run the physics for `blades` with the page's physics settings and start the replay. */
 async function simulate(blades: BladePath[]) {
   if (!scene) return;
   simBlades = blades;
   $<HTMLButtonElement>('run').disabled = true;
   try {
-    const soft = $<HTMLSelectElement>('material').value === 'soft'
-      ? { ...DEFAULT_SOFTNESS, mmPer10N: Math.max(.5, num('soft-mm')), scope: $<HTMLSelectElement>('soft-scope').value as 'neighbors' | 'all',
-        shape: $<HTMLSelectElement>('soft-shape').value as SoftShape } : null;
-    const friction = { cylinder: Math.max(0, num('mu-cylinder')), blade: Math.max(0, num('mu-blade')), wall: Math.max(0, num('mu-wall')),
-      rolling: Math.max(0, num('rolling')) };
+    const { soft, friction } = physicsOptions();
     remember({ physics: { material: $<HTMLSelectElement>('material').value, softMm: num('soft-mm'), scope: $<HTMLSelectElement>('soft-scope').value,
       shape: $<HTMLSelectElement>('soft-shape').value, force: num('force'), tracking: num('tracking'),
       muCylinder: friction.cylinder, muBlade: friction.blade, muWall: friction.wall, rolling: friction.rolling } });
@@ -273,6 +286,7 @@ function draw() {
   ctx.fillStyle = '#0e141b'; ctx.fillRect(0, 0, rect.width, rect.height);
   if (!scene) return;
   const current = result?.frames[frame];
+  const shown: LabScene = viewing?.scene ?? scene; // an attempt of the all-cylinder test shows its own pile
   // grid every 5 cm in the target frame
   const { c, far, up } = frameAxes();
   ctx.strokeStyle = '#18222c'; ctx.lineWidth = 1;
@@ -287,9 +301,10 @@ function draw() {
     ctx.save(); ctx.translate(X(center[0]), Z(center[1])); ctx.rotate(-angle);
     ctx.fillStyle = fill; ctx.fillRect(-half[0] * scale, -half[1] * scale, half[0] * 2 * scale, half[1] * 2 * scale); ctx.restore();
   };
-  for (const wall of scene.walls) quad(wall.center, wall.half, wall.angle, '#8a6b4a');
-  for (const circle of scene.circles) {
-    const fill = circle.id === scene.target_id ? '#e8a33d' : '#56708a';
+  for (const wall of shown.walls) quad(wall.center, wall.half, wall.angle, '#8a6b4a');
+  const order = input('show-order').checked ? new Map(numberCylinders(scene).map(n => [n.id, n.order])) : null;
+  for (const circle of shown.circles) {
+    const fill = circle.id === shown.target_id ? '#e8a33d' : '#56708a';
     const shape = current?.shapes[circle.id];
     if (shape) { // soft: the outline traced over the ring of discs
       ctx.fillStyle = fill;
@@ -302,7 +317,18 @@ function draw() {
     ctx.beginPath(); ctx.arc(X(x), Z(z), circle.radius * scale, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
     ctx.strokeStyle = '#0e141b'; ctx.beginPath(); ctx.moveTo(X(x), Z(z)); ctx.lineTo(X(x + Math.cos(a) * circle.radius), Z(z + Math.sin(a) * circle.radius)); ctx.stroke();
   }
-  for (const r of scene.rectangles) {
+  if (order) {
+    ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const circle of shown.circles) {
+      const pose = current?.bodies[circle.id], n = order.get(circle.id);
+      if (!n) continue;
+      const [x, z] = pose ? [pose.x, pose.z] : circle.center;
+      ctx.fillStyle = '#0e141bcc'; ctx.beginPath(); ctx.arc(X(x), Z(z), 11, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#fff3c4'; ctx.fillText(`#${n}`, X(x), Z(z));
+    }
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+  for (const r of shown.rectangles) {
     const pose = current?.bodies[r.id];
     quad(pose ? [pose.x, pose.z] : r.center, r.half, pose ? pose.angle : r.angle, '#56708a');
   }
@@ -328,7 +354,13 @@ function draw() {
       ctx.font = '11px sans-serif'; ctx.fillText(side === 'left' ? 'L 파지점' : 'R 파지점', px - 22, pz + (side === 'left' ? -10 : 18));
     }
   }
-  if (mode === 'draw') {
+  if (viewing) {
+    for (const plan of viewing.paths) {
+      ctx.fillStyle = '#d9f'; ctx.strokeStyle = '#d9f5'; ctx.beginPath();
+      plan.waypoints.forEach((w, i) => (i ? ctx.lineTo : ctx.moveTo).call(ctx, X(w.tcp[0]), Z(w.tcp[1]))); ctx.stroke();
+      for (const w of plan.waypoints) { ctx.beginPath(); ctx.arc(X(w.tcp[0]), Z(w.tcp[1]), 2, 0, Math.PI * 2); ctx.fill(); }
+    }
+  } else if (mode === 'draw') {
     if (input('snap').checked) {
       ctx.setLineDash([3, 4]); ctx.strokeStyle = '#ffd16655'; ctx.beginPath();
       ctx.arc(X(scene.target.center[0]), Z(scene.target.center[1]), Math.max(0, snapRadius()) * scale, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
@@ -615,7 +647,7 @@ async function loadDemo(id: string) {
   await new Promise(resolve => setTimeout(resolve, 10));
   scene = settled(baseScene);
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05; view.size = .9;
-  loadDrawing(); resetHistory();
+  loadDrawing(); resetHistory(); attempts = []; outcome = null; renderBatch();
   renderParams({ ...defaults, ...demo.params });
   const soft = demo.options.soft, friction = demo.options.friction ?? {};
   $<HTMLSelectElement>('material').value = soft ? 'soft' : 'rigid';
@@ -641,6 +673,72 @@ function copyToDrawing() {
   setMode('draw');
   changed();
   status(autoPath.blades.length > 1 ? '왼손 날의 경로만 옮겼습니다(그리기는 날 하나를 씁니다).' : '계획된 경로를 그린 점으로 옮겼습니다. 점을 고친 뒤 시뮬레이션하세요.');
+}
+
+// ---------------------------------------------------------------- all-cylinder test
+
+/** The path to carry over: the drawn path in the draw tab, the planned one in the auto tab. */
+function batchPaths(): BladePath[] | null {
+  if (mode === 'draw') return points.length >= 2 ? [{ waypoints: drawnWaypoints(points, stepping()), flip: input('flip').value === '1', side: 'drawn' }] : null;
+  return autoPath?.blades ?? null;
+}
+
+function renderBatch() {
+  $('batch-panel').hidden = !attempts.length && !worker;
+  const plan = scene ? numberCylinders(scene) : [];
+  const byId = new Map(attempts.map(a => [a.id, a]));
+  $('batch-table').innerHTML = plan.map(item => {
+    const attempt = byId.get(item.id);
+    const state = attempt ? (attempt.result.success ? '<b class="ok">성공</b>' : '<b class="fail">실패</b>') : '<span class="pending">—</span>';
+    const detail = attempt ? `들림 ${(attempt.result.liftM * 1000).toFixed(0)} mm${attempt.result.maxSquashMm > 0 ? ` · 찌그러짐 ${attempt.result.maxSquashMm.toFixed(0)} mm` : ''}` : '';
+    return `<button class="batch-row ${viewing?.id === item.id ? 'viewing' : ''}" data-id="${item.id}" ${attempt ? '' : 'disabled'}><b>#${item.order}</b><span>${item.name}</span>${state}<span>${detail}</span>`
+      + (attempt && !attempt.result.success ? `<small>${attempt.result.reason}</small>` : '') + '</button>';
+  }).join('');
+  const extracted = attempts.filter(a => a.result.success).length;
+  $('batch-summary').textContent = outcome
+    ? `${extracted} / ${outcome.total}개 꺼냄${outcome.stoppedAt ? ` · #${outcome.stoppedAt.order} ${outcome.stoppedAt.name}에서 실패해 멈춤` : ' · 모두 꺼냄'}`
+    : worker ? `${attempts.length}번째까지 시험함…` : attempts.length ? `중지함 · ${attempts.length}개 시험` : '';
+}
+
+function runAllCylinders() {
+  if (!scene || worker) return;
+  const paths = batchPaths();
+  if (!paths) { $('batch-status').textContent = mode === 'draw' ? '점을 두 개 이상 그리세요.' : '먼저 자동 계획을 실행하세요.'; return; }
+  const referenceId = scene.target_id, total = scene.circles.length;
+  attempts = []; outcome = null; clearResult();
+  worker = new Worker(new URL('./cylinder-batch.worker.ts', import.meta.url), { type: 'module' });
+  $<HTMLButtonElement>('batch-run').disabled = true; $<HTMLButtonElement>('batch-stop').disabled = false;
+  $('batch-status').textContent = `#1 시험 중… (0/${total})`;
+  renderBatch();
+  const finish = () => { worker?.terminate(); worker = null; $<HTMLButtonElement>('batch-run').disabled = false; $<HTMLButtonElement>('batch-stop').disabled = true; };
+  worker.onmessage = (event: MessageEvent) => {
+    const data = event.data;
+    if (data.type === 'attempt') {
+      attempts.push(data.attempt);
+      $('batch-status').textContent = data.attempt.result.success ? `#${data.attempt.order + 1} 시험 중… (${attempts.length}/${data.total})` : '';
+      renderBatch();
+    } else if (data.type === 'done') {
+      finish(); $('batch-status').textContent = '';
+      outcome = { stoppedAt: data.stoppedAt, total: data.total };
+      renderBatch();
+      const last = attempts[attempts.length - 1];
+      if (last) viewAttempt(last.id);
+    } else if (data.type === 'error') {
+      finish(); $('batch-status').textContent = data.message;
+    }
+  };
+  worker.postMessage({ scene, paths, referenceId, options: physicsOptions() });
+}
+
+function viewAttempt(id: string) {
+  const attempt = attempts.find(a => a.id === id);
+  if (!attempt) return;
+  clearResult();
+  viewing = attempt; simBlades = attempt.paths; result = attempt.result;
+  frame = 0; input('scrub').max = String(result.frames.length - 1);
+  showResult(); renderBatch(); playing = true;
+  document.querySelectorAll('.batch-row').forEach(row => row.classList.toggle('viewing', (row as HTMLElement).dataset.id === id));
+  status(`#${attempt.order} ${attempt.name} 재생`);
 }
 
 function tick(time: number) {
@@ -677,6 +775,18 @@ async function init() {
   $('run').onclick = () => void run();
   $('reset').onclick = () => { remember({ params: {} }); renderParams(defaults); };
   $('to-draw').onclick = copyToDrawing;
+  $('batch-run').onclick = runAllCylinders;
+  $('batch-stop').onclick = () => {
+    worker?.terminate(); worker = null;
+    $<HTMLButtonElement>('batch-run').disabled = false; $<HTMLButtonElement>('batch-stop').disabled = true;
+    $('batch-status').textContent = `중지했습니다 (${attempts.length}개 시험).`;
+    renderBatch();
+  };
+  input('show-order').addEventListener('change', draw);
+  $('batch-table').addEventListener('click', event => {
+    const row = (event.target as HTMLElement).closest('.batch-row') as HTMLElement | null;
+    if (row?.dataset.id) viewAttempt(row.dataset.id);
+  });
   renderDemos();
   $<HTMLSelectElement>('demo-select').addEventListener('change', event => {
     const id = (event.target as HTMLSelectElement).value;
