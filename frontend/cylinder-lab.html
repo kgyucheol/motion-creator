@@ -37,10 +37,12 @@ select,input{width:100%}
 .steps div{padding:3px 6px;border-bottom:1px solid #1d2731;display:flex;justify-content:space-between;gap:6px}
 .steps div.now{background:#203832;color:#a4f0d3}
 .points{display:grid;gap:4px}
-.point{display:grid;grid-template-columns:22px 1fr 58px 44px 22px;gap:4px;align-items:center;font-size:11px;padding:3px;border:1px solid transparent;border-radius:4px}
+.point{display:grid;grid-template-columns:14px 20px 1fr 58px 44px 22px;gap:4px;align-items:center;font-size:11px;padding:3px;border:1px solid transparent;border-radius:4px}
 .point.selected{border-color:#80efc5;background:#15302a}.point input{padding:3px 4px;font-size:11px}.point button{padding:2px 4px;font-size:11px}
 .point .xy{color:var(--muted);font-variant-numeric:tabular-nums}
-.points-head{display:grid;grid-template-columns:22px 1fr 58px 44px 22px;gap:4px;font-size:10px;color:var(--muted)}
+.drag-handle{cursor:grab;color:#6f8699;font-size:12px;line-height:1;user-select:none;text-align:center}.drag-handle:active{cursor:grabbing}
+.point.dragging{opacity:.4}.point.drop-before{box-shadow:0 -2px 0 #ffd166}.point.drop-after{box-shadow:0 2px 0 #ffd166}
+.points-head{display:grid;grid-template-columns:14px 20px 1fr 58px 44px 22px;gap:4px;font-size:10px;color:var(--muted)}
 .term-icon{display:inline-grid;place-items:center;width:15px;height:15px;min-height:0;margin:0 0 0 4px;padding:0;border:1px solid #4d6173;border-radius:50%;background:transparent;color:#8fb3c9;font:italic 600 10px Georgia,serif;line-height:1;vertical-align:1px;cursor:help}
 .term-icon:hover,.term-icon[aria-expanded=true]{border-color:#80efc5;color:#a4f0d3;background:#1b332d}
 .term-pop{position:fixed;z-index:50;max-width:290px;padding:10px 12px;border:1px solid #4d6173;border-radius:7px;background:#1b2631;box-shadow:0 10px 26px #000a;font-size:12px;line-height:1.55;color:#dce5ee}
@@ -122,9 +124,9 @@ select,input{width:100%}
     </section>
     <section id="points-panel">
       <h2>그린 점 <span id="point-count"></span></h2>
-      <div class="points-head"><span>#</span><span>먼 쪽 / 위 (mm)</span><span>각도 (°)</span><span>단계</span><span></span></div>
+      <div class="points-head"><span></span><span>#</span><span>먼 쪽 / 위 (mm)</span><span>각도 (°)</span><span>단계</span><span></span></div>
       <div class="points" id="points"></div>
-      <p class="hint">좌표는 대상 원통 중심 기준(먼 쪽 = 상자 안쪽 위로, 위 = 상자 입구 방향)입니다. 각도·단계를 비우면 자동입니다. 단계는 앞 점에서 이 점까지를 나누는 수입니다.</p>
+      <p class="hint">좌표는 대상 원통 중심 기준(먼 쪽 = 상자 안쪽 위로, 위 = 상자 입구 방향)입니다. 각도·단계를 비우면 자동입니다. 단계는 앞 점에서 이 점까지를 나누는 수입니다. 왼쪽 ⋮⋮를 끌어 순서를 바꿀 수 있습니다.</p>
     </section>
     <h2>단계</h2>
     <div class="steps" id="steps"></div>

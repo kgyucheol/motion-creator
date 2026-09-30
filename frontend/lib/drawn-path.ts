@@ -72,3 +72,11 @@ export function waypointsToPoints(waypoints: Waypoint[]): DrawnPoint[] {
   }
   return points;
 }
+
+/** Move the point at `from` so it ends up at index `to` (in the list without it), keeping the others in order. */
+export function movePoint(points: DrawnPoint[], from: number, to: number): DrawnPoint[] {
+  if (from < 0 || from >= points.length) return points;
+  const rest = points.filter((_, i) => i !== from);
+  const at = Math.max(0, Math.min(rest.length, to));
+  return [...rest.slice(0, at), points[from], ...rest.slice(at)];
+}

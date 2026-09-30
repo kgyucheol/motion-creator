@@ -36,3 +36,14 @@ test('planned waypoints become editable points that replay the same path', async
   assert.deepEqual(replay.map(r => r.tcp[0]).map(v => +v.toFixed(3)), planned.map(p => p.tcp[0]));
   assert.deepEqual(replay.map(r => +r.angle.toFixed(3)), planned.map(p => p.angle));
 });
+
+test('a drawn point can be moved to another place in the order', async () => {
+  const { movePoint } = await import('../lib/drawn-path.ts');
+  const p = ['a', 'b', 'c', 'd'].map((id, i) => ({ x: i, z: 0, angle: null, steps: null, id }));
+  const ids = list => list.map(q => q.id).join('');
+  assert.equal(ids(movePoint(p, 0, 2)), 'bcad');
+  assert.equal(ids(movePoint(p, 3, 0)), 'dabc');
+  assert.equal(ids(movePoint(p, 1, 1)), 'abcd');
+  assert.equal(ids(movePoint(p, 1, 9)), 'acdb');
+  assert.equal(movePoint(p, 7, 0), p);
+});

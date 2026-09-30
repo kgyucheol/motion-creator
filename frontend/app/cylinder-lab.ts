@@ -1,6 +1,6 @@
 // 2-D lab page: draw (or auto-plan) a TCP path in the cylinder cross-section and check it with Box2D.
 import { restingScene, simulateScoop, NSE_SCOOP_PROFILE, DEFAULT_SOFTNESS, type BladePath, type Scene, type SimResult, type SoftShape, type Waypoint } from '../lib/cylinder-sim';
-import { autoSteps, drawnWaypoints, pointAngles, snapToCircle, waypointsToPoints, type DrawnPoint, type DrawnStepping } from '../lib/drawn-path';
+import { autoSteps, drawnWaypoints, movePoint, pointAngles, snapToCircle, waypointsToPoints, type DrawnPoint, type DrawnStepping } from '../lib/drawn-path';
 import DEMOS from '../lib/cylinder-demos.json';
 import { termFor } from '../lib/lab-glossary';
 import { EDITOR_GRASP_KEY, editorGraspCoefficients, sectionGrasps, type SectionGrasp } from '../lib/lab-grasp';
@@ -199,7 +199,7 @@ function renderPoints() {
     const [a, b] = toLocal(p.x, p.z);
     const local = Math.round(wrap(angles[i] - farAngle) * 180 / Math.PI);
     const auto = i > 0 ? autoSteps(points, i, stepping()) : '';
-    return `<div class="point ${i === selected ? 'selected' : ''}" data-i="${i}"><b>${i + 1}</b><span class="xy">${(a * 1000).toFixed(0)} / ${(b * 1000).toFixed(0)}</span>`
+    return `<div class="point ${i === selected ? 'selected' : ''}" data-i="${i}"><span class="drag-handle" draggable="true" title="끌어서 순서 바꾸기" aria-label="${i + 1}번 점 순서 바꾸기">⋮⋮</span><b>${i + 1}</b><span class="xy">${(a * 1000).toFixed(0)} / ${(b * 1000).toFixed(0)}</span>`
       + `<input data-field="angle" type="number" step="1" placeholder="자동 ${local}" value="${p.angle === null ? '' : local}"/>`
       + `<input data-field="steps" type="number" min="1" step="1" ${i === 0 ? 'disabled' : ''} placeholder="${auto}" value="${p.steps ?? ''}"/>`
       + `<button data-field="delete" title="삭제">✕</button></div>`;
@@ -994,6 +994,44 @@ async function init() {
   $('points').addEventListener('change', event => {
     const target = event.target as HTMLInputElement, row = target.closest('.point') as HTMLElement | null;
     if (row && target.dataset.field) editPoint(Number(row.dataset.i), target.dataset.field, target.value);
+  });
+  // Reorder drawn points by dragging a row's handle onto another row (above or below its middle).
+  let dragFrom = -1;
+  const clearDrop = () => document.querySelectorAll('.point.drop-before, .point.drop-after').forEach(row => row.classList.remove('drop-before', 'drop-after'));
+  $('points').addEventListener('dragstart', event => {
+    const handle = (event.target as HTMLElement).closest('.drag-handle'), row = handle?.closest('.point') as HTMLElement | null;
+    if (!row || !event.dataTransfer) { event.preventDefault(); return; }
+    dragFrom = Number(row.dataset.i);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', String(dragFrom));
+    event.dataTransfer.setDragImage(row, 12, 12);
+    row.classList.add('dragging');
+  });
+  $('points').addEventListener('dragover', event => {
+    const row = (event.target as HTMLElement).closest('.point') as HTMLElement | null;
+    if (dragFrom < 0 || !row) return;
+    event.preventDefault();
+    const box = row.getBoundingClientRect(), after = event.clientY > box.top + box.height / 2;
+    clearDrop(); row.classList.add(after ? 'drop-after' : 'drop-before');
+  });
+  $('points').addEventListener('drop', event => {
+    const row = (event.target as HTMLElement).closest('.point') as HTMLElement | null;
+    if (dragFrom < 0 || !row) return;
+    event.preventDefault();
+    const over = Number(row.dataset.i), box = row.getBoundingClientRect(), after = event.clientY > box.top + box.height / 2;
+    const slot = over + (after ? 1 : 0), to = slot > dragFrom ? slot - 1 : slot;
+    if (to !== dragFrom) {
+      checkpoint();
+      const moving = points[dragFrom];
+      points = movePoint(points, dragFrom, to);
+      selected = points.indexOf(moving);
+      changed();
+      status(`${dragFrom + 1}번 점을 ${to + 1}번 자리로 옮겼습니다.`);
+    }
+  });
+  $('points').addEventListener('dragend', () => {
+    dragFrom = -1; clearDrop();
+    document.querySelectorAll('.point.dragging').forEach(row => row.classList.remove('dragging'));
   });
   $('points').addEventListener('click', event => {
     const target = event.target as HTMLElement, row = target.closest('.point') as HTMLElement | null;
