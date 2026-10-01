@@ -1258,6 +1258,7 @@ export default function Editor() {
       if (!physicsEnabled && !objectPhysicsEnabled && !forcePhysics) {
         setPreviewStreaming(true);
         setMessage('키프레임 모션을 구간별로 계산하며 재생합니다…');
+        let connectionFailed = false;
         try {
           await new Promise<void>((resolve, reject) => {
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1288,15 +1289,22 @@ export default function Editor() {
                 finish();
               } else finish(new Error(packet.message));
             };
-            socket.onerror = () => finish(new Error('키프레임 스트리밍 연결이 끊겼습니다.'));
-            socket.onclose = () => finish(request.cancelled ? undefined : new Error('키프레임 스트리밍이 중단되었습니다.'));
+            socket.onerror = () => { connectionFailed = true; finish(new Error('키프레임 스트리밍 연결이 끊겼습니다.')); };
+            socket.onclose = () => {
+              if (!request.cancelled) connectionFailed = true;
+              finish(request.cancelled ? undefined : new Error('키프레임 스트리밍이 중단되었습니다.'));
+            };
           });
           if (previewStream.current?.cancelled) return;
           setMessage('원본 모션 재생 · 물리 OFF');
         } catch (failure) {
           setPreview(null); setPlaying(false);
           if (state) applyState(state);
-          throw failure;
+          if (!connectionFailed || previewStream.current?.cancelled) throw failure;
+          setMessage('실시간 연결을 사용할 수 없어 키프레임 모션을 계산하는 중…');
+          const result = await api<Preview>('preview', { project, fps: 30 });
+          setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
+          setMessage('원본 모션 재생 · 실시간 연결 재시도 필요');
         } finally {
           previewStream.current = null;
           setPreviewStreaming(false);
@@ -1310,6 +1318,7 @@ export default function Editor() {
       policySource.current = state ? { state, pins: [...pins], anglePins: [...anglePins], frameIndex, dirty: poseDirty } : null;
       policyRequest.current = request;
       try {
+        let streamFallback = false;
         const startFrame = project?.keyframes[physicsStartFrame];
         setMessage(`${controllerLabel} · ${physicsStartFrame + 1}번 ${startFrame?.name ?? '키프레임'}부터 물리 계산 준비 중…`);
         let job = await api<PolicyJob>('policy-preview', { project, controller: objectPhysicsEnabled && !forcePhysics ? 'objects' : policyEnabled ? 'gear-sonic' : 'pd', start_frame_index: physicsStartFrame });
@@ -1320,7 +1329,8 @@ export default function Editor() {
         }
         setPolicyJob(job);
         if (job.status === 'running') {
-          job = await new Promise<PolicyJob>((resolve, reject) => {
+          try {
+            job = await new Promise<PolicyJob>((resolve, reject) => {
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
             const socket = new WebSocket(`${protocol}//${location.host}/api/policy-preview/${job.id}/stream`);
             request.socket = socket;
@@ -1349,7 +1359,24 @@ export default function Editor() {
             socket.onclose = () => finish(request.cancelled
               ? { id: job.id, status: 'cancelled', progress: 0 } : undefined,
               request.cancelled ? undefined : new Error('물리 스트리밍이 중단되었습니다.'));
-          });
+            });
+          } catch (streamFailure) {
+            if (!alive.current || request.cancelled) return;
+            streamFallback = true;
+            // A development proxy or an older server may reject the WebSocket while
+            // the simulation job itself continues. Keep the result reachable.
+            request.socket = undefined;
+            setStreamTime(null);
+            setMessage(`${controllerLabel} · 실시간 연결이 끊겨 계산 결과를 기다리는 중…`);
+            while (job.status === 'running') {
+              await new Promise(resolve => setTimeout(resolve, 500));
+              if (!alive.current || request.cancelled) return;
+              try { job = await api<PolicyJob>(`policy-preview/${job.id}`); }
+              catch { throw streamFailure; }
+              setPolicyJob(job);
+              setMessage(`${controllerLabel} · 계산 ${Math.round(job.progress * 100)}% · 실시간 연결 재시도 필요`);
+            }
+          }
         }
         if (!alive.current || request.cancelled || job.status === 'cancelled') return;
         if (job.status !== 'completed') throw new Error(job.message || '물리 계산에 실패했습니다.');
@@ -1371,7 +1398,7 @@ export default function Editor() {
         const gripText = grip ? ` · 양손 ${grip.bilateral_contact ? '접촉' : '접촉 실패'} · 힘 L ${grip.left.max_normal_n.toFixed(1)} / R ${grip.right.max_normal_n.toFixed(1)} N${grip.force_limit_exceeded ? ' · 힘 상한 초과' : ''}` : '';
         const interaction = summary.interaction;
         const interactionText = interaction ? ` · TCP ${interaction.max_tcp_error_mm.toFixed(1)} mm / ${interaction.max_orientation_error_deg.toFixed(1)}° · 접촉 L ${interaction.max_contact_force_n.left.toFixed(1)} / R ${interaction.max_contact_force_n.right.toFixed(1)} N${interaction.force_limit_exceeded ? ' · 힘 상한 중단' : ''}` : '';
-        setMessage(`${controllerLabel} ${outcome} · ${physicsStartFrame + 1}번 키프레임부터 ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°${gripText}${interactionText}`);
+        setMessage(`${controllerLabel} ${outcome} · ${physicsStartFrame + 1}번 키프레임부터 ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°${gripText}${interactionText}${streamFallback ? ' · 실시간 연결 실패로 결과 재생' : ''}`);
       } catch (failure) {
         if (request.id) await api(`policy-preview/${request.id}/cancel`, {}).catch(() => {});
         restorePolicySource();
