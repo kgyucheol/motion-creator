@@ -5,6 +5,7 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { controlKey, controlSelection } from './body-groups.ts';
 import { canMirrorSelection, isJointPairSelection } from './pose-transforms.ts';
 import { normalizedObjectSize, normalizedSceneAsset, type CandidateGraspPoints, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
+import type { LabPathPreview, HandSide } from './lab-path-apply.ts';
 
 export type PoseState = {
   model_id?: string;
@@ -139,6 +140,7 @@ export class RobotScene {
   gripMarkerUV: { left: number[]; right: number[] } | null = null;
   gripMarkers: Record<'left' | 'right', THREE.Mesh>;
   candidateGraspMarkers: Record<'left' | 'right', THREE.Group>;
+  labPathPreview = new THREE.Group();
   gripPads: Record<'left' | 'right', THREE.Mesh>;
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
@@ -337,6 +339,7 @@ export class RobotScene {
       marker.traverse(node => { node.renderOrder = 6; });
       marker.visible = false; this.scene.add(marker); return [side, marker];
     })) as unknown as Record<'left' | 'right', THREE.Group>;
+    this.scene.add(this.labPathPreview);
     this.gripPads = Object.fromEntries((['left', 'right'] as const).map(side => {
       const color = side === 'left' ? '#42e5bc' : '#ff9e45';
       const pad = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({
@@ -986,6 +989,36 @@ export class RobotScene {
         marker.position.fromArray(points[side]);
         marker.quaternion.fromArray(points.orientation[side]);
       }
+    }
+    this.dirty = true;
+  }
+  setLabPathPreview(preview: LabPathPreview | null) {
+    this.labPathPreview.traverse(node => {
+      if (node instanceof THREE.Mesh || node instanceof THREE.Line) {
+        node.geometry.dispose();
+        (Array.isArray(node.material) ? node.material : [node.material]).forEach(material => material.dispose());
+      }
+    });
+    this.labPathPreview.clear();
+    if (preview) for (const side of ['left', 'right'] as HandSide[]) {
+      const track = preview.tracks[side];
+      if (!track) continue;
+      const color = side === 'left' ? 0x55e7c1 : 0xffbd70;
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(track.points.map(point =>
+        new THREE.Vector3().fromArray(point.position))), new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity: .9 }));
+      line.renderOrder = 5;
+      this.labPathPreview.add(line);
+      for (const point of track.points.filter((value, index) => index === 0 || value.anchor)) {
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(point.time === 0 ? .023 : .009, 12, 8),
+          new THREE.MeshBasicMaterial({ color, depthTest: false }));
+        marker.position.fromArray(point.position); marker.renderOrder = 6;
+        this.labPathPreview.add(marker);
+      }
+      const axes = new THREE.AxesHelper(.09);
+      axes.position.fromArray(track.grasp.position);
+      axes.quaternion.fromArray(track.grasp.quaternion_xyzw);
+      axes.renderOrder = 6;
+      this.labPathPreview.add(axes);
     }
     this.dirty = true;
   }

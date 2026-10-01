@@ -132,6 +132,20 @@ class GroupSolveInput(PoseInput):
     retry_from_presets: bool = False
 
 
+class LabPathTarget(BaseModel):
+    model_config = {'extra': 'forbid'}
+    targets: dict[str, list[float]]
+    orientations: dict[str, list[float]]
+
+
+class LabPathSolveInput(PoseInput):
+    model_config = {'extra': 'forbid'}
+    tools: tuple[str, str]
+    pins: list[str] = Field(default_factory=lambda: list(FEET))
+    angle_pins: list[str] = Field(default_factory=list)
+    waypoints: list[LabPathTarget] = Field(min_length=1, max_length=100)
+
+
 class GroupPresetInput(BaseModel):
     id: str | None = None
     name: str
@@ -442,6 +456,41 @@ def cylinder_lab_scene(payload: CylinderSceneInput):
         scene = scene_2d(payload.project, payload.target_id)
         return {'scene': scene, 'defaults': DEFAULT_PARAMS, 'limits': LIMITS,
                 'targets': [{'id': c['id'], 'name': c['name']} for c in scene['circles']]}
+    return checked(run)
+
+
+@app.post('/api/cylinder-lab/solve-path')
+def cylinder_lab_solve_path(payload: LabPathSolveInput):
+    def run():
+        active_robot = robot
+        if active_robot.model_id != 'g1-tools':
+            raise ValueError('장착 툴 경로는 G1 그리퍼 모델에서만 생성할 수 있습니다.')
+        if tuple(active_robot.tools or ()) != payload.tools:
+            raise ValueError('장착 툴이 변경되었습니다. 메인 에디터를 새로고침한 뒤 다시 시도하세요.')
+        start = active_robot.validate_q(payload.qpos)
+        seed = start.copy()
+        frames = []
+        diagnostics = []
+        hands = {'left_hand', 'right_hand'}
+        for index, waypoint in enumerate(payload.waypoints, 1):
+            if set(waypoint.targets) != hands or set(waypoint.orientations) != hands:
+                raise ValueError('각 경로 지점에는 양손 TCP 위치와 방향이 필요합니다.')
+            solved, info = active_robot.solve(
+                seed, start, pins=payload.pins, angle_pins=payload.angle_pins,
+                mode='free', resistance=0., selected_targets=waypoint.targets,
+                orientation_targets=waypoint.orientations, posture_reference=start,
+                posture_weight=.12, max_nfev=180,
+            )
+            if not info['converged'] or info['rejected']:
+                raise ValueError(f'파지법 {index}/{len(payload.waypoints)}번째 지점 IK 실패: '
+                                 f'위치 {info["target_error_mm"]:.1f} mm · 방향 {info["angle_error_deg"]:.1f}°. '
+                                 '키프레임은 추가하지 않았습니다.')
+            frames.append(solved.tolist())
+            diagnostics.append(info)
+            seed = solved
+        if robot is not active_robot:
+            raise ValueError('경로 계산 중 장착 툴이 변경되었습니다. 다시 시도하세요.')
+        return {'qpos': frames, 'first_state': active_robot.state(frames[0]), 'diagnostics': diagnostics}
     return checked(run)
 
 

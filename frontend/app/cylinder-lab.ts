@@ -20,7 +20,7 @@ type Stored = { project?: string; mode?: string; params?: Record<string, number>
   tools?: [string, string];
   selectedTool?: string;
   legacyDrawingTool?: string;
-  drawings?: Record<string, { points: DrawnPoint[]; flip: boolean }>;
+  drawings?: Record<string, { points: DrawnPoint[]; flip: boolean; source?: { center: number[]; radius: number; planeY: number } }>;
   physics?: { material?: string; softMm?: number; scope?: string; shape?: string; force?: number; tracking?: number;
     muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number; mass?: string } };
 const $ = <T = HTMLElement>(id: string) => document.getElementById(id) as unknown as T;
@@ -155,7 +155,9 @@ function restoreSections() {
 function saveDrawing() {
   if (!scene) return;
   const drawings = stored().drawings ?? {};
-  drawings[drawKey()] = { points, flip: input('flip').value === '1' };
+  drawings[drawKey()] = { points, flip: input('flip').value === '1', source: {
+    center: [...scene.target.center], radius: scene.target.radius, planeY: scene.plane_y ?? 0,
+  } };
   remember({ drawings });
 }
 function loadDrawing() {
@@ -164,6 +166,7 @@ function loadDrawing() {
   points = Array.isArray(saved?.points) ? saved.points : [];
   if (saved) input('flip').value = saved.flip ? '1' : '0';
   selected = points.length - 1;
+  if (saved && !saved.source && points.length) saveDrawing();
 }
 
 // ---------------------------------------------------------------- API and scene
@@ -228,6 +231,7 @@ function applyCylinderDiameter(diameter: number) {
   status('변경한 지름으로 원통을 다시 정착시키는 중…');
   scene = settled(baseScene);
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05;
+  if (points.length) saveDrawing();
   renderGraspInfo(); renderPoints(); draw();
   status(`대상 원통 지름 ${(nextDiameter * 1000).toFixed(0)} mm · 질량 유지 · Lab 장면에 적용했습니다.`);
 }
