@@ -11,7 +11,7 @@ import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDL
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
-import { buildLabPathPreview, readLabToolPaths, toolPoseAt, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
+import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
@@ -821,11 +821,11 @@ export default function Editor() {
         if (source.pins.includes(`${side}_hand`) || source.angle_pins?.includes(`${side}_hand`))
           throw new Error(`${side === 'left' ? '왼손' : '오른손'} TCP 고정을 해제한 뒤 다시 시도하세요.`);
       }
-      const waypoints = preview.times.map(time => {
+      const waypoints = preview.times.map((_, index) => {
         const targets: Record<string, number[]> = {};
         const orientations: Record<string, number[]> = {};
         for (const side of activeSides) {
-          const pose = toolPoseAt(preview.tracks[side]!, time);
+          const pose = toolPoseAtKeyPoint(preview.tracks[side]!, index);
           targets[`${side}_hand`] = pose.position;
           orientations[`${side}_hand`] = pose.quaternion_xyzw;
         }
@@ -837,7 +837,7 @@ export default function Editor() {
       });
       if (solved.qpos.length !== preview.times.length) throw new Error('계산된 키프레임 개수가 웨이포인트와 다릅니다.');
       const generated: Keyframe[] = solved.qpos.map((qpos, index) => ({
-        name: index === 0 ? '파지점' : `파지 경로 ${index}/${preview.times.length - 1}`,
+        name: index === 0 ? '그린 점 1 · 파지점' : `그린 점 ${index + 1}`,
         duration: index === 0 ? .8 : Math.max(.1, preview.times[index] - preview.times[index - 1]),
         qpos, pins: [...source.pins], angle_pins: [...(source.angle_pins ?? [])],
       }));
@@ -1382,10 +1382,10 @@ export default function Editor() {
               const track = path.tracks[side];
               const toolId = tools?.[side === 'left' ? 0 : 1] ?? '';
               return <div className={`lab-grasp-side ${side}`} key={side} title={path.sourcePaths[side]?.projectName ?? ''}><strong>{side === 'left' ? '왼손' : '오른손'} · {toolOptions.find(option => option.id === toolId)?.label ?? toolId}</strong>
-                <span>{track ? `TCP 지점 ${track.points.length}개 · 그린 점 ${track.drawnCount}개` : '저장 경로 없음 · 현재 자세에 가깝게 유지'}</span></div>;
+                <span>{track ? `TCP 샘플 ${track.points.length}개 · 그린 점 ${track.drawnCount}개` : '저장 경로 없음 · 현재 자세에 가깝게 유지'}</span></div>;
             })}
             {mismatched && <p className="hint lab-grasp-warning">Cylinder Lab에서 조절한 용기 지름이 메인 장면과 다릅니다. 메인 장면의 지름을 맞춘 뒤 다시 미리보세요.</p>}
-            <p className="hint">양손 웨이포인트를 시간순으로 합쳐 선택 키프레임 다음에 {path.times.length}개 생성 · 최대 100개</p>
+            <p className="hint">양손의 그린 점을 순서대로 묶어 선택 키프레임 다음에 {path.times.length}개 생성 · 구간별 보간 시간을 키프레임 이동시간으로 적용 · 최대 100개</p>
             <p className="hint">키프레임 생성은 TCP 도달 여부를 확인합니다. 툴과 용기의 물리 충돌은 생성 후 Physics 재생으로 확인하세요.</p>
             <div className="lab-grasp-actions"><button className="primary" disabled={disabled || poseDirty || mismatched || !activeFrame || !!motionClip} onClick={() => void generateLabGraspKeyframes()}>키프레임 생성</button>
               <button disabled={disabled} onClick={() => setLabPathPreview(null)}>미리보기 닫기</button></div>

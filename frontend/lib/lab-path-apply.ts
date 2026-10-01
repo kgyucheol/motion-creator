@@ -12,7 +12,7 @@ export type LabToolPath = { side: HandSide; toolId: string; projectName: string;
   source: LabPathSource | null; stepping: DrawnStepping; coefficients: GraspPointCoefficients };
 export type ToolPose = { position: number[]; quaternion_xyzw: number[] };
 export type ToolPathPoint = ToolPose & { time: number; label: string; anchor: boolean };
-export type ToolPathTrack = { side: HandSide; toolId: string; points: ToolPathPoint[]; drawnCount: number; grasp: ToolPose };
+export type ToolPathTrack = { side: HandSide; toolId: string; points: ToolPathPoint[]; keyPoints: ToolPathPoint[]; drawnCount: number; grasp: ToolPose };
 export type LabPathPreview = { targetId: string; tracks: Partial<Record<HandSide, ToolPathTrack>>; times: number[];
   sourcePaths: Partial<Record<HandSide, LabToolPath>> };
 
@@ -78,18 +78,9 @@ export function readLabToolPaths(targetId: string, mounted: [string, string], ed
   return result;
 }
 
-function poseAt(track: ToolPathTrack, time: number): ToolPose {
-  const points = track.points;
-  if (time <= 0) return points[0];
-  const next = points.findIndex(point => point.time >= time - 1e-8);
-  if (next <= 0) return next < 0 ? points[points.length - 1] : points[0];
-  const a = points[next - 1], b = points[next];
-  const f = Math.max(0, Math.min(1, (time - a.time) / (b.time - a.time)));
-  return { position: a.position.map((v, i) => v + (b.position[i] - v) * f),
-    quaternion_xyzw: new THREE.Quaternion().fromArray(a.quaternion_xyzw)
-      .slerp(new THREE.Quaternion().fromArray(b.quaternion_xyzw), f).toArray() };
+export function toolPoseAtKeyPoint(track: ToolPathTrack, index: number): ToolPose {
+  return track.keyPoints[Math.min(index, track.keyPoints.length - 1)];
 }
-export const toolPoseAt = poseAt;
 
 /** Convert the Lab's XZ TCP traces into world XYZ positions and full mounted-tool orientations. */
 export function buildLabPathPreview(target: SceneObject, robotPosition: number[], robotQuaternion: number[],
@@ -101,7 +92,6 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
   const configured = Object.fromEntries(sides.map(side => [side, sourcePaths[side]?.coefficients ?? DEFAULT_RAMEN_GRASP_COEFFICIENTS[side]])) as RamenGraspCoefficients;
   const grasp = candidateRamenGraspPoints(target, robotPosition, robotQuaternion, configured);
   const tracks: Partial<Record<HandSide, ToolPathTrack>> = {};
-  const candidates = new Set<number>();
   for (const side of active) {
     const path = sourcePaths[side]!;
     if (!path.source) throw new Error(`${side === 'left' ? '왼손' : '오른손'} ${path.toolId} 경로에 기준 용기 위치가 없습니다. Cylinder Lab에서 해당 툴의 경로를 다시 열어 저장해 주세요.`);
@@ -115,6 +105,7 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
     const faceTurn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
     const points: ToolPathPoint[] = [{ time: 0, position: grasp[side], quaternion_xyzw: grasp.orientation[side],
       label: '파지점', anchor: true }];
+    const keyPoints: ToolPathPoint[] = [];
     let elapsed = 0, controlIndex = 0, controlEnd = 0;
     for (let i = 0; i < waypoints.length; i++) {
       const waypoint = waypoints[i];
@@ -130,15 +121,26 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
       if (path.flip !== baseFlip) rotation.multiply(faceTurn);
       const position = [target.position[0] + waypoint.tcp[0] - path.source.center[0], grasp[side][1],
         target.position[2] + waypoint.tcp[1] - path.source.center[1]];
+      const time = Number(elapsed.toFixed(6));
+      const point = { time, position, quaternion_xyzw: rotation.toArray(),
+        label: anchor ? `그린 점 ${controlIndex + 1}` : waypoint.label, anchor };
+      if (anchor) keyPoints.push(point);
       if (i === 0 && Math.hypot(position[0] - grasp[side][0], position[2] - grasp[side][2]) < .005
         && Math.abs(waypoint.angle - baseAngle) < Math.PI / 36 && path.flip === baseFlip) continue;
-      const time = Number(elapsed.toFixed(6));
-      points.push({ time, position, quaternion_xyzw: rotation.toArray(), label: anchor ? `그린 점 ${controlIndex + 1}` : waypoint.label, anchor });
-      candidates.add(time);
+      points.push(point);
     }
-    tracks[side] = { side, toolId: path.toolId, points, drawnCount: path.points.length, grasp: points[0] };
+    tracks[side] = { side, toolId: path.toolId, points, keyPoints, drawnCount: path.points.length, grasp: points[0] };
   }
-  const times = [0, ...candidates].sort((a, b) => a - b);
-  if (times.length > maxFrames) throw new Error(`양손 경로의 웨이포인트 ${times.length}개가 남은 키프레임 ${maxFrames}개를 넘습니다. Cylinder Lab에서 보간 간격을 늘려 주세요.`);
+  const count = Math.max(...active.map(side => tracks[side]!.keyPoints.length));
+  if (count > maxFrames) throw new Error(`양손 경로의 그린 점 ${count}개가 남은 키프레임 ${maxFrames}개를 넘습니다. Cylinder Lab에서 점을 줄여 주세요.`);
+  const times: number[] = [];
+  for (let index = 0; index < count; index++) {
+    const duration = Math.max(.1, ...active.map(side => {
+      const keyPoints = tracks[side]!.keyPoints;
+      if (index >= keyPoints.length) return 0;
+      return keyPoints[index].time - (index ? keyPoints[index - 1].time : 0);
+    }));
+    times.push(Number(((times[index - 1] ?? 0) + duration).toFixed(6)));
+  }
   return { targetId: target.id, tracks, times, sourcePaths };
 }
