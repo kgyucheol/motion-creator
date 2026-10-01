@@ -154,6 +154,33 @@ def _triangulate(points: np.ndarray) -> list[list[list[float]]]:
     return triangles
 
 
+def _primitive_mesh(geom_type: int, size: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Triangulate MuJoCo collision primitives so they join mesh geoms in the same section."""
+    if geom_type == mujoco.mjtGeom.mjGEOM_BOX:
+        x, y, z = size[:3]
+        vertices = np.array([[sx * x, sy * y, sz * z]
+                             for sz in (-1., 1.) for sy in (-1., 1.) for sx in (-1., 1.)])
+        faces = np.array([[0, 2, 3], [0, 3, 1], [4, 5, 7], [4, 7, 6],
+                          [0, 1, 5], [0, 5, 4], [2, 6, 7], [2, 7, 3],
+                          [0, 4, 6], [0, 6, 2], [1, 3, 7], [1, 7, 5]])
+        return vertices, faces
+    if geom_type == mujoco.mjtGeom.mjGEOM_CYLINDER:
+        radius, half_length = size[:2]
+        count = 64
+        angles = (np.arange(count) + .25) * (2 * np.pi / count)
+        ring = np.stack([radius * np.cos(angles), radius * np.sin(angles)], axis=1)
+        vertices = np.vstack([np.c_[ring, np.full(count, -half_length)],
+                              np.c_[ring, np.full(count, half_length)],
+                              [0., 0., -half_length], [0., 0., half_length]])
+        faces = []
+        for index in range(count):
+            following = (index + 1) % count
+            faces.extend([[index, following, count + following], [index, count + following, count + index],
+                          [count * 2, following, index], [count * 2 + 1, count + index, count + following]])
+        return vertices, np.asarray(faces, dtype=int)
+    raise ValueError(f'Unsupported tool collision geometry: {geom_type}')
+
+
 def _extract_section(robot, side: str) -> dict:
     if robot.model_id != 'g1-tools' or robot.tools is None:
         raise ValueError('실제 툴 단면을 가져오려면 G1 그리퍼 모델에서 장착 툴을 선택하세요.')
@@ -172,14 +199,19 @@ def _extract_section(robot, side: str) -> dict:
     meshes: list[tuple[np.ndarray, np.ndarray]] = []
     for body in bodies:
         for geom_id in range(model.ngeom):
-            if (model.geom_bodyid[geom_id] != body or model.geom_contype[geom_id] == 0
-                    or model.geom_type[geom_id] != mujoco.mjtGeom.mjGEOM_MESH):
+            if model.geom_bodyid[geom_id] != body or model.geom_contype[geom_id] == 0:
                 continue
-            mesh_id = int(model.geom_dataid[geom_id])
-            va, vn = int(model.mesh_vertadr[mesh_id]), int(model.mesh_vertnum[mesh_id])
-            fa, fn = int(model.mesh_faceadr[mesh_id]), int(model.mesh_facenum[mesh_id])
-            vertices = model.mesh_vert[va:va + vn].copy()
-            faces = model.mesh_face[fa:fa + fn].copy()
+            geom_type = int(model.geom_type[geom_id])
+            if geom_type == mujoco.mjtGeom.mjGEOM_MESH:
+                mesh_id = int(model.geom_dataid[geom_id])
+                va, vn = int(model.mesh_vertadr[mesh_id]), int(model.mesh_vertnum[mesh_id])
+                fa, fn = int(model.mesh_faceadr[mesh_id]), int(model.mesh_facenum[mesh_id])
+                vertices = model.mesh_vert[va:va + vn].copy()
+                faces = model.mesh_face[fa:fa + fn].copy()
+            elif geom_type in (mujoco.mjtGeom.mjGEOM_BOX, mujoco.mjtGeom.mjGEOM_CYLINDER):
+                vertices, faces = _primitive_mesh(geom_type, model.geom_size[geom_id])
+            else:
+                continue
             geom_rotation = data.geom_xmat[geom_id].reshape(3, 3)
             world = data.geom_xpos[geom_id] + vertices @ geom_rotation.T
             in_tcp = (world - tcp_position) @ tcp_rotation

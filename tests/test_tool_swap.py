@@ -1,12 +1,14 @@
 import mujoco
 import numpy as np
 import pytest
+import trimesh
 import xml.etree.ElementTree as ET
 from fastapi.testclient import TestClient
 
 from motioncreator import server, tool_model
 from motioncreator.robot import Robot, FEET
 from motioncreator.tool_model import DEFAULT_TOOLS, TOOLS, parse_tools, tool_model_xml
+from motioncreator.tool_section import tool_section
 
 
 def compiled(tools, **kwargs):
@@ -65,6 +67,24 @@ def test_same_tool_on_both_hands_is_mirrored():
     left, right = robot.point(data, 'left_hand'), robot.point(data, 'right_hand')
     np.testing.assert_allclose(right[0], left[0] * [1, -1, 1], atol=2e-5)
     assert len({name for name in (robot.handles['left_hand'][0], robot.handles['right_hand'][0])}) == 2
+
+
+def test_stock_tool_tcps_reach_the_mesh_tips_and_support_plate_enters_lab_collision():
+    robot = Robot('g1-tools', DEFAULT_TOOLS)
+    mesh_dir = tool_model.URDF.parent / 'meshes'
+    scoop = trimesh.load(mesh_dir / 'right_scoop_body.STL')
+    support = trimesh.load(mesh_dir / 'left_end_support_body.STL')
+    scoop_tip = np.asarray(robot.handles['left_hand'][1])
+    support_tip = np.asarray(robot.handles['right_hand'][1])
+    np.testing.assert_allclose(support_tip, scoop_tip, atol=1e-9)
+    assert scoop_tip[0] == pytest.approx(scoop.bounds[1, 0], abs=1e-6)
+    assert support_tip[0] == pytest.approx(support.bounds[1, 0], abs=1e-6)
+    plate = support.vertices[(support.vertices[:, 0] > .2) & (abs(support.vertices[:, 1]) < .01)]
+    assert plate[:, 2].max() == pytest.approx(support_tip[2], abs=1e-6)
+    section = tool_section(robot, 'right')
+    assert section['tool_id'] == 'end_support'
+    assert section['area_m2'] > .002  # the plate box is included alongside the wall mesh
+    assert min(point[0] for outline in section['outlines'] for point in outline) < -.24
 
 
 def test_nse_tools_are_mounted_on_their_own_hands_and_hang_inward():
