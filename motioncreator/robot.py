@@ -176,6 +176,8 @@ class Robot:
             # TCP. The 29 joints and physical geoms did not change, so saved
             # projects using the earlier TCP calibration remain editable.
             self.compatible_fingerprints.update({
+                # Saved stock-tool projects from before the portable fingerprint change.
+                'f977bcfcf16e4ce34ab63ce3bb1dc7dd5e9051d8bd9268f344fca8f401007a8e',
                 # Previous stock pair: scoop TCP at its bowl and the shorter support plate.
                 'e716799a332a289a06f6d904413fde62cd395601a610cc3414268e47f7aa8525',
                 'b9c00efdb6e538fea6383b620c4e09e6ce2e638dd6ce1cf9348810cb601d7f3e',

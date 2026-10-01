@@ -47,7 +47,8 @@ def test_gripper_fingerprint_is_stable_and_pd_physics_runs(monkeypatch):
     project['keyframes'][0]['duration'] = .1
     worker_robot = Robot()
     assert worker_robot.fingerprint == editor_robot.fingerprint
-    assert len(editor_robot.compatible_fingerprints) == 8
+    assert len(editor_robot.compatible_fingerprints) == 9
+    assert 'f977bcfcf16e4ce34ab63ce3bb1dc7dd5e9051d8bd9268f344fca8f401007a8e' in editor_robot.compatible_fingerprints
     assert 'e716799a332a289a06f6d904413fde62cd395601a610cc3414268e47f7aa8525' in editor_robot.compatible_fingerprints
     for old_hash in editor_robot.compatible_fingerprints - {editor_robot.fingerprint}:
         legacy_project = new_project(editor_robot)
