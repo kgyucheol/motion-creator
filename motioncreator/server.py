@@ -11,7 +11,46 @@ from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE, ANGLE_LOCKABLE
 from .motion import new_project, validate_project, compile_motion, rename_project, enable_parallel_compile, project_from_motion_bytes, prepare_saved_project, save_bundle
 from .presets import GroupStore
 
-robot = Robot()
+SELECTION_PATH = ROOT / '.motioncreator-server.json'
+
+
+def _saved_selection():
+    try:
+        value = json.loads(SELECTION_PATH.read_text(encoding='utf-8'))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _preferred_tools():
+    from .tool_model import parse_tools, DEFAULT_TOOLS
+    value = os.environ.get('MOTIONCREATOR_TOOLS') or _saved_selection().get('tools')
+    if isinstance(value, (list, tuple)):
+        if not all(isinstance(tool, str) for tool in value):
+            return DEFAULT_TOOLS
+        value = ':'.join(value)
+    try:
+        return parse_tools(value)
+    except ValueError:
+        return DEFAULT_TOOLS
+
+
+def _initial_robot():
+    model_id = os.environ.get('MOTIONCREATOR_MODEL') or _saved_selection().get('model_id', 'g1')
+    if model_id not in ('g1', 'g1-tools'):
+        model_id = 'g1'
+    return Robot(model_id, _preferred_tools() if model_id == 'g1-tools' else None)
+
+
+def _save_selection(candidate):
+    pair = candidate.tools or robot.tools or _preferred_tools()
+    value = {'model_id': candidate.model_id, 'tools': list(pair)}
+    temporary = SELECTION_PATH.with_suffix('.tmp')
+    temporary.write_text(json.dumps(value, ensure_ascii=False) + '\n', encoding='utf-8')
+    os.replace(temporary, SELECTION_PATH)
+
+
+robot = _initial_robot()
 groups = GroupStore()
 app = FastAPI(title='G1 Motion Creator', version='1.0.0')
 from .task_api import router as task_router
@@ -41,6 +80,10 @@ def _replace_robot(candidate):
             candidate.export_visual(ROOT / f'assets/g1/robot-{candidate.model_id}.glb')
         except (ValueError, OSError) as exc:
             raise HTTPException(422, detail=f'모델을 불러오지 못했습니다: {exc}') from exc
+        try:
+            _save_selection(candidate)
+        except OSError as exc:
+            raise HTTPException(500, detail=f'장착 툴 선택을 저장하지 못했습니다: {exc}') from exc
         if jobs.sonic_process is not None:
             jobs.sonic_process.terminate()
             jobs.sonic_process.wait(timeout=5)
@@ -57,7 +100,7 @@ def select_model(payload: ModelInput):
     if robot.model_id == payload.model_id:
         return {'model_id': robot.model_id}
     try:
-        candidate = Robot(payload.model_id)
+        candidate = Robot(payload.model_id, _preferred_tools() if payload.model_id == 'g1-tools' else None)
     except (ValueError, OSError) as exc:
         raise HTTPException(422, detail=f'모델을 불러오지 못했습니다: {exc}') from exc
     _replace_robot(candidate)
@@ -434,7 +477,8 @@ def open_saved_project(name: str):
     def load():
         project = json.loads(path.read_text(encoding='utf-8'))
         prepare_saved_project(project, relative, path.stat().st_mtime)
-        return validate_project(robot, project)
+        validation_robot = robot if not project.get('mounted_tools') or robot.model_id == 'g1-tools' else Robot('g1-tools', _preferred_tools())
+        return validate_project(validation_robot, project)
     return checked(load)
 
 

@@ -153,6 +153,12 @@ def environment_snapshot(project):
 
 def validate_project(robot: Robot, project):
     ensure_project_identity(project)
+    mounted_tools = project.get('mounted_tools')
+    if mounted_tools is not None:
+        from .tool_model import parse_tools
+        if not isinstance(mounted_tools, (list, tuple)) or len(mounted_tools) != 2 or not all(isinstance(tool, str) for tool in mounted_tools):
+            raise ValueError('Mounted tools must contain left and right tool ids')
+        parse_tools(':'.join(mounted_tools))
     if project.get('format') != FORMAT or project.get('model_sha256') not in robot.compatible_fingerprints:
         raise ValueError('Project format or G1 model fingerprint does not match')
     project['model_sha256'] = robot.fingerprint
@@ -432,6 +438,7 @@ def new_project(robot, name=''):
     return {'format': FORMAT, 'name': name, 'name_mode': 'manual' if name.strip() else 'auto',
             'project_id': uuid.uuid4().hex, 'created_at': _created_now(),
             'model_sha256': robot.fingerprint,
+            'mounted_tools': list(robot.tools) if robot.tools else None,
             'joint_names': robot.names, 'coordinate_system': 'right-handed, +X forward, +Y left, +Z up',
             'units': {'position': 'm', 'angle': 'rad', 'time': 's'},
             'angle_pins': [],
@@ -831,6 +838,7 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
         project['project_id'] = uuid.uuid4().hex
         project['created_at'] = _created_now()
     ensure_project_identity(project)
+    project['mounted_tools'] = list(robot.tools) if robot.tools else None
     motion = compile_motion(robot, project, fps)
     root_folder = Path(directory or ROOT / 'motions')
     root_folder.mkdir(parents=True, exist_ok=True)
@@ -856,6 +864,7 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     environment_text = json.dumps(environment, ensure_ascii=False, indent=2)
     environment_sha256 = hashlib.sha256(environment_text.encode('utf-8')).hexdigest()
     metadata = {'format': FORMAT, 'model_sha256': robot.fingerprint, 'joint_names': robot.names,
+                'mounted_tools': list(robot.tools) if robot.tools else None,
                 'project_id': project['project_id'], 'created_at': project['created_at'],
                 'display_name': display_name,
                 'reference_schema': 'motioncreator.reference.v2',

@@ -15,7 +15,7 @@ import { buildLabPathPreview, readLabToolPaths, toolPoseAt, type LabPathPreview,
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
-type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
+type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; mounted_tools?: [string, string] | null; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
 type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; controller?: 'pd' | 'gear-sonic' | 'objects'; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
@@ -93,9 +93,10 @@ export default function Editor() {
     if (!tools || !project || !state || tools[side === 'left' ? 0 : 1] === next) return;
     setBusy(true);
     try {
-      const draft = JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects });
-      localStorage.setItem(draftKey.current, draft);
-      await api('tools', side === 'left' ? { left: next, right: tools[1] } : { left: tools[0], right: next });
+      const nextTools: [string, string] = side === 'left' ? [next, tools[1]] : [tools[0], next];
+      await api('tools', { left: nextTools[0], right: nextTools[1] });
+      localStorage.setItem(draftKey.current, JSON.stringify({ ...project, mounted_tools: nextTools,
+        current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups }));
       location.reload();
     } catch (error) {
       setError(error instanceof Error ? error.message : '툴 교환 실패');
@@ -106,7 +107,7 @@ export default function Editor() {
     if (next === modelId || !project || !state) return;
     setBusy(true);
     try {
-      const draft = JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects });
+      const draft = JSON.stringify({ ...project, mounted_tools: tools, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups });
       localStorage.setItem(draftKey.current, draft);
       await api('model', { model_id: next });
       location.reload();
@@ -854,11 +855,11 @@ export default function Editor() {
   useEffect(() => {
     if (!project || !state || playing || preview?.physics) return;
     const timer = setTimeout(() => {
-      try { localStorage.setItem(draftKey.current, JSON.stringify({ ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups })); }
+      try { localStorage.setItem(draftKey.current, JSON.stringify({ ...project, mounted_tools: tools, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups })); }
       catch { setMessage('브라우저 자동 저장 공간이 부족합니다. 파일 저장을 사용하세요.'); }
     }, 500);
     return () => clearTimeout(timer);
-  }, [project, state, pins, anglePins, objects, objectGroups, playing, preview]);
+  }, [project, state, tools, pins, anglePins, objects, objectGroups, playing, preview]);
   useEffect(() => {
     if (!playing || !preview) return;
     const start = performance.now() - preview.time[sample] * 1000;
@@ -893,6 +894,14 @@ export default function Editor() {
   }
   async function loadProject(next: Project) {
     setLabPathPreview(null);
+    if (next.mounted_tools && (modelId !== 'g1-tools' || !tools
+      || next.mounted_tools.some((tool, index) => tool !== tools[index]))) {
+      if (modelId !== 'g1-tools') await api('model', { model_id: 'g1-tools' });
+      await api('tools', { left: next.mounted_tools[0], right: next.mounted_tools[1] });
+      localStorage.setItem('g1-motion-draft-v1-g1-tools', JSON.stringify(next));
+      location.reload();
+      return;
+    }
     const valid = await api<Project>('validate', { project: next });
     const pose = await api<PoseState>('pose', { qpos: valid.current_qpos ?? valid.keyframes[0].qpos });
     const nextObjects = objectsFromProject(valid);
@@ -1119,7 +1128,7 @@ export default function Editor() {
     if (!project || !state) return;
     void run(async () => {
       const result = await api<{ files: string[]; directory: string; project: Project; display_name: string; reused: boolean; warnings?: string[]; metadata: { samples: number; validation: { max_pin_error_mm: number } } }>(saveAs ? 'save-as' : 'save', {
-        project: { ...project, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups }, fps, protomotions: exportProto,
+        project: { ...project, mounted_tools: tools, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups }, fps, protomotions: exportProto,
       });
       setProject(result.project); current.current.project = result.project;
       setFiles(result.files); setSaved(await api<string[]>('saved'));

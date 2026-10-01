@@ -12,6 +12,7 @@ frontend/.vinext/
 *.log
 
 .conda-policy/
+.motioncreator-server.json
 tasks/
 assets/g1/robot-g1.glb
 assets/g1/robot-g1-tools.glb
