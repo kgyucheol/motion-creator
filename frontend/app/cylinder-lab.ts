@@ -52,6 +52,7 @@ let points: DrawnPoint[] = [];
 let selected = -1;
 let autoPath: AutoPath | null = null;
 let simBlades: BladePath[] = [];
+let simProfiles: BladeProfile[] = [];
 let result: SimResult | null = null;
 let frame = 0, playing = false, lastTick = 0;
 // Path generation by picking cylinders: the reference path, the pile left in the box, the attempts so far,
@@ -67,6 +68,7 @@ let viewing: Attempt | null = null;
 let worker: Worker | null = null;
 let simulating = false;
 let hoverId: string | null = null;
+let targetPickMode = false;
 const view = { cx: 0, cz: 0, size: .9 };
 
 // ---------------------------------------------------------------- storage
@@ -145,6 +147,7 @@ async function loadProject(name: string) {
   await loadScene(undefined);
 }
 async function loadScene(targetId: string | undefined) {
+  setTargetPickMode(false);
   const response = await api<{ scene: LabScene; defaults: Record<string, number>; limits: Record<string, [number, number]>; targets: { id: string; name: string }[] }>(
     'cylinder-lab/scene', { project, target_id: targetId ?? null });
   baseScene = response.scene; defaults = response.defaults; limits = response.limits;
@@ -187,6 +190,15 @@ function applyCylinderDiameter(diameter: number) {
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05;
   renderGraspInfo(); renderPoints(); draw();
   status(`대상 원통 지름 ${(nextDiameter * 1000).toFixed(0)} mm · 질량 유지 · Lab 장면에 적용했습니다.`);
+}
+
+function setTargetPickMode(on: boolean) {
+  targetPickMode = on;
+  const button = $<HTMLButtonElement>('select-sim-target');
+  button.setAttribute('aria-pressed', String(on));
+  button.textContent = on ? '용기를 클릭하세요…' : '캔버스에서 용기 선택';
+  if (on) status('시뮬레이션할 원통을 캔버스에서 클릭하세요.');
+  draw();
 }
 
 // ---------------------------------------------------------------- frame helpers
@@ -327,17 +339,19 @@ function physicsOptions() {
 /** Run the physics for `blades` with the page's physics settings and start the replay. */
 async function simulate(blades: BladePath[]) {
   if (!scene) return;
-  if (toolModelId !== 'g1-tools' || !toolProfiles[graspSide()]) {
-    status('파지점 손에 장착 툴을 선택하고 실제 단면을 불러온 뒤 시뮬레이션하세요.');
+  if (!profilesReadyForBlades(blades)) {
+    status(blades.length > 1 ? '양손에 장착된 툴의 실제 단면을 모두 불러온 뒤 시뮬레이션하세요.'
+      : '파지점 손에 장착 툴을 선택하고 실제 단면을 불러온 뒤 시뮬레이션하세요.');
     return;
   }
   simBlades = blades;
+  simProfiles = profilesForBlades(blades);
   $<HTMLButtonElement>('run').disabled = true;
   try {
     const { soft, friction, cylinderMassKg } = physicsOptions();
     status(soft ? '말랑한 원통으로 물리 계산 중… (몇 초 걸립니다)' : '물리 계산 중…');
     await new Promise(resolve => setTimeout(resolve, 20));
-    result = simulateScoop(scene, simBlades, activeToolProfile(),
+    result = simulateScoop(scene, simBlades, simProfiles,
       { forceLimitN: num('force'), trackingLimitM: num('tracking') / 1000, frameEvery: 4, soft, friction, cylinderMassKg });
     frame = 0; input('scrub').max = String(result.frames.length - 1);
     showResult(); status(''); playing = true;
@@ -412,7 +426,7 @@ function draw() {
     ctx.beginPath(); ctx.arc(X(x), Z(z), circle.radius * scale, 0, Math.PI * 2); ctx.fillStyle = fill; ctx.fill();
     ctx.strokeStyle = '#0e141b'; ctx.beginPath(); ctx.moveTo(X(x), Z(z)); ctx.lineTo(X(x + Math.cos(a) * circle.radius), Z(z + Math.sin(a) * circle.radius)); ctx.stroke();
   }
-  if (pickMode && hoverId && !current) { // the cylinder under the mouse in path-generation mode
+  if ((pickMode || targetPickMode) && hoverId && !current) { // the cylinder under the mouse in a selection mode
     const circle = (pile ?? scene).circles.find(c => c.id === hoverId);
     if (circle) {
       ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 3; ctx.setLineDash([6, 4]);
@@ -423,8 +437,9 @@ function draw() {
     const pose = current?.bodies[r.id];
     quad(pose ? [pose.x, pose.z] : r.center, r.half, pose ? pose.angle : r.angle, '#56708a');
   }
-  const bladeShape = (pose: { x: number; z: number; angle: number }, fill: string | null, stroke: string, dashed: boolean, flipped: boolean) => {
-    const p = activeToolProfile(), flip = flipped ? -1 : 1;
+  const bladeShape = (pose: { x: number; z: number; angle: number }, fill: string | null, stroke: string, dashed: boolean,
+    flipped: boolean, profile = activeToolProfile()) => {
+    const p = profile, flip = flipped ? -1 : 1;
     ctx.save(); ctx.translate(X(pose.x), Z(pose.z)); ctx.rotate(-pose.angle); ctx.scale(scale, -scale * flip);
     ctx.fillStyle = fill ?? 'transparent';
     ctx.lineWidth = 1.5 / scale; ctx.setLineDash(dashed ? [4 / scale, 3 / scale] : []); ctx.strokeStyle = stroke;
@@ -499,8 +514,9 @@ function draw() {
   if (current) {
     current.blades.forEach((pose, index) => {
       const bladeFlip = !!simBlades[index]?.flip;
-      bladeShape(current.commands[index], null, '#d9f', true, bladeFlip);
-      bladeShape(pose, index ? '#6ec3ffaa' : '#80efc5aa', index ? '#6ec3ff' : '#80efc5', false, bladeFlip);
+      const profile = simProfiles[index] ?? activeToolProfile();
+      bladeShape(current.commands[index], null, '#d9f', true, bladeFlip, profile);
+      bladeShape(pose, index ? '#6ec3ffaa' : '#80efc5aa', index ? '#6ec3ff' : '#80efc5', false, bladeFlip, profile);
     });
     ctx.fillStyle = '#dce5ee'; ctx.font = '12px sans-serif';
     ctx.fillText(`${current.t.toFixed(2)} s · ${current.stage} · 힘 ${current.forceN.toFixed(0)} N`, 12, 20);
@@ -568,6 +584,16 @@ function setupCanvas() {
     if (event.button === 2) return;
     const [px, py] = local(event);
     canvas.setPointerCapture(event.pointerId);
+    if (targetPickMode && !event.shiftKey && event.button === 0) {
+      const id = cylinderAt(px, py);
+      if (id) {
+        hoverId = null;
+        setTargetPickMode(false);
+        if (id !== scene?.target_id) void loadScene(id).catch(error => status(error.message));
+        else status('이미 선택된 원통입니다.');
+      } else status('원통 위를 클릭하세요.');
+      return;
+    }
     if (pickMode && !event.shiftKey && event.button === 0) {
       const id = cylinderAt(px, py);
       if (id) pickCylinder(id);
@@ -589,10 +615,10 @@ function setupCanvas() {
   });
   canvas.addEventListener('pointermove', event => {
     const [px, py] = local(event);
-    if (!drag && pickMode) {
+    if (!drag && (pickMode || targetPickMode)) {
       const id = cylinderAt(px, py);
       if (id !== hoverId) { hoverId = id; draw(); }
-      canvas.style.cursor = id && !simulating ? 'pointer' : 'default';
+      canvas.style.cursor = id && !simulating ? 'pointer' : targetPickMode ? 'crosshair' : 'default';
       return;
     }
     if (!drag) { canvas.style.cursor = mode === 'draw' ? (hit(px, py) ? 'grab' : 'crosshair') : 'default'; return; }
@@ -642,6 +668,12 @@ function currentGrasps(of: LabScene | null = scene): Record<'left' | 'right', Se
 const graspSide = () => $<HTMLSelectElement>('grasp-side').value as 'left' | 'right';
 const handIndex = (side: 'left' | 'right') => side === 'left' ? 0 : 1;
 const activeToolProfile = (): BladeProfile => toolProfiles[graspSide()] ?? NSE_SCOOP_PROFILE;
+// Clamp planning emits robot-side then far-side paths; those use the left and right mounted tools.
+const profilesForBlades = (blades: BladePath[]): BladeProfile[] => blades.length > 1
+  ? [toolProfiles.left ?? NSE_SCOOP_PROFILE, toolProfiles.right ?? NSE_SCOOP_PROFILE]
+  : [activeToolProfile()];
+const profilesReadyForBlades = (blades: BladePath[]) => toolModelId === 'g1-tools' && (blades.length > 1
+  ? Boolean(toolProfiles.left && toolProfiles.right) : Boolean(toolProfiles[graspSide()]));
 
 function renderMountedTool() {
   const side = graspSide(), select = $<HTMLSelectElement>('mounted-tool');
@@ -994,8 +1026,12 @@ function pickCylinder(id: string) {
   };
   const options = physicsOptions();
   if (template.kind === 'drawn') {
+    if (!profilesReadyForBlades(template.paths)) {
+      simulating = false; pickStatus('경로에 필요한 손의 장착 툴 단면을 불러오지 못했습니다.'); return;
+    }
+    const profiles = profilesForBlades(template.paths);
     worker.postMessage({ pile, targetId: id, paths: template.paths, referenceCenter: template.referenceCenter, order,
-      options, settle: pileNeedsSettle, referenceRimUp: template.referenceRimUp });
+      options, settle: pileNeedsSettle, profile: profiles, referenceRimUp: template.referenceRimUp });
     return;
   }
   // Auto plan: settle the pile around the chosen cylinder here, plan for it on the server, simulate in the worker.
@@ -1003,8 +1039,13 @@ function pickCylinder(id: string) {
   const ready = (pileNeedsSettle ? restingScene(aimed) : aimed) as LabScene;
   const send = worker;
   api<{ path: AutoPath }>('cylinder-lab/plan', { scene: ready, params: template.params })
-    .then(planned => send.postMessage({ pile: ready, targetId: id, paths: planned.path.blades, referenceCenter: ready.target.center, order,
-      options, settle: false }))
+    .then(planned => {
+      if (!profilesReadyForBlades(planned.path.blades)) {
+        simulating = false; pickStatus('경로에 필요한 손의 장착 툴 단면을 불러오지 못했습니다.'); return;
+      }
+      send.postMessage({ pile: ready, targetId: id, paths: planned.path.blades, referenceCenter: ready.target.center, order,
+        options, settle: false, profile: profilesForBlades(planned.path.blades) });
+    })
     .catch(error => { simulating = false; pickStatus(`#${order} ${name} 계획 실패: ${error instanceof Error ? error.message : error}`); });
 }
 
@@ -1025,7 +1066,7 @@ function renderAttempts() {
 
 function viewAttempt(attempt: Attempt) {
   clearResult();
-  viewing = attempt; simBlades = attempt.paths; result = attempt.result;
+  viewing = attempt; simBlades = attempt.paths; simProfiles = attempt.profiles ?? profilesForBlades(attempt.paths); result = attempt.result;
   frame = 0; input('scrub').max = String(result.frames.length - 1);
   showResult(); renderAttempts(); playing = true;
   status(`#${attempt.order} ${attempt.name} 재생`);
@@ -1059,6 +1100,7 @@ async function init() {
   select.onchange = () => { if (!select.value) return; renderDemos(); select.querySelector('option[data-demo]')?.remove(); void loadProject(select.value).catch(error => status(error.message)); };
   $<HTMLSelectElement>('target').onchange = event => void loadScene((event.target as HTMLSelectElement).value).catch(error => status(error.message));
   $('run').onclick = () => void run();
+  $('select-sim-target').onclick = () => setTargetPickMode(!targetPickMode);
   $('reset').onclick = () => renderParams(defaults);
   document.querySelectorAll<HTMLElement>('.save-section').forEach(button => button.addEventListener('click', event => {
     event.preventDefault(); event.stopPropagation(); saveSection(button.dataset.save!, button);

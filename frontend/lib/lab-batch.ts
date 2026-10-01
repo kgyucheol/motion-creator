@@ -65,7 +65,7 @@ export function stretchLift(paths: BladePath[], up: number[], center: number[], 
   });
 }
 
-export type Attempt = { order: number; id: string; name: string; scene: Scene; paths: BladePath[]; result: SimResult };
+export type Attempt = { order: number; id: string; name: string; scene: Scene; paths: BladePath[]; result: SimResult; profiles?: BladeProfile[] };
 export type BatchReport = { attempts: Attempt[]; extracted: number; total: number; stoppedAt: Numbered | null };
 
 /**
@@ -74,14 +74,15 @@ export type BatchReport = { attempts: Attempt[]; extracted: number; total: numbe
  * `referenceRimUp` (the reference cylinder's depth below the rim) to stretch the lift for deeper ones.
  */
 export function runAttempt(pile: Scene, targetId: string, paths: BladePath[], referenceCenter: number[], order: number,
-  options: Partial<SimOptions> = {}, settle = false, profile?: BladeProfile, referenceRimUp: number | null = null): Attempt {
+  options: Partial<SimOptions> = {}, settle = false, profile?: BladeProfile | BladeProfile[], referenceRimUp: number | null = null): Attempt {
   const aimed = retarget(pile, targetId);
   const scene = settle ? restingScene(aimed) : aimed;
   let moved = translatePaths(paths, referenceCenter, scene.target.center);
   // A hand-drawn path lifts as far as its own cylinder needed; a deeper one needs the difference more.
   if (referenceRimUp !== null) moved = stretchLift(moved, scene.frame.up, scene.target.center, scene.frame.rim_up_m - referenceRimUp);
   const result = simulateScoop(scene, moved, profile, options);
-  return { order, id: targetId, name: scene.circles.find(c => c.id === targetId)?.name ?? targetId, scene, paths: moved, result };
+  const profiles = profile ? Array.isArray(profile) ? profile : [profile] : undefined;
+  return { order, id: targetId, name: scene.circles.find(c => c.id === targetId)?.name ?? targetId, scene, paths: moved, result, profiles };
 }
 
 /** The pile after a successful attempt: the target gone, the rest where the simulation left them. */

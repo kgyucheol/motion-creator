@@ -241,22 +241,28 @@ export type BladePath = { waypoints: Waypoint[]; flip: boolean; side?: string };
 /**
  * Simulate one or more blades following their paths. Several blades stand for tools at different
  * points along the cylinder axis: they never touch each other and share the robot's force limit.
+ * `profile` can be an array to give each blade its own mounted-tool collision shape.
  */
-export function simulateScoop(scene: Scene, paths: BladePath[] | Waypoint[], profile: BladeProfile = NSE_SCOOP_PROFILE,
+export function simulateScoop(scene: Scene, paths: BladePath[] | Waypoint[], profile: BladeProfile | BladeProfile[] = NSE_SCOOP_PROFILE,
   options: Partial<SimOptions> = {}, flip = false): SimResult {
   const opt = { ...DEFAULT_SIM, ...options };
   const plans: BladePath[] = paths.length && 'waypoints' in paths[0] ? paths as BladePath[] : [{ waypoints: paths as Waypoint[], flip }];
+  const profiles = Array.isArray(profile) ? profile : plans.map(() => profile);
   const s = SCALE;
   const built = buildScene(scene, opt.soft, opt.friction, opt.cylinderMassKg);
   const { world, bodies } = built;
-  if (opt.friction.blade !== undefined) profile = { ...profile, friction: opt.friction.blade };
   const ground = world.createBody();
-  const bladeArea = (profile.area_m2 ?? ((profile.length ?? 0) * (profile.thickness ?? 0)
-    + (profile.heelLength ?? 0) * ((profile.thickness ?? 0) + (profile.heelHeight ?? 0)))) * s * s;
-  const blades = plans.map(plan => {
+  const bladeProfile = (index: number) => {
+    const selected = profiles[index] ?? profiles[0] ?? NSE_SCOOP_PROFILE;
+    return opt.friction.blade === undefined ? selected : { ...selected, friction: opt.friction.blade };
+  };
+  const blades = plans.map((plan, index) => {
+    const toolProfile = bladeProfile(index);
     const start = poseAt(plan.waypoints, 0);
     const body = world.createDynamicBody({ position: Vec2(start.x * s, start.z * s), angle: start.angle, bullet: true });
-    bladeFixtures(body, profile, plan.flip, opt.bladeMassKg / bladeArea);
+    const bladeArea = (toolProfile.area_m2 ?? ((toolProfile.length ?? 0) * (toolProfile.thickness ?? 0)
+      + (toolProfile.heelLength ?? 0) * ((toolProfile.thickness ?? 0) + (toolProfile.heelHeight ?? 0)))) * s * s;
+    bladeFixtures(body, toolProfile, plan.flip, opt.bladeMassKg / bladeArea);
     body.setGravityScale(0); // the arm carries the tool's weight
     const motor = world.createJoint(new MotorJoint({ maxForce: opt.forceLimitN / plans.length * s, maxTorque: opt.torqueLimitNm / plans.length * s * s,
       correctionFactor: 1, linearOffset: Vec2(start.x * s, start.z * s), angularOffset: start.angle }, ground, body))!;

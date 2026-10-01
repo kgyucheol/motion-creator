@@ -63,7 +63,7 @@ select,input{width:100%}
     <p class="hint">원통 축(로봇 좌우)에 수직인 단면입니다. 프로젝트나 예시에서 장면을 불러오고, 파지점 손마다 장착 툴을 선택해 해당 툴의 충돌 메시 단면으로 경로를 확인합니다.</p>
     <h2>장면</h2>
     <label class="row">장면 프로젝트<select id="project"></select></label>
-    <label class="row">대상 원통<select id="target"></select></label>
+    <label class="row">시뮬레이션 대상 원통<small>처음에는 가장 위 용기가 선택됩니다. 목록이나 캔버스에서 바꿀 수 있습니다.</small><select id="target"></select></label>
     <label class="row">대상 원통 지름 (m)<small>이 Lab 장면에서만 변경 · 질량은 유지</small><input id="cylinder-diameter" type="number" step="0.001" min="0.01" max="0.5"/></label>
     <div class="buttons"><button id="cylinder-diameter-reset">불러온 지름으로</button></div>
     <label class="row">예시 데모<select id="demo-select" aria-label="예시 데모"></select></label>
@@ -107,7 +107,7 @@ select,input{width:100%}
     <p class="hint">두 면이 닿을 때 마찰은 √(a·b)로 섞입니다. 예: 원통 0.7 × 날 0.5 → 0.59.</p>
     <label class="row">최대 힘 (N)<input id="force" type="number" step="5" value="60"/></label>
     <label class="row">끝 자세 허용 (mm)<input id="tracking" type="number" step="1" value="10"/></label>
-    <div style="display:flex;gap:6px;margin-top:12px"><button class="primary" id="run">시뮬레이션</button></div>
+    <div style="display:flex;gap:6px;margin-top:12px"><button id="select-sim-target" aria-pressed="false">캔버스에서 용기 선택</button><button class="primary" id="run">시뮬레이션</button></div>
     <h2>경로 생성</h2>
     <div class="buttons"><button id="pick-mode" aria-pressed="false">경로 생성</button><button id="pick-reset">처음부터</button></div>
     <p class="hint" id="pick-status">켜고 캔버스에서 꺼낼 라면용기를 클릭하세요.</p>
