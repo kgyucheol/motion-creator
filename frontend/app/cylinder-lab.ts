@@ -380,8 +380,8 @@ function physicsOptions() {
 async function simulate(blades: BladePath[]) {
   if (!scene) return;
   if (!profilesReadyForBlades(blades)) {
-    status(blades.length > 1 ? '양손에 장착된 툴의 실제 단면을 모두 불러온 뒤 시뮬레이션하세요.'
-      : '파지점 손에 장착 툴을 선택하고 실제 단면을 불러온 뒤 시뮬레이션하세요.');
+    status(blades.length > 1 ? '장착된 두 툴의 실제 단면을 모두 불러온 뒤 시뮬레이션하세요.'
+      : '작업 툴을 선택하고 실제 단면을 불러온 뒤 시뮬레이션하세요.');
     return;
   }
   simBlades = blades;
@@ -503,19 +503,17 @@ function draw() {
     ctx.restore();
   };
   const flipped = input('flip').value === '1';
-  const grasps = input('show-grasp').checked ? currentGrasps(viewing?.scene ?? scene) : null;
-  if (grasps) {
-    for (const [side, color] of [['left', '#55e7c1'], ['right', '#ffbd70']] as const) {
-      const g = grasps[side], px = X(g.x), pz = Z(g.z);
-      const dx = Math.cos(g.angle), dz = -Math.sin(g.angle); // screen y points down
-      const nx = (g.flip ? 1 : -1) * dz, nz = (g.flip ? -1 : 1) * dx; // top-face side: +90 deg of travel unless flipped
-      ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(px, pz); ctx.lineTo(px + dx * 34, pz + dz * 34); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(px + dx * 34, pz + dz * 34); ctx.lineTo(px + dx * 26 - dz * 5, pz + dz * 26 + dx * 5); ctx.lineTo(px + dx * 26 + dz * 5, pz + dz * 26 - dx * 5); ctx.fill();
-      ctx.beginPath(); ctx.moveTo(px, pz); ctx.lineTo(px + nx * 14, pz + nz * 14); ctx.stroke();
-      ctx.beginPath(); ctx.arc(px, pz, 5, 0, Math.PI * 2); ctx.lineWidth = 1.5; ctx.stroke();
-      ctx.font = '11px sans-serif'; ctx.fillText(side === 'left' ? 'L 파지점' : 'R 파지점', px - 22, pz + (side === 'left' ? -10 : 18));
-    }
+  const grasp = input('show-grasp').checked ? currentGrasp(viewing?.scene ?? scene) : null;
+  if (grasp) {
+    const px = X(grasp.x), pz = Z(grasp.z);
+    const dx = Math.cos(grasp.angle), dz = -Math.sin(grasp.angle); // screen y points down
+    const nx = (grasp.flip ? 1 : -1) * dz, nz = (grasp.flip ? -1 : 1) * dx; // top-face side: +90 deg of travel unless flipped
+    ctx.strokeStyle = '#55e7c1'; ctx.fillStyle = '#55e7c1'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(px, pz); ctx.lineTo(px + dx * 34, pz + dz * 34); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px + dx * 34, pz + dz * 34); ctx.lineTo(px + dx * 26 - dz * 5, pz + dz * 26 + dx * 5); ctx.lineTo(px + dx * 26 + dz * 5, pz + dz * 26 - dx * 5); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(px, pz); ctx.lineTo(px + nx * 14, pz + nz * 14); ctx.stroke();
+    ctx.beginPath(); ctx.arc(px, pz, 5, 0, Math.PI * 2); ctx.lineWidth = 1.5; ctx.stroke();
+    ctx.font = '11px sans-serif'; ctx.fillText('파지점', px - 20, pz - 10);
   }
   if (viewing) {
     for (const plan of viewing.paths) {
@@ -696,8 +694,8 @@ function setupCanvas() {
 
 // ---------------------------------------------------------------- misc actions
 
-/** Both hands' grasp points from the editor's calculation, projected onto this section. */
-function currentGrasps(of: LabScene | null = scene): Record<'left' | 'right', SectionGrasp> | null {
+/** Project the selected tool's grasp point onto this section. */
+function currentGrasp(of: LabScene | null = scene): SectionGrasp | null {
   if (!of) return null;
   const [cx, cz] = of.target.center, toward = of.toward_robot ?? [-1, 0];
   const planeY = of.plane_y ?? 0;
@@ -705,7 +703,7 @@ function currentGrasps(of: LabScene | null = scene): Record<'left' | 'right', Se
   const pair = mountedTools ?? [activeToolId, activeToolId];
   const coefficients: RamenGraspCoefficients = { left: toolCoefficients(pair[0]), right: toolCoefficients(pair[1]) };
   return sectionGrasps(of.target, planeY, robotPosition, of.robot_quaternion_xyzw ?? [0, 0, 0, 1], coefficients,
-    of.box ? of.frame.up : null);
+    of.box ? of.frame.up : null)[activeSide()];
 }
 const handIndex = (side: 'left' | 'right') => side === 'left' ? 0 : 1;
 const preferredSide = (toolId: string): 'left' | 'right' => toolId === 'end_support' || toolId === 'nse_spatula' ? 'right' : 'left';
@@ -819,7 +817,7 @@ function renderGraspInfo() {
   document.querySelectorAll<HTMLInputElement>('#params input').forEach(field => {
     if (field.dataset.key! in mirror) field.value = String(mirror[field.dataset.key!]);
   });
-  const grasp = currentGrasps()?.[activeSide()];
+  const grasp = currentGrasp();
   const boxPitch = scene ? boxPitchDeg(scene) : null;
   const entry = boxPitch === null ? '상자가 없어 수평 진입(아래로 0°)'
     : `상자 입구에 수직 진입: 아래로 90 + (${boxPitch.toFixed(0)}°) = ${(90 + boxPitch).toFixed(0)}°`;
@@ -850,7 +848,7 @@ function editCoefficient(key: keyof RamenGraspCoefficients['left'], raw: string)
 }
 
 function graspPoint(): DrawnPoint | null {
-  const grasp = currentGrasps()?.[activeSide()];
+  const grasp = currentGrasp();
   if (!grasp) return null;
   input('flip').value = grasp.flip ? '1' : '0';
   return { x: grasp.x, z: grasp.z, angle: grasp.angle, steps: null };
