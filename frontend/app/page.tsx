@@ -820,16 +820,11 @@ export default function Editor() {
         if (source.pins.includes(`${side}_hand`) || source.angle_pins?.includes(`${side}_hand`))
           throw new Error(`${side === 'left' ? '왼손' : '오른손'} TCP 고정을 해제한 뒤 다시 시도하세요.`);
       }
-      const sourcePose = await api<PoseState>('pose', { qpos: source.qpos });
       const waypoints = preview.times.map(time => {
         const targets: Record<string, number[]> = {};
         const orientations: Record<string, number[]> = {};
-        for (const side of ['left', 'right'] as HandSide[]) {
-          const track = preview.tracks[side];
-          const pose = track ? toolPoseAt(track, time) : {
-            position: sourcePose.handles[`${side}_hand`].position,
-            quaternion_xyzw: sourcePose.handles[`${side}_hand`].quaternion,
-          };
+        for (const side of activeSides) {
+          const pose = toolPoseAt(preview.tracks[side]!, time);
           targets[`${side}_hand`] = pose.position;
           orientations[`${side}_hand`] = pose.quaternion_xyzw;
         }
@@ -1378,7 +1373,7 @@ export default function Editor() {
               const track = path.tracks[side];
               const toolId = tools?.[side === 'left' ? 0 : 1] ?? '';
               return <div className={`lab-grasp-side ${side}`} key={side} title={path.sourcePaths[side]?.projectName ?? ''}><strong>{side === 'left' ? '왼손' : '오른손'} · {toolOptions.find(option => option.id === toolId)?.label ?? toolId}</strong>
-                <span>{track ? `TCP 지점 ${track.points.length}개 · 그린 점 ${track.drawnCount}개` : '저장 경로 없음 · 현재 자세 유지'}</span></div>;
+                <span>{track ? `TCP 지점 ${track.points.length}개 · 그린 점 ${track.drawnCount}개` : '저장 경로 없음 · 현재 자세에 가깝게 유지'}</span></div>;
             })}
             {mismatched && <p className="hint lab-grasp-warning">Cylinder Lab에서 조절한 용기 지름이 메인 장면과 다릅니다. 메인 장면의 지름을 맞춘 뒤 다시 미리보세요.</p>}
             <p className="hint">양손 웨이포인트를 시간순으로 합쳐 선택 키프레임 다음에 {path.times.length}개 생성 · 최대 100개</p>

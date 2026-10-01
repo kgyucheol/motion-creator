@@ -473,18 +473,36 @@ def cylinder_lab_solve_path(payload: LabPathSolveInput):
         diagnostics = []
         hands = {'left_hand', 'right_hand'}
         for index, waypoint in enumerate(payload.waypoints, 1):
-            if set(waypoint.targets) != hands or set(waypoint.orientations) != hands:
-                raise ValueError('각 경로 지점에는 양손 TCP 위치와 방향이 필요합니다.')
-            solved, info = active_robot.solve(
-                seed, start, pins=payload.pins, angle_pins=payload.angle_pins,
-                mode='free', resistance=0., selected_targets=waypoint.targets,
-                orientation_targets=waypoint.orientations, posture_reference=start,
-                posture_weight=.12, max_nfev=180,
-            )
+            active_hands = set(waypoint.targets)
+            if not active_hands or not active_hands <= hands or set(waypoint.orientations) != active_hands:
+                raise ValueError('각 경로 지점에는 경로가 있는 손의 TCP 위치와 방향이 필요합니다.')
+
+            def attempt(initial, posture_weight, evaluations):
+                return active_robot.solve(
+                    initial, start, pins=payload.pins, angle_pins=payload.angle_pins,
+                    mode='free', resistance=0., selected_targets=waypoint.targets,
+                    orientation_targets=waypoint.orientations, posture_reference=seed,
+                    posture_weight=posture_weight, max_nfev=evaluations,
+                )
+
+            solved, info = attempt(seed, .08, 180)
+            if not info['converged']:
+                # Follow the reached posture into the next local solve, then relax the preference
+                # for the previous joints. TCP and pinned-feet tolerances remain unchanged.
+                for weight, evaluations in ((.02, 280), (0., 400)):
+                    candidate, candidate_info = attempt(solved if not info['rejected'] else seed, weight, evaluations)
+                    if (candidate_info['converged'] or
+                            (not info['converged'] and not candidate_info['rejected'] and
+                             candidate_info['target_error_mm'] < info['target_error_mm'])):
+                        solved, info = candidate, candidate_info
+                    if info['converged']:
+                        break
             if not info['converged'] or info['rejected']:
+                errors = ' · '.join(f'{"왼손" if hand == "left_hand" else "오른손"} {error:.1f} mm'
+                                    for hand, error in sorted(info['target_errors_mm'].items()))
                 raise ValueError(f'파지법 {index}/{len(payload.waypoints)}번째 지점 IK 실패: '
-                                 f'위치 {info["target_error_mm"]:.1f} mm · 방향 {info["angle_error_deg"]:.1f}°. '
-                                 '키프레임은 추가하지 않았습니다.')
+                                 f'위치 {errors} · 방향 {info["angle_error_deg"]:.1f}°. '
+                                 '키프레임은 추가하지 않았습니다. 해당 웨이포인트를 로봇 쪽으로 옮기거나 시작 자세를 조정해 주세요.')
             frames.append(solved.tolist())
             diagnostics.append(info)
             seed = solved
