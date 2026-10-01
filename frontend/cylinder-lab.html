@@ -26,6 +26,7 @@ select,input{width:100%}
 .tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:12px 0 4px}.tabs button[aria-pressed=true]{border-color:#80efc5;background:#203f36;color:#a4f0d3}
 #pick-mode[aria-pressed=true]{border-color:#ffd166;background:#3a3020;color:#ffe3a3}
 .buttons{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}.buttons button{flex:1 1 auto;font-size:12px}
+.buttons button.saved{color:#0e141b;background:#80efc5;border-color:#80efc5}
 .stage{display:flex;flex-direction:column;min-width:0}
 .canvas-wrap{flex:1;position:relative;min-height:0}canvas{width:100%;height:100%;display:block;touch-action:none}
 .transport{display:flex;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line)}
@@ -67,11 +68,11 @@ select,input{width:100%}
     <h2>검증 장면</h2>
     <label class="row">장면 프로젝트<small>파지법과 별개인 검증용 장면</small><select id="project"></select></label>
     <label class="row">시뮬레이션 대상 원통<small>처음에는 가장 위 용기가 선택됩니다. 목록이나 캔버스에서 바꿀 수 있습니다.</small><select id="target"></select></label>
-    <label class="row">대상 원통 지름 (m)<small>이 Lab 장면에서만 변경 · 질량은 유지</small><input id="cylinder-diameter" type="number" step="0.001" min="0.01" max="0.5"/></label>
-    <div class="buttons"><button id="cylinder-diameter-reset">불러온 지름으로</button></div>
+    <label class="row">대상 원통 지름 (m)<small>선택한 용기별로 저장 · 질량은 유지</small><input id="cylinder-diameter" type="number" step="0.001" min="0.01" max="0.5"/></label>
+    <div class="buttons"><button id="cylinder-diameter-reset">불러온 지름으로</button><button id="cylinder-diameter-save">지름 저장</button></div>
     <label class="row">예시 데모<select id="demo-select" aria-label="예시 데모"></select></label>
-    <label class="row">상자 기울기 (pitch, °)<small>상자와 안의 용기가 함께 회전</small><input id="box-pitch" type="number" step="1" min="-90" max="90"/></label>
-    <div class="buttons"><button id="box-pitch-reset">원래 기울기로</button></div>
+    <label class="row">상자 기울기 (pitch, °)<small>검증 장면별로 저장 · 상자와 용기가 함께 회전</small><input id="box-pitch" type="number" step="1" min="-90" max="90"/></label>
+    <div class="buttons"><button id="box-pitch-reset">원래 기울기로</button><button id="box-pitch-save">기울기 저장</button></div>
     <div class="tabs" role="tablist"><button id="tab-draw" aria-pressed="true">직접 그리기</button><button id="tab-auto" aria-pressed="false">자동 계획</button></div>
     <section id="draw-panel">
       <p class="hint">빈 곳 클릭: 점 추가 · 점 드래그: 이동 · 점의 손잡이 드래그: 날 각도 · 점 더블클릭: 각도 자동 · 점 우클릭: 삭제 · 휠: 확대 · Shift+드래그: 화면 이동 · Ctrl+Z: 되돌리기 · Ctrl+Shift+Z: 다시 실행</p>
