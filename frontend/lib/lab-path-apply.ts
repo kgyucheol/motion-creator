@@ -47,13 +47,18 @@ export function readLabToolPaths(targetId: string, mounted: [string, string], ed
   const sections = parseMap(storage, SETTINGS_KEY);
   const grasps = parseMap(storage, GRASPS_KEY);
   const preferredProject = typeof saved.project === 'string' ? saved.project : '';
+  const templates = objectMap(saved.pathTemplates), overrides = objectMap(saved.pathOverrides);
   const result: Partial<Record<HandSide, LabToolPath>> = {};
   for (const [index, side] of (['left', 'right'] as const).entries()) {
     const toolId = mounted[index];
     const matches = Object.keys(drawings).filter(key => key.startsWith(`${toolId}|`) && key.endsWith(`|${targetId}`));
     matches.sort((a, b) => Number(b === `${toolId}|${preferredProject}|${targetId}`) - Number(a === `${toolId}|${preferredProject}|${targetId}`));
     const legacyKey = `${preferredProject}|${targetId}`;
-    const key = matches[0] ?? (saved.legacyDrawingTool === toolId && legacyKey in drawings ? legacyKey : undefined);
+    const templateId = templates[`${toolId}|${preferredProject}`];
+    const sharedKey = typeof templateId === 'string' && templateId !== targetId && overrides[`${toolId}|${preferredProject}|${targetId}`] !== true
+      ? `${toolId}|${preferredProject}|${templateId}` : undefined;
+    const key = sharedKey && sharedKey in drawings ? sharedKey : matches[0]
+      ?? (saved.legacyDrawingTool === toolId && legacyKey in drawings ? legacyKey : undefined);
     const drawing = objectMap(key ? drawings[key] : undefined);
     if (!key || !Array.isArray(drawing.points) || drawing.points.length < 2) continue;
     const points = drawing.points.map(value => {
@@ -67,7 +72,7 @@ export function readLabToolPaths(targetId: string, mounted: [string, string], ed
     const section = objectMap(objectMap(sections[toolId]).stepping);
     const savedStepping = { stepM: Number(section['step-m']), stepDeg: Number(section['step-deg']),
       speedMS: Number(section.speed), turnDegS: Number(section.turn), minStepS: Number(section['min-step']) };
-    result[side] = { side, toolId, projectName: key === legacyKey ? preferredProject : key.slice(toolId.length + 1, -targetId.length - 1), points,
+    result[side] = { side, toolId, projectName: key === legacyKey ? preferredProject : key.slice(toolId.length + 1, key.lastIndexOf('|')), points,
       flip: drawing.flip === true,
       source: finiteVector(source.center, 2) && typeof source.radius === 'number' && source.radius > 0 &&
         typeof source.planeY === 'number' && Number.isFinite(source.planeY)

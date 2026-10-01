@@ -81,6 +81,8 @@ select,input{width:100%}
       <div class="buttons"><button id="grasp-defaults">이 툴 계수 기본값</button></div>
       <p class="hint" id="grasp-info"></p>
       <div class="buttons"><button id="from-grasp">파지점에서 시작</button><button id="undo-point">마지막 점 삭제</button><button id="clear-points">모두 지우기</button></div>
+      <div class="buttons"><button id="share-path">현재 용기를 공통 경로 기준으로</button><button id="detach-path" hidden>이 용기만 개별 경로로</button><button id="reset-to-shared" hidden>공통 경로로 되돌리기</button></div>
+      <p class="hint" id="path-template-info">공통 경로를 지정하면 다른 용기에 위치를 맞춰 적용합니다. 바닥·벽 근처 용기는 개별 경로로 수정할 수 있습니다.</p>
       <label class="row">접촉 면<small>경로 기준 위·아래로 툴 단면을 뒤집습니다.</small><select id="flip"><option value="0">윗면 접촉</option><option value="1">아랫면 접촉</option></select></label>
       <label class="check"><input type="checkbox" id="snap" checked/>원통 표면에 붙이기</label>
       <label class="row">쐐기 깊이 (m)<small>붙일 때 표면 안쪽으로</small><input id="snap-wedge" type="number" step="0.001" value="0.003"/></label>

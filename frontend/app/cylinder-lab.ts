@@ -21,6 +21,8 @@ type Stored = { project?: string; mode?: string; params?: Record<string, number>
   selectedTool?: string;
   legacyDrawingTool?: string;
   drawings?: Record<string, { points: DrawnPoint[]; flip: boolean; source?: { center: number[]; radius: number; planeY: number } }>;
+  pathTemplates?: Record<string, string>;
+  pathOverrides?: Record<string, boolean>;
   physics?: { material?: string; softMm?: number; scope?: string; shape?: string; force?: number; tracking?: number;
     muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number; mass?: string } };
 const $ = <T = HTMLElement>(id: string) => document.getElementById(id) as unknown as T;
@@ -53,6 +55,7 @@ const toolProfiles: Partial<Record<'left' | 'right', BladeProfile>> = {};
 let mode: 'draw' | 'auto' = 'draw';
 let points: DrawnPoint[] = [];
 let selected = -1;
+let usingSharedPath = false;
 let autoPath: AutoPath | null = null;
 let simBlades: BladePath[] = [];
 let simProfiles: BladeProfile[] = [];
@@ -80,6 +83,8 @@ function stored(): Stored { try { return JSON.parse(localStorage.getItem(STORAGE
 function remember(values: Stored) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...stored(), ...values })); } catch { /* optional */ } }
 const legacyDrawKey = () => `${projectName}|${scene?.target_id ?? ''}`;
 const drawKey = () => `${activeToolId}|${legacyDrawKey()}`;
+const templateKey = () => `${activeToolId}|${projectName}`;
+const sharedTargetId = () => stored().pathTemplates?.[templateKey()];
 
 // ---------------------------------------------------------------- saved form sections ("저장" next to a heading)
 
@@ -154,19 +159,70 @@ function restoreSections() {
 }
 function saveDrawing() {
   if (!scene) return;
-  const drawings = stored().drawings ?? {};
+  const saved = stored();
+  const drawings = saved.drawings ?? {};
   drawings[drawKey()] = { points, flip: input('flip').value === '1', source: {
     center: [...scene.target.center], radius: scene.target.radius, planeY: scene.plane_y ?? 0,
   } };
-  remember({ drawings });
+  if (usingSharedPath) {
+    remember({ drawings, pathOverrides: { ...saved.pathOverrides, [drawKey()]: true } });
+    usingSharedPath = false;
+  } else remember({ drawings });
+  renderPathTemplateInfo();
 }
 function loadDrawing() {
-  const drawings = stored().drawings ?? {};
-  const saved = drawings[drawKey()] ?? (activeToolId === legacyToolId() ? drawings[legacyDrawKey()] : undefined);
-  points = Array.isArray(saved?.points) ? saved.points : [];
+  const settings = stored(), drawings = settings.drawings ?? {};
+  const sourceId = sharedTargetId();
+  const useShared = !!scene && !!sourceId && sourceId !== scene.target_id && !settings.pathOverrides?.[drawKey()];
+  const source = useShared ? drawings[`${activeToolId}|${projectName}|${sourceId}`] : undefined;
+  const center = source?.source?.center ?? scene?.circles.find(circle => circle.id === sourceId)?.center;
+  const saved = source && center && scene ? source : drawings[drawKey()]
+    ?? (activeToolId === legacyToolId() ? drawings[legacyDrawKey()] : undefined);
+  usingSharedPath = !!(source && center && scene);
+  const offset = usingSharedPath ? [scene!.target.center[0] - center![0], scene!.target.center[1] - center![1]] : [0, 0];
+  points = Array.isArray(saved?.points) ? saved.points.map(point => ({ ...point, x: point.x + offset[0], z: point.z + offset[1] })) : [];
   if (saved) input('flip').value = saved.flip ? '1' : '0';
   selected = points.length - 1;
-  if (saved && !saved.source && points.length) saveDrawing();
+  if (saved && !saved.source && points.length && !usingSharedPath) saveDrawing();
+  renderPathTemplateInfo();
+}
+function renderPathTemplateInfo() {
+  const info = $('path-template-info');
+  if (!info) return;
+  const sourceId = sharedTargetId();
+  const sourceName = scene?.circles.find(circle => circle.id === sourceId)?.name ?? sourceId;
+  const hasTemplate = !!sourceId && !!scene && sourceId !== scene.target_id;
+  $('detach-path').hidden = !hasTemplate || !usingSharedPath;
+  $('reset-to-shared').hidden = !hasTemplate || usingSharedPath;
+  $<HTMLButtonElement>('share-path').disabled = !scene || points.length < 2 || scene.circles.length < 2;
+  info.textContent = usingSharedPath ? `${sourceName}의 공통 경로를 이 용기 위치에 맞춰 표시 중입니다. 점을 고치면 이 용기만 개별 경로가 됩니다.`
+    : hasTemplate ? `${sourceName}의 공통 경로와 별도로 저장된 이 용기의 개별 경로입니다.`
+      : sourceId === scene?.target_id ? '현재 용기가 공통 경로 기준입니다. 이 경로를 고치면 연결된 용기에도 반영됩니다.'
+        : '현재 용기의 경로를 다른 용기에 공통으로 적용할 수 있습니다. 바닥·벽 근처는 별도 검증하세요.';
+}
+function sharePath() {
+  if (!scene || points.length < 2 || scene.circles.length < 2) return;
+  saveDrawing();
+  const saved = stored();
+  const overrides = { ...saved.pathOverrides };
+  for (const circle of scene.circles) if (circle.id !== scene.target_id)
+    delete overrides[`${activeToolId}|${projectName}|${circle.id}`];
+  remember({ pathTemplates: { ...saved.pathTemplates, [templateKey()]: scene.target_id }, pathOverrides: overrides });
+  renderPathTemplateInfo();
+  status(`${scene.circles.length - 1}개 용기에 ${toolLabel(activeToolId)} 공통 경로를 연결했습니다. 각 용기에서 충돌을 확인하세요.`);
+}
+function detachPath() {
+  if (!usingSharedPath) return;
+  saveDrawing();
+  status('현재 용기의 경로를 개별 저장했습니다. 이후 공통 경로를 바꿔도 유지됩니다.');
+}
+function resetToSharedPath() {
+  if (!scene || !sharedTargetId()) return;
+  const saved = stored(), overrides = { ...saved.pathOverrides };
+  delete overrides[drawKey()];
+  remember({ pathOverrides: overrides });
+  loadDrawing(); resetHistory(); clearResult(); renderPoints(); draw();
+  status('현재 용기를 공통 경로에 다시 연결했습니다.');
 }
 
 // ---------------------------------------------------------------- API and scene
@@ -1187,6 +1243,9 @@ async function init() {
     event.preventDefault(); event.stopPropagation(); saveSection(button.dataset.save!, button);
   }));
   $('to-draw').onclick = copyToDrawing;
+  $('share-path').onclick = sharePath;
+  $('detach-path').onclick = detachPath;
+  $('reset-to-shared').onclick = resetToSharedPath;
   $('pick-mode').onclick = () => setPickMode(!pickMode);
   input('box-pitch').addEventListener('change', () => void applyPitch(num('box-pitch')));
   $('box-pitch-reset').onclick = () => { if (originalPitch !== null) void applyPitch(originalPitch); };
