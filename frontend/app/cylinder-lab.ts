@@ -4,7 +4,7 @@ import { autoSteps, drawnWaypoints, movePoint, pointAngles, snapToCircle, waypoi
 import DEMOS from '../lib/cylinder-demos.json';
 import { termFor } from '../lib/lab-glossary';
 import { EDITOR_GRASP_KEY, editorGraspCoefficients, sectionGrasps, type SectionGrasp } from '../lib/lab-grasp';
-import { DEFAULT_RAMEN_GRASP_COEFFICIENTS, type RamenGraspCoefficients } from '../lib/scene-objects';
+import { DEFAULT_RAMEN_GRASP_COEFFICIENTS, type GraspPointCoefficients, type RamenGraspCoefficients } from '../lib/scene-objects';
 import { pileAfter, retarget, type Attempt } from '../lib/lab-batch';
 import { boxPitchDeg, tiltScene } from '../lib/box-tilt';
 
@@ -18,6 +18,8 @@ type ToolState = { model_id: string; tools: [string, string] | null; options: { 
 type ToolSection = { side: 'left' | 'right'; tool_id: string; section_y_m: number; outlines: number[][][]; fixtures: number[][][]; area_m2: number };
 type Stored = { project?: string; mode?: string; params?: Record<string, number>; stepping?: DrawnStepping;
   tools?: [string, string];
+  selectedTool?: string;
+  legacyDrawingTool?: string;
   drawings?: Record<string, { points: DrawnPoint[]; flip: boolean }>;
   physics?: { material?: string; softMm?: number; scope?: string; shape?: string; force?: number; tracking?: number;
     muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number; mass?: string } };
@@ -46,6 +48,7 @@ let limits: Record<string, [number, number]> = {};
 let toolModelId = 'g1';
 let mountedTools: [string, string] | null = null;
 let toolOptions: ToolState['options'] = [];
+let activeToolId = 'scoop';
 const toolProfiles: Partial<Record<'left' | 'right', BladeProfile>> = {};
 let mode: 'draw' | 'auto' = 'draw';
 let points: DrawnPoint[] = [];
@@ -75,55 +78,91 @@ const view = { cx: 0, cz: 0, size: .9 };
 
 function stored(): Stored { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}'); } catch { return {}; } }
 function remember(values: Stored) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...stored(), ...values })); } catch { /* optional */ } }
-const drawKey = () => `${projectName}|${scene?.target_id ?? ''}`;
+const legacyDrawKey = () => `${projectName}|${scene?.target_id ?? ''}`;
+const drawKey = () => `${activeToolId}|${legacyDrawKey()}`;
 
 // ---------------------------------------------------------------- saved form sections ("저장" next to a heading)
 
 const SAVED_KEY = 'motioncreator-cylinder-lab-saved-v1';
+const TOOL_SAVED_KEY = 'motioncreator-cylinder-lab-tool-settings-v1';
+const TOOL_GRASP_KEY = 'motioncreator-cylinder-lab-tool-grasps-v1';
 const SAVE_GROUPS: Record<string, string[]> = {
-  grasp: ['grasp-side', 'show-grasp', 'snap', 'snap-wedge'], // the blade face (flip) belongs to each drawing
+  grasp: ['show-grasp', 'snap', 'snap-wedge', 'flip'],
   stepping: ['step-m', 'step-deg', 'speed', 'turn', 'min-step'],
   physics: ['material', 'soft-shape', 'soft-mm', 'soft-scope', 'mass', 'force', 'tracking'],
   friction: ['mu-cylinder', 'mu-blade', 'mu-wall', 'rolling'],
 };
 type SavedSections = Partial<Record<string, Record<string, string | boolean | number>>>;
-function savedSections(): SavedSections { try { return JSON.parse(localStorage.getItem(SAVED_KEY) ?? '{}'); } catch { return {}; } }
+function storedMap<T>(key: string): Record<string, T> {
+  try {
+    const value = JSON.parse(localStorage.getItem(key) ?? '{}');
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  } catch { return {}; }
+}
+function legacyToolId() {
+  if (stored().legacyDrawingTool) return stored().legacyDrawingTool!;
+  const old = storedMap<Record<string, string>>(SAVED_KEY).grasp;
+  const side = old?.['grasp-side'] === 'right' ? 'right' : 'left';
+  const pair = stored().tools ?? mountedTools ?? ['scoop', 'end_support'];
+  return pair[side === 'left' ? 0 : 1];
+}
+function savedSections(): SavedSections {
+  return storedMap<SavedSections>(TOOL_SAVED_KEY)[activeToolId] ?? {};
+}
+function migrateLegacySections() {
+  try {
+    const toolId = legacyToolId();
+    if (!stored().legacyDrawingTool) remember({ legacyDrawingTool: toolId });
+    if (localStorage.getItem(TOOL_SAVED_KEY) !== null) return;
+    const old = storedMap<Record<string, string | boolean | number>>(SAVED_KEY);
+    localStorage.setItem(TOOL_SAVED_KEY, JSON.stringify(Object.keys(old).length ? { [toolId]: old } : {}));
+  } catch { /* Browser storage is optional. */ }
+}
+const DEFAULT_GROUPS: SavedSections = {};
+function readSection(group: string): Record<string, string | boolean | number> {
+  return group === 'auto' ? readParams()
+    : Object.fromEntries(SAVE_GROUPS[group].map(id => { const el = input(id); return [id, el.type === 'checkbox' ? el.checked : el.value]; }));
+}
+function persistSection(group: string) {
+  const map = storedMap<SavedSections>(TOOL_SAVED_KEY);
+  map[activeToolId] = { ...savedSections(), [group]: readSection(group) };
+  try { localStorage.setItem(TOOL_SAVED_KEY, JSON.stringify(map)); }
+  catch { status('브라우저 저장소를 쓸 수 없어 설정을 저장하지 못했습니다.'); }
+}
 
 /** Store the section's current inputs; the page starts from them next time it opens. */
 function saveSection(group: string, button: HTMLElement) {
-  const values: Record<string, string | boolean | number> = group === 'auto' ? readParams()
-    : Object.fromEntries(SAVE_GROUPS[group].map(id => { const el = input(id); return [id, el.type === 'checkbox' ? el.checked : el.value]; }));
-  try {
-    localStorage.setItem(SAVED_KEY, JSON.stringify({ ...savedSections(), [group]: values }));
-  } catch { status('브라우저 저장소를 쓸 수 없어 저장하지 못했습니다.'); return; }
+  persistSection(group);
   button.textContent = '저장됨'; button.classList.add('saved');
   setTimeout(() => { button.textContent = '저장'; button.classList.remove('saved'); }, 1500);
-  status('저장했습니다. 다음에 페이지를 열면 이 값으로 시작합니다.');
+  status(`${toolLabel(activeToolId)} 설정을 저장했습니다.`);
 }
 
 /** Put saved section values back into the form (the auto parameters are applied in renderParams). */
 function restoreSections() {
   const saved = savedSections();
   for (const [group, ids] of Object.entries(SAVE_GROUPS)) {
-    const values = saved[group];
-    if (!values) continue;
+    const values = { ...DEFAULT_GROUPS[group], ...saved[group] };
     for (const id of ids) {
       if (!(id in values)) continue;
       const el = input(id);
       if (el.type === 'checkbox') el.checked = Boolean(values[id]); else el.value = String(values[id]);
-      el.dispatchEvent(new Event('change'));
     }
   }
+  for (const id of ['material', 'soft-scope']) input(id).dispatchEvent(new Event('change'));
+  if (Object.keys(defaults).length) renderParams({ ...defaults, ...saved.auto } as Record<string, number>);
 }
 function saveDrawing() {
+  if (!scene) return;
   const drawings = stored().drawings ?? {};
   drawings[drawKey()] = { points, flip: input('flip').value === '1' };
   remember({ drawings });
 }
 function loadDrawing() {
-  const saved = (stored().drawings ?? {})[drawKey()];
+  const drawings = stored().drawings ?? {};
+  const saved = drawings[drawKey()] ?? (activeToolId === legacyToolId() ? drawings[legacyDrawKey()] : undefined);
   points = Array.isArray(saved?.points) ? saved.points : [];
-  input('flip').value = saved?.flip ? '1' : '0';
+  if (saved) input('flip').value = saved.flip ? '1' : '0';
   selected = points.length - 1;
 }
 
@@ -155,6 +194,7 @@ async function loadScene(targetId: string | undefined) {
   $<HTMLSelectElement>('target').innerHTML = response.targets.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
   $<HTMLSelectElement>('target').value = baseScene.target_id;
   renderParams({ ...defaults, ...Object.fromEntries(Object.entries(savedSections().auto ?? {}).filter(([key]) => key in defaults)) as Record<string, number> });
+  restoreSections();
   syncPitch();
   status('정착 중…');
   await new Promise(resolve => setTimeout(resolve, 10));
@@ -232,7 +272,7 @@ function renderParams(values: Record<string, number>) {
 }
 /** Planner parameters with the grasp point taken from the chosen hand's editor coefficients. */
 function plannerParams() {
-  const c = editorGraspCoefficients()[graspSide()];
+  const c = toolCoefficients(activeToolId);
   return { ...readParams(), clearance_m: c.clearance, height_m: c.height, pitch_deg: c.pitch };
 }
 const GRASP_PARAMS = ['clearance_m', 'height_m', 'pitch_deg'];
@@ -265,7 +305,7 @@ function editPoint(index: number, field: string, value: string) {
   else if (field === 'steps') point.steps = value === '' ? null : Math.max(1, Math.round(Number(value)));
   changed();
 }
-function changed() { clearResult(); saveDrawing(); renderPoints(); draw(); }
+function changed() { clearResult(); saveDrawing(); persistSection('grasp'); renderPoints(); draw(); }
 
 // ---------------------------------------------------------------- undo / redo of drawing edits
 
@@ -662,31 +702,53 @@ function currentGrasps(of: LabScene | null = scene): Record<'left' | 'right', Se
   const [cx, cz] = of.target.center, toward = of.toward_robot ?? [-1, 0];
   const planeY = of.plane_y ?? 0;
   const robotPosition = of.robot_position ?? [cx + toward[0], planeY, cz + toward[1]];
-  return sectionGrasps(of.target, planeY, robotPosition, of.robot_quaternion_xyzw ?? [0, 0, 0, 1], editorGraspCoefficients(),
+  const pair = mountedTools ?? [activeToolId, activeToolId];
+  const coefficients: RamenGraspCoefficients = { left: toolCoefficients(pair[0]), right: toolCoefficients(pair[1]) };
+  return sectionGrasps(of.target, planeY, robotPosition, of.robot_quaternion_xyzw ?? [0, 0, 0, 1], coefficients,
     of.box ? of.frame.up : null);
 }
-const graspSide = () => $<HTMLSelectElement>('grasp-side').value as 'left' | 'right';
 const handIndex = (side: 'left' | 'right') => side === 'left' ? 0 : 1;
-const activeToolProfile = (): BladeProfile => toolProfiles[graspSide()] ?? NSE_SCOOP_PROFILE;
+const preferredSide = (toolId: string): 'left' | 'right' => toolId === 'end_support' || toolId === 'nse_spatula' ? 'right' : 'left';
+const activeSide = (): 'left' | 'right' => {
+  const preferred = preferredSide(activeToolId);
+  if (mountedTools?.[handIndex(preferred)] === activeToolId) return preferred;
+  return mountedTools?.[handIndex(preferred === 'left' ? 'right' : 'left')] === activeToolId
+    ? (preferred === 'left' ? 'right' : 'left') : preferred;
+};
+const toolLabel = (id: string) => toolOptions.find(option => option.id === id)?.label ?? id;
+function migrateLegacyGrasps() {
+  try {
+    if (localStorage.getItem(TOOL_GRASP_KEY) !== null) return;
+    const pair = stored().tools ?? mountedTools ?? ['scoop', 'end_support'];
+    const editor = editorGraspCoefficients();
+    const migrated: Record<string, GraspPointCoefficients> = {};
+    for (const side of ['left', 'right'] as const) migrated[pair[handIndex(side)]] ??= { ...editor[side] };
+    localStorage.setItem(TOOL_GRASP_KEY, JSON.stringify(migrated));
+  } catch { /* Browser storage is optional. */ }
+}
+function toolCoefficients(toolId: string): GraspPointCoefficients {
+  const saved = storedMap<GraspPointCoefficients>(TOOL_GRASP_KEY)[toolId];
+  if (saved && ['lateral', 'clearance', 'height', 'roll', 'pitch', 'yaw'].every(key => Number.isFinite(saved[key as keyof GraspPointCoefficients]))) return saved;
+  return DEFAULT_RAMEN_GRASP_COEFFICIENTS[preferredSide(toolId)];
+}
+const activeToolProfile = (): BladeProfile => toolProfiles[activeSide()] ?? NSE_SCOOP_PROFILE;
 // Clamp planning emits robot-side then far-side paths; those use the left and right mounted tools.
 const profilesForBlades = (blades: BladePath[]): BladeProfile[] => blades.length > 1
   ? [toolProfiles.left ?? NSE_SCOOP_PROFILE, toolProfiles.right ?? NSE_SCOOP_PROFILE]
   : [activeToolProfile()];
 const profilesReadyForBlades = (blades: BladePath[]) => toolModelId === 'g1-tools' && (blades.length > 1
-  ? Boolean(toolProfiles.left && toolProfiles.right) : Boolean(toolProfiles[graspSide()]));
+  ? Boolean(toolProfiles.left && toolProfiles.right) : Boolean(toolProfiles[activeSide()]));
 
 function renderMountedTool() {
-  const side = graspSide(), select = $<HTMLSelectElement>('mounted-tool');
-  const fallback = stored().tools ?? ['nse_scoop', 'nse_spatula'];
-  const selected = mountedTools?.[handIndex(side)] ?? fallback[handIndex(side)];
+  const side = activeSide(), select = $<HTMLSelectElement>('mounted-tool');
   select.innerHTML = `<option value="">툴 선택…</option>`
     + toolOptions.map(option => `<option value="${option.id}">${option.label}</option>`).join('');
-  if (toolModelId === 'g1-tools' && mountedTools && toolOptions.some(option => option.id === selected)) select.value = selected;
-  const pair = mountedTools?.map(id => toolOptions.find(option => option.id === id)?.label ?? id);
+  if (toolOptions.some(option => option.id === activeToolId)) select.value = activeToolId;
+  const pair = mountedTools?.map(toolLabel);
   const sectionStatus = toolProfiles[side] ? '단면 준비됨' : toolModelId === 'g1-tools' ? '단면을 가져오지 못함' : '툴 모델 선택 후 단면 사용';
   $('mounted-tool-info').textContent = toolModelId === 'g1-tools'
-    ? `G1 그리퍼 장착 구성 · 왼손 ${pair?.[0] ?? '—'} / 오른손 ${pair?.[1] ?? '—'} · ${sectionStatus}`
-    : '툴을 고르면 메인 편집기와 공유하는 G1 그리퍼 모델로 전환하고 실제 충돌 메시 단면을 불러옵니다.';
+    ? `${toolLabel(activeToolId)} 설정 · ${sectionStatus} · 장착: 왼쪽 ${pair?.[0] ?? '—'} / 오른쪽 ${pair?.[1] ?? '—'}`
+    : '툴을 고르면 G1 그리퍼 모델로 전환하고 해당 툴의 설정과 실제 충돌 단면을 불러옵니다.';
 }
 
 async function refreshToolProfiles() {
@@ -704,7 +766,7 @@ async function refreshToolProfiles() {
 }
 
 async function changeMountedTool(toolId: string) {
-  const side = graspSide(), select = $<HTMLSelectElement>('mounted-tool');
+  const select = $<HTMLSelectElement>('mounted-tool');
   select.disabled = true;
   try {
     if (toolModelId !== 'g1-tools') {
@@ -713,16 +775,19 @@ async function changeMountedTool(toolId: string) {
       toolModelId = current.model_id;
       mountedTools = current.tools ?? ['scoop', 'end_support'];
     }
-    const next: [string, string] = [...(mountedTools ?? ['scoop', 'end_support'])];
-    next[handIndex(side)] = toolId;
-    const updated = await api<{ model_id: string; tools: [string, string] }>('tools', { left: next[0], right: next[1] });
-    toolModelId = updated.model_id;
-    mountedTools = updated.tools;
-    remember({ tools: updated.tools });
-    await refreshToolProfiles();
-    renderMountedTool(); resetPicks(); draw();
-    const label = toolOptions.find(option => option.id === toolId)?.label ?? toolId;
-    status(`${side === 'left' ? '왼손' : '오른손'}에 ${label}을 장착했습니다. 메인 편집기와 같은 로봇 모델 설정입니다.`);
+    if (!mountedTools?.includes(toolId)) {
+      const next: [string, string] = [...(mountedTools ?? ['scoop', 'end_support'])];
+      next[handIndex(preferredSide(toolId))] = toolId;
+      const updated = await api<{ model_id: string; tools: [string, string] }>('tools', { left: next[0], right: next[1] });
+      toolModelId = updated.model_id;
+      mountedTools = updated.tools;
+      await refreshToolProfiles();
+      resetPicks();
+    }
+    activeToolId = toolId;
+    remember({ tools: mountedTools ?? undefined, selectedTool: toolId });
+    restoreSections(); loadDrawing(); resetHistory(); clearResult(); renderGraspInfo(); renderPoints(); renderMountedTool(); draw();
+    status(`${toolLabel(toolId)}의 파지점·경로·설정을 불러왔습니다.`);
   } catch (error) {
     // A failed change can still have switched the robot model; read the server's actual state back.
     try {
@@ -741,9 +806,9 @@ const COEFFICIENT_FIELDS: [keyof RamenGraspCoefficients['left'], string, number,
   ['roll', 'roll (°)', 1, null], ['pitch', 'pitch (°)', 1, null], ['yaw', 'yaw (°)', 1, null],
 ];
 
-/** The chosen hand's editor coefficients as editable fields; edits are saved at once to the shared key. */
+/** The active tool's grasp coefficients; the editor still receives the mounted side's values. */
 function renderGraspInfo() {
-  const c = editorGraspCoefficients()[graspSide()];
+  const c = toolCoefficients(activeToolId);
   const focused = (document.activeElement as HTMLElement | null)?.dataset?.coefficient;
   $('grasp-coefficients').innerHTML = COEFFICIENT_FIELDS.map(([key, label, step, min]) =>
     `<label class="row">${label}<input data-coefficient="${key}" type="number" step="${step}" ${min === null ? '' : `min="${min}"`} value="${c[key]}"/></label>`).join('');
@@ -754,29 +819,38 @@ function renderGraspInfo() {
   document.querySelectorAll<HTMLInputElement>('#params input').forEach(field => {
     if (field.dataset.key! in mirror) field.value = String(mirror[field.dataset.key!]);
   });
-  const grasp = currentGrasps()?.[graspSide()];
+  const grasp = currentGrasps()?.[activeSide()];
   const boxPitch = scene ? boxPitchDeg(scene) : null;
   const entry = boxPitch === null ? '상자가 없어 수평 진입(아래로 0°)'
     : `상자 입구에 수직 진입: 아래로 90 + (${boxPitch.toFixed(0)}°) = ${(90 + boxPitch).toFixed(0)}°`;
   const final = grasp ? ` · pitch 계수 ${c.pitch}° 적용 후 아래로 ${(-grasp.angle * 180 / Math.PI).toFixed(0)}°` : '';
-  $('grasp-info').textContent = `${entry}${final}. 계수는 에디터와 공통이며 바꾸면 바로 저장됩니다(pitch는 +가 위쪽).`
+  $('grasp-info').textContent = `${entry}${final}. 계수는 이 툴에 바로 저장됩니다(pitch는 +가 위쪽).`
     + (grasp && grasp.inPlane < .5 ? ' yaw/roll 때문에 날이 단면 밖을 크게 향합니다(단면에서는 짧게 보임).' : '');
 }
 
-function writeCoefficients(next: RamenGraspCoefficients) {
-  try { localStorage.setItem(EDITOR_GRASP_KEY, JSON.stringify(next)); } catch { status('브라우저 저장소를 쓸 수 없어 계수를 저장하지 못했습니다.'); }
+function writeCoefficients(next: GraspPointCoefficients) {
+  try {
+    const map = storedMap<GraspPointCoefficients>(TOOL_GRASP_KEY);
+    map[activeToolId] = next;
+    localStorage.setItem(TOOL_GRASP_KEY, JSON.stringify(map));
+    // editorGraspCoefficients may return the shared default object; never mutate it.
+    const editor = structuredClone(editorGraspCoefficients());
+    for (const side of ['left', 'right'] as const) {
+      if (mountedTools?.[handIndex(side)] === activeToolId) editor[side] = next;
+    }
+    localStorage.setItem(EDITOR_GRASP_KEY, JSON.stringify(editor));
+  } catch { status('브라우저 저장소를 쓸 수 없어 계수를 저장하지 못했습니다.'); }
   renderGraspInfo(); draw();
 }
 function editCoefficient(key: keyof RamenGraspCoefficients['left'], raw: string) {
   const value = Number(raw);
   const field = COEFFICIENT_FIELDS.find(([k]) => k === key)!;
   if (raw.trim() === '' || !Number.isFinite(value) || (field[3] !== null && value < field[3])) { renderGraspInfo(); return; }
-  const all = editorGraspCoefficients(), side = graspSide();
-  writeCoefficients({ ...all, [side]: { ...all[side], [key]: value } });
+  writeCoefficients({ ...toolCoefficients(activeToolId), [key]: value });
 }
 
 function graspPoint(): DrawnPoint | null {
-  const grasp = currentGrasps()?.[graspSide()];
+  const grasp = currentGrasps()?.[activeSide()];
   if (!grasp) return null;
   input('flip').value = grasp.flip ? '1' : '0';
   return { x: grasp.x, z: grasp.z, angle: grasp.angle, steps: null };
@@ -936,7 +1010,7 @@ async function loadDemo(id: string) {
   await new Promise(resolve => setTimeout(resolve, 10));
   scene = settled(baseScene);
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05; view.size = .9;
-  loadDrawing(); resetHistory(); if (pickMode) setPickMode(false); pile = null; attempts = []; renderAttempts();
+  restoreSections(); loadDrawing(); resetHistory(); if (pickMode) setPickMode(false); pile = null; attempts = []; renderAttempts();
   renderParams({ ...defaults, ...demo.params });
   const soft = demo.options.soft, friction = demo.options.friction ?? {};
   $<HTMLSelectElement>('material').value = soft ? 'soft' : 'rigid';
@@ -1092,6 +1166,11 @@ async function init() {
   toolModelId = tools.model_id;
   mountedTools = tools.tools;
   toolOptions = tools.options;
+  migrateLegacyGrasps();
+  migrateLegacySections();
+  activeToolId = saved.selectedTool && toolOptions.some(option => option.id === saved.selectedTool)
+    ? saved.selectedTool : legacyToolId();
+  for (const group of Object.keys(SAVE_GROUPS)) DEFAULT_GROUPS[group] = readSection(group);
   if (toolModelId === 'g1-tools') await refreshToolProfiles();
   renderMountedTool();
   const select = $<HTMLSelectElement>('project');
@@ -1101,7 +1180,7 @@ async function init() {
   $<HTMLSelectElement>('target').onchange = event => void loadScene((event.target as HTMLSelectElement).value).catch(error => status(error.message));
   $('run').onclick = () => void run();
   $('select-sim-target').onclick = () => setTargetPickMode(!targetPickMode);
-  $('reset').onclick = () => renderParams(defaults);
+  $('reset').onclick = () => { renderParams(defaults); persistSection('auto'); renderGraspInfo(); };
   document.querySelectorAll<HTMLElement>('.save-section').forEach(button => button.addEventListener('click', event => {
     event.preventDefault(); event.stopPropagation(); saveSection(button.dataset.save!, button);
   }));
@@ -1131,7 +1210,6 @@ async function init() {
   $('tab-draw').onclick = () => setMode('draw');
   $('tab-auto').onclick = () => setMode('auto');
   $('from-grasp').onclick = () => { if (!scene) return; checkpoint(); const p = graspPoint(); if (p) { points.unshift(p); selected = 0; changed(); } };
-  $('grasp-side').addEventListener('change', () => { renderGraspInfo(); renderMountedTool(); draw(); });
   $('mounted-tool').addEventListener('change', event => {
     const selected = (event.target as HTMLSelectElement).value;
     if (selected) void changeMountedTool(selected);
@@ -1141,12 +1219,13 @@ async function init() {
     if (target.dataset.coefficient) editCoefficient(target.dataset.coefficient as keyof RamenGraspCoefficients['left'], target.value);
   });
   $('grasp-defaults').onclick = () => {
-    const all = editorGraspCoefficients();
-    writeCoefficients({ ...all, [graspSide()]: { ...DEFAULT_RAMEN_GRASP_COEFFICIENTS[graspSide()] } });
+    writeCoefficients({ ...DEFAULT_RAMEN_GRASP_COEFFICIENTS[preferredSide(activeToolId)] });
   };
   input('show-grasp').addEventListener('change', draw);
-  // The editor may change the shared grasp coefficients in another tab.
-  window.addEventListener('storage', event => { if (event.key === EDITOR_GRASP_KEY) { renderGraspInfo(); draw(); } });
+  window.addEventListener('storage', event => {
+    if (event.key === TOOL_GRASP_KEY || event.key === EDITOR_GRASP_KEY) { renderGraspInfo(); draw(); }
+    if (event.key === TOOL_SAVED_KEY) restoreSections();
+  });
   $('undo-point').onclick = () => { if (!points.length) return; checkpoint(); points.pop(); selected = points.length - 1; changed(); };
   $('clear-points').onclick = () => { if (!points.length) return; checkpoint(); points = []; selected = -1; changed(); };
   let beforeFlip: Snapshot | null = null;
@@ -1171,6 +1250,12 @@ async function init() {
     (event.target as HTMLInputElement).value = '';
   };
   for (const id of ['step-m', 'step-deg', 'speed', 'turn', 'min-step', 'snap-wedge', 'flip', 'snap']) input(id).addEventListener('change', changed);
+  for (const [group, ids] of Object.entries(SAVE_GROUPS)) {
+    for (const id of ids) input(id).addEventListener('change', () => persistSection(group));
+  }
+  $('params').addEventListener('change', event => {
+    if ((event.target as HTMLElement).matches('input[data-key]')) persistSection('auto');
+  });
   $('points').addEventListener('change', event => {
     const target = event.target as HTMLInputElement, row = target.closest('.point') as HTMLElement | null;
     if (row && target.dataset.field) editPoint(Number(row.dataset.i), target.dataset.field, target.value);
@@ -1231,9 +1316,9 @@ async function init() {
   window.addEventListener('resize', draw);
   setupTerms();
   setupCanvas();
-  restoreSections();
   setMode(saved.mode === 'auto' ? 'auto' : 'draw');
   requestAnimationFrame(tick);
+  if (toolModelId !== 'g1-tools' || !mountedTools?.includes(activeToolId)) await changeMountedTool(activeToolId);
   if (select.value) await loadProject(select.value);
 }
 init().catch(error => status(error instanceof Error ? error.message : String(error)));
