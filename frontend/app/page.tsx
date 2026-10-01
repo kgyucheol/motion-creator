@@ -1386,6 +1386,7 @@ export default function Editor() {
             })}
             {mismatched && <p className="hint lab-grasp-warning">Cylinder Lab에서 조절한 용기 지름이 메인 장면과 다릅니다. 메인 장면의 지름을 맞춘 뒤 다시 미리보세요.</p>}
             <p className="hint">양손의 그린 점을 순서대로 묶어 선택 키프레임 다음에 {path.times.length}개 생성 · 구간별 보간 시간을 키프레임 이동시간으로 적용 · 최대 100개</p>
+            <p className="hint">파지법 IK는 화면의 IK Behavior 설정과 별개로 계산합니다. 손 목표를 맞추는 동안 현재 골반 위치와 고정된 부위를 유지합니다.</p>
             <p className="hint">키프레임 생성은 TCP 도달 여부를 확인합니다. 툴과 용기의 물리 충돌은 생성 후 Physics 재생으로 확인하세요.</p>
             <div className="lab-grasp-actions"><button className="primary" disabled={disabled || poseDirty || mismatched || !activeFrame || !!motionClip} onClick={() => void generateLabGraspKeyframes()}>키프레임 생성</button>
               <button disabled={disabled} onClick={() => setLabPathPreview(null)}>미리보기 닫기</button></div>

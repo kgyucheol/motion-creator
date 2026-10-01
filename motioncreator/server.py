@@ -513,6 +513,10 @@ def cylinder_lab_solve_path(payload: LabPathSolveInput):
             raise ValueError('장착 툴이 변경되었습니다. 메인 에디터를 새로고침한 뒤 다시 시도하세요.')
         start = active_robot.validate_q(payload.qpos)
         seed = start.copy()
+        # Keep the authored stance while the hands follow the path. Otherwise the
+        # whole-body solve can move the pelvis far enough to make a reachable-looking
+        # hand target produce an implausible full-body pose.
+        stance_pins = tuple(dict.fromkeys([*payload.pins, 'pelvis']))
         frames = []
         diagnostics = []
         hands = {'left_hand', 'right_hand'}
@@ -523,17 +527,17 @@ def cylinder_lab_solve_path(payload: LabPathSolveInput):
 
             def attempt(initial, posture_weight, evaluations):
                 return active_robot.solve(
-                    initial, start, pins=payload.pins, angle_pins=payload.angle_pins,
+                    initial, start, pins=stance_pins, angle_pins=payload.angle_pins,
                     mode='free', resistance=0., selected_targets=waypoint.targets,
                     orientation_targets=waypoint.orientations, posture_reference=seed,
                     posture_weight=posture_weight, max_nfev=evaluations,
                 )
 
-            solved, info = attempt(seed, .08, 180)
+            solved, info = attempt(seed, .8, 180)
             if not info['converged']:
                 # Follow the reached posture into the next local solve, then relax the preference
-                # for the previous joints. TCP and pinned-feet tolerances remain unchanged.
-                for weight, evaluations in ((.02, 280), (0., 400)):
+                # for the previous joints. TCP and stance tolerances remain unchanged.
+                for weight, evaluations in ((.3, 280), (.08, 400)):
                     candidate, candidate_info = attempt(solved if not info['rejected'] else seed, weight, evaluations)
                     if (candidate_info['converged'] or
                             (not info['converged'] and not candidate_info['rejected'] and
@@ -546,7 +550,8 @@ def cylinder_lab_solve_path(payload: LabPathSolveInput):
                                     for hand, error in sorted(info['target_errors_mm'].items()))
                 raise ValueError(f'파지법 {index}/{len(payload.waypoints)}번째 지점 IK 실패: '
                                  f'위치 {errors} · 방향 {info["angle_error_deg"]:.1f}°. '
-                                 '키프레임은 추가하지 않았습니다. 해당 웨이포인트를 로봇 쪽으로 옮기거나 시작 자세를 조정해 주세요.')
+                                 '골반과 고정된 부위를 유지할 수 없어 키프레임을 추가하지 않았습니다. '
+                                 '해당 그린 점을 로봇 쪽으로 옮기거나 시작 자세를 조정해 주세요.')
             frames.append(solved.tolist())
             diagnostics.append(info)
             seed = solved
