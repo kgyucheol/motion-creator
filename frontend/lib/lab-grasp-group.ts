@@ -1,5 +1,5 @@
 import type { Keyframe } from './keyframes';
-import type { LabPathPreview } from './lab-path-apply';
+import type { LabLateralOffsets, LabPathPreview } from './lab-path-apply';
 import type { SceneObject } from './scene-objects';
 
 // These signatures describe editor content, not security-sensitive data.
@@ -15,10 +15,14 @@ export function authoredSignature(frame: Keyframe) {
     angle_pins: frame.angle_pins, samples: frame.samples, grasp: frame.grasp, interaction: frame.interaction });
 }
 
-export function labSourceSignature(preview: Pick<LabPathPreview, 'sourcePaths'>, target: SceneObject, anchor: Keyframe) {
+export function labSourceSignature(preview: Pick<LabPathPreview, 'sourcePaths'>, target: SceneObject, anchor: Keyframe,
+  lateralOffsets: LabLateralOffsets = {}) {
+  const offsets = Object.fromEntries((['left', 'right'] as const).filter(side => preview.sourcePaths[side] &&
+    Math.abs(lateralOffsets[side] ?? 0) > 1e-9).map(side => [side, lateralOffsets[side]]));
   return signature({ paths: preview.sourcePaths, target: { id: target.id, position: target.position,
     quaternion_xyzw: target.quaternion_xyzw, size: target.size, collision_size: target.collision_size },
-    anchor: { qpos: anchor.qpos, pins: anchor.pins, angle_pins: anchor.angle_pins } });
+    anchor: { qpos: anchor.qpos, pins: anchor.pins, angle_pins: anchor.angle_pins },
+    ...(Object.keys(offsets).length ? { lateralOffsets: offsets } : {}) });
 }
 
 export function labGroupRange(keyframes: Keyframe[], index: number) {

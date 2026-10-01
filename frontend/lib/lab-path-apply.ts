@@ -13,8 +13,27 @@ export type LabToolPath = { side: HandSide; toolId: string; projectName: string;
 export type ToolPose = { position: number[]; quaternion_xyzw: number[] };
 export type ToolPathPoint = ToolPose & { time: number; label: string; anchor: boolean };
 export type ToolPathTrack = { side: HandSide; toolId: string; points: ToolPathPoint[]; keyPoints: ToolPathPoint[]; drawnCount: number; grasp: ToolPose };
+export type LabLateralOffsets = Partial<Record<HandSide, number>>;
 export type LabPathPreview = { targetId: string; tracks: Partial<Record<HandSide, ToolPathTrack>>; times: number[];
-  sourcePaths: Partial<Record<HandSide, LabToolPath>> };
+  sourcePaths: Partial<Record<HandSide, LabToolPath>>; lateralOffsets: LabLateralOffsets; lateralDirections: Record<HandSide, number> };
+
+/** Shift every TCP sample of a hand along world Y, leaving XZ positions and rotations intact. */
+export function withLabLateralOffsets(preview: LabPathPreview, offsets: LabLateralOffsets): LabPathPreview {
+  const tracks = { ...preview.tracks };
+  for (const side of ['left', 'right'] as const) {
+    const track = tracks[side];
+    if (!track) continue;
+    const previous = preview.lateralOffsets[side] ?? 0;
+    const desired = offsets[side] ?? 0;
+    const shift = (desired - previous) * preview.lateralDirections[side];
+    if (!shift) continue;
+    const moved = (pose: ToolPathPoint): ToolPathPoint => ({ ...pose,
+      position: [pose.position[0], pose.position[1] + shift, pose.position[2]] });
+    const points = track.points.map(moved);
+    tracks[side] = { ...track, points, keyPoints: track.keyPoints.map(moved), grasp: points[0] };
+  }
+  return { ...preview, tracks, lateralOffsets: { ...offsets } };
+}
 
 function objectMap(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -170,5 +189,7 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
     }));
     times.push(Number(((times[index - 1] ?? 0) + duration).toFixed(6)));
   }
-  return { targetId: target.id, tracks, times, sourcePaths };
+  const leftDirection = Math.sign(grasp.left[1] - grasp.right[1]) || 1;
+  return { targetId: target.id, tracks, times, sourcePaths, lateralOffsets: {},
+    lateralDirections: { left: leftDirection, right: -leftDirection } };
 }

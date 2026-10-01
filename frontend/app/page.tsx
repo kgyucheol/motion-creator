@@ -11,12 +11,12 @@ import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDL
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
-import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
+import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, withLabLateralOffsets, type LabLateralOffsets, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
 import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } from '../lib/lab-grasp-group';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
-type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; mounted_tools?: [string, string] | null; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; box?: { position: number[]; size: number[]; visible: boolean } };
+type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; mounted_tools?: [string, string] | null; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; lab_lateral_offsets?: Record<string, LabLateralOffsets>; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
 type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; controller?: 'pd' | 'gear-sonic' | 'objects'; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
@@ -28,6 +28,9 @@ type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; obj
 const feet = ['left_foot', 'right_foot'];
 const GRASP_GHOST_ID = '__grasp_keyframe_ghost__';
 const GRASP_COEFFICIENTS_STORAGE_KEY = 'motioncreator-editor-ramen-grasp-v1';
+const labLateralKey = (targetId: string, mounted: [string, string]) => `${targetId}|${mounted.join('|')}`;
+const labLateralOffsets = (project: Project | null, targetId: string, mounted: [string, string]): LabLateralOffsets =>
+  project?.lab_lateral_offsets?.[labLateralKey(targetId, mounted)] ?? {};
 // Keep the experimental planner available in code while users author each phase manually.
 const SHOW_AUTOMATIC_RAMEN_SEQUENCE = false;
 const genericFrameNames = new Set(['stand', 'standing', 'pose', 'frame', 'keyframe', 'start', 'start pose', 'imported motion clip', '서기', '서있기', '기본 서기', '기본 서기 자세', '자세', '키프레임', '시작', '시작 자세']);
@@ -827,11 +830,26 @@ export default function Editor() {
           throw new Error(`${path.toolId}의 예전 경로 기준 위치를 찾지 못했습니다. Cylinder Lab에서 그 툴의 경로를 다시 열어 저장해 주세요.`);
         }
       }
-      const next = buildLabPathPreview(target, pelvis.position, pelvis.quaternion, paths,
-        100 - (project?.keyframes.length ?? 0));
+      const next = withLabLateralOffsets(buildLabPathPreview(target, pelvis.position, pelvis.quaternion, paths,
+        100 - (project?.keyframes.length ?? 0)), labLateralOffsets(project, target.id, tools));
       setLabPathPreview(next);
       setMessage(`${target.name}의 파지법을 3D 장면에 표시했습니다 · 왼손 ${next.tracks.left?.drawnCount ?? 0}점 / 오른손 ${next.tracks.right?.drawnCount ?? 0}점 · 생성 ${next.times.length}키프레임`);
     });
+  }
+  function changeLabLateral(targetId: string, side: HandSide, baseLateral: number, lateral: number) {
+    if (!project || !tools || !Number.isFinite(lateral)) return;
+    const key = labLateralKey(targetId, tools);
+    const offsets = { ...labLateralOffsets(project, targetId, tools),
+      [side]: Number((Math.max(0, lateral) - baseLateral).toFixed(6)) };
+    if (!offsets[side]) delete offsets[side];
+    const all = { ...project.lab_lateral_offsets };
+    if (Object.keys(offsets).length) all[key] = offsets;
+    else delete all[key];
+    const nextProject = { ...project, lab_lateral_offsets: all };
+    current.current.project = nextProject; setProject(nextProject);
+    setLabPathPreview(previous => previous?.targetId === targetId
+      ? withLabLateralOffsets(previous, offsets) : previous);
+    setPendingLabReplacement(null);
   }
   async function generateLabGraspKeyframes() {
     const preview = labPathPreview, source = project?.keyframes[frameIndex];
@@ -866,7 +884,8 @@ export default function Editor() {
       const target = objects.find(object => object.id === preview.targetId);
       if (!target) throw new Error('파지 대상 용기를 찾지 못했습니다.');
       const groupId = crypto.randomUUID();
-      const sourceSignature = labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, source);
+      const sourceSignature = labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, source,
+        labLateralOffsets(project, target.id, tools));
       generated.forEach((frame, index) => { frame.lab_grasp = { group_id: groupId, target_id: target.id,
         tools: [...tools], source_signature: sourceSignature, point_index: index,
         authored_signature: authoredSignature(frame) }; });
@@ -896,7 +915,8 @@ export default function Editor() {
       if (mounted.model_id !== modelId || !mounted.tools || mounted.tools.some((tool, index) => tool !== tools[index]))
         throw new Error('서버의 장착 툴이 다릅니다. 메인 편집기를 새로고침해 주세요.');
       const paths = readLabToolPaths(target.id, tools, graspCoefficients);
-      const initialSourceSignature = labSourceSignature({ sourcePaths: paths }, target, source);
+      const initialSourceSignature = labSourceSignature({ sourcePaths: paths }, target, source,
+        labLateralOffsets(project, target.id, tools));
       for (const path of Object.values(paths)) {
         if (!path || path.source || path.projectName.startsWith('데모:')) continue;
         try {
@@ -909,8 +929,8 @@ export default function Editor() {
       }
       const anchorPose = await api<PoseState>('pose', { qpos: source.qpos });
       const pelvis = anchorPose.handles.pelvis;
-      const next = buildLabPathPreview(target, pelvis.position, pelvis.quaternion, paths,
-        100 - project.keyframes.length + range.frames.length);
+      const next = withLabLateralOffsets(buildLabPathPreview(target, pelvis.position, pelvis.quaternion, paths,
+        100 - project.keyframes.length + range.frames.length), labLateralOffsets(project, target.id, tools));
       const activeSides = (['left', 'right'] as HandSide[]).filter(side => !!next.tracks[side]);
       for (const side of activeSides) {
         if (source.pins.includes(`${side}_hand`) || source.angle_pins?.includes(`${side}_hand`))
@@ -932,7 +952,8 @@ export default function Editor() {
       });
       if (solved.qpos.length !== next.times.length) throw new Error('계산된 키프레임 개수가 웨이포인트와 다릅니다.');
       if (current.current.project !== project) throw new Error('계산 중 프로젝트가 변경되었습니다. 다시 업데이트해 주세요.');
-      const sourceSignature = labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, source);
+      const sourceSignature = labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, source,
+        labLateralOffsets(project, target.id, tools));
       if (sourceSignature !== initialSourceSignature) throw new Error('계산 중 Cylinder Lab 경로가 변경되었습니다. 다시 업데이트해 주세요.');
       const frames: Keyframe[] = solved.qpos.map((qpos, index) => ({
         name: index === 0 ? '그린 점 1 · 파지점' : `그린 점 ${index + 1}`,
@@ -952,7 +973,8 @@ export default function Editor() {
     if (!pending || !project || project !== pending.project) { setPendingLabReplacement(null); setError('프로젝트가 변경되었습니다. 다시 계산해 주세요.'); return; }
     const target = objects.find(object => object.id === pending.targetId);
     const anchor = project.keyframes[pending.start - 1];
-    if (!target || !anchor || !tools || labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, anchor)
+    if (!target || !anchor || !tools || labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, anchor,
+      labLateralOffsets(project, target.id, tools))
       !== pending.frames[0].lab_grasp?.source_signature) {
       setPendingLabReplacement(null); setError('확인 중 Cylinder Lab 경로나 장면이 변경되었습니다. 다시 계산해 주세요.'); return;
     }
@@ -1494,7 +1516,8 @@ export default function Editor() {
     if (!target || !anchor || tools.some((tool, index) => tool !== link.tools[index])) return '툴 또는 용기 확인 필요';
     const paths = readLabToolPaths(target.id, tools, graspCoefficients);
     if (!paths.left && !paths.right) return '저장 경로 없음';
-    return labSourceSignature({ sourcePaths: paths }, target, anchor) === link.source_signature ? '최신' : '경로 변경됨';
+    return labSourceSignature({ sourcePaths: paths }, target, anchor,
+      labLateralOffsets(project, target.id, tools)) === link.source_signature ? '최신' : '경로 변경됨';
   })();
   const selectedLegacyLab = project ? legacyLabRange(project.keyframes, frameIndex) : null;
   function linkLegacyLab() {
@@ -1504,7 +1527,8 @@ export default function Editor() {
     if (!target || !anchor) return;
     const paths = readLabToolPaths(target.id, tools, graspCoefficients);
     if (!paths.left && !paths.right) { setError('Cylinder Lab에 저장된 경로가 없습니다.'); return; }
-    const sourceSignature = labSourceSignature({ sourcePaths: paths }, target, anchor);
+    const sourceSignature = labSourceSignature({ sourcePaths: paths }, target, anchor,
+      labLateralOffsets(project, target.id, tools));
     const groupId = crypto.randomUUID();
     checkpoint();
     const frames = project.keyframes.map((frame, index) => index < selectedLegacyLab.start || index > selectedLegacyLab.end ? frame : {
@@ -1651,6 +1675,8 @@ export default function Editor() {
         const object = objects.find(value => value.id === selectedObjectId);
         if (!object || !(isRamenBundle(object) || object.shape === 'cylinder' || object.collision_shape === 'cylinder')) return null;
         const path = labPathPreview?.targetId === object.id ? labPathPreview : null;
+        const savedPaths = path?.sourcePaths ?? (tools ? readLabToolPaths(object.id, tools, graspCoefficients) : {});
+        const lateralOffsets = tools ? labLateralOffsets(project, object.id, tools) : {};
         const dimensions = object.collision_size ?? object.size;
         const axial = dimensions.indexOf(Math.max(...dimensions));
         const radius = Math.max(...dimensions.filter((_, index) => index !== axial)) / 2;
@@ -1676,6 +1702,22 @@ export default function Editor() {
               <button onClick={() => { setPendingLabReplacement(null); setLabPathPreview(null); }}>취소</button></div>
           </div>}
           <button className="wide" disabled={disabled || !activeFrame || !!motionClip} onClick={() => void prepareLabGrasp()}>파지법 적용</button>
+          {(['left', 'right'] as HandSide[]).some(side => !!savedPaths[side]) && <div className="lab-lateral-adjustment">
+            <strong>메인 편집기 lateral 보정</strong>
+            <p className="hint">Cylinder Lab의 기본 파지법을 기준으로 손별 경로 전체를 Y축으로 평행이동합니다. XZ 경로와 툴 자세는 유지됩니다.</p>
+            {(['left', 'right'] as HandSide[]).map(side => {
+              const base = savedPaths[side]?.coefficients.lateral;
+              if (base === undefined) return null;
+              const adjusted = Number((base + (lateralOffsets[side] ?? 0)).toFixed(6));
+              return <div className="lab-lateral-row" key={side}>
+                <label htmlFor={`lab-lateral-${side}`}><span className={side}>{side === 'left' ? '왼손' : '오른손'}</span> lateral</label>
+                <NumericInput id={`lab-lateral-${side}`} aria-label={`${side === 'left' ? '왼손' : '오른손'} 파지법 lateral`}
+                  value={adjusted} min={0} step=".005" disabled={disabled} onChange={event => changeLabLateral(object.id, side, base, +event.target.value)}/>
+                <span>m</span><button disabled={disabled || !lateralOffsets[side]} onClick={() => changeLabLateral(object.id, side, base, base)}>기본값</button>
+              </div>;
+            })}
+            <p className="hint">보정 후 파지법 적용으로 3D 경로를 확인하세요. 이미 만든 키프레임은 위의 업데이트 버튼으로 다시 계산합니다.</p>
+          </div>}
           {path && <>
             <p className="hint">장면의 초록 경로는 왼손, 주황 경로는 오른손입니다. 큰 점과 자세 축이 파지점입니다.</p>
             {(['left', 'right'] as HandSide[]).map(side => {
