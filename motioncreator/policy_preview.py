@@ -225,7 +225,8 @@ def _tool_contact_forces(model, data, robot, object_geom_ids):
     return forces
 
 
-def simulate(project, progress=lambda value: None, *, controller='gear-sonic', start_frame_index=0, sonic_policy=None):
+def simulate(project, progress=lambda value: None, *, controller='gear-sonic', start_frame_index=0,
+             sonic_policy=None, on_frame=None):
     if controller not in ('pd', 'gear-sonic', 'objects'):
         raise ValueError('Unknown physics controller')
     robot = Robot()
@@ -301,6 +302,8 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
 
     replay_times, states = [0.], [robot.state(data.qpos[:36].copy())]
     object_states = [object_state()]
+    if on_frame is not None:
+        on_frame(replay_times[0], states[0], object_states[0])
     errors, saturation = [], []
     reason = 'completed'
     count = max(1, round(float(times[-1]) / .02))
@@ -366,6 +369,8 @@ def simulate(project, progress=lambda value: None, *, controller='gear-sonic', s
             replay_times.append(float(data.time))
             states.append(robot.state(data.qpos[:36].copy()))
             object_states.append(object_state())
+            if on_frame is not None:
+                on_frame(replay_times[-1], states[-1], object_states[-1])
         if step % 10 == 0:
             progress((step + 1) / count)
         if reason != 'completed':
@@ -542,6 +547,13 @@ class PreviewJobs:
                 raise ValueError('미리보기 결과가 준비되지 않았습니다.')
             return json.loads((job['folder'] / 'result.json').read_text())
 
+    def stream_path(self, identifier):
+        with self.lock:
+            job = self.jobs.get(identifier)
+            if job is None:
+                raise KeyError('미리보기 작업을 찾을 수 없습니다. 다시 재생하세요.')
+            return job['folder'] / 'stream.jsonl'
+
     def cancel(self, identifier):
         with self.lock:
             job = self.jobs.get(identifier)
@@ -572,6 +584,17 @@ class PreviewJobs:
         self.sonic_process = None
 
 
+def simulate_to_folder(folder, *, controller, start_frame_index=0, sonic_policy=None):
+    with (folder / 'stream.jsonl').open('w', encoding='utf-8', buffering=1) as output:
+        def on_frame(time_value, state, objects):
+            output.write(json.dumps({'type': 'frame', 'time': time_value,
+                                     'state': state, 'objects': objects}, ensure_ascii=False) + '\n')
+        return simulate(json.loads((folder / 'project.json').read_text()),
+                        lambda value: atomic_json(folder / 'progress.json', {'progress': value}),
+                        controller=controller, start_frame_index=start_frame_index,
+                        sonic_policy=sonic_policy, on_frame=on_frame)
+
+
 def run_persistent_worker(stream=None):
     """Serve multiple GEAR-SONIC previews with one pair of ONNX sessions."""
     policy = None
@@ -583,10 +606,8 @@ def run_persistent_worker(stream=None):
         try:
             if policy is None:
                 policy = SonicCPU()
-            result = simulate(json.loads((folder / 'project.json').read_text()),
-                              lambda value: atomic_json(folder / 'progress.json', {'progress': value}),
-                              controller='gear-sonic', start_frame_index=int(command.get('start_frame_index', 0)),
-                              sonic_policy=policy)
+            result = simulate_to_folder(folder, controller='gear-sonic',
+                                        start_frame_index=int(command.get('start_frame_index', 0)), sonic_policy=policy)
             atomic_json(folder / 'result.json', result)
         except Exception as exc:
             atomic_json(folder / 'error.json', {'message': str(exc)})
@@ -602,10 +623,8 @@ if __name__ == '__main__':
         raise SystemExit(0)
     folder = Path(sys.argv[1])
     try:
-        result = simulate(json.loads((folder / 'project.json').read_text()),
-                          lambda value: atomic_json(folder / 'progress.json', {'progress': value}),
-                          controller=sys.argv[2] if len(sys.argv) > 2 else 'gear-sonic',
-                          start_frame_index=int(sys.argv[3]) if len(sys.argv) > 3 else 0)
+        result = simulate_to_folder(folder, controller=sys.argv[2] if len(sys.argv) > 2 else 'gear-sonic',
+                                    start_frame_index=int(sys.argv[3]) if len(sys.argv) > 3 else 0)
         atomic_json(folder / 'result.json', result)
     except Exception as exc:
         atomic_json(folder / 'error.json', {'message': str(exc)})

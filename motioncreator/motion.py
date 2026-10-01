@@ -531,15 +531,19 @@ _IK_SKIP_POSITION_M = .001
 _IK_SKIP_ANGLE_RAD = np.deg2rad(.25)
 
 
-def compile_motion(robot: Robot, project, fps=30):
+def compile_motion(robot: Robot, project, fps=30, on_segment=None):
     """Compile keyframes to a dense motion, reusing the result while the project is unchanged."""
     key = hashlib.sha256(json.dumps([robot.cache_key, fps, project], sort_keys=True, default=str).encode()).hexdigest()
     validate_project(robot, project)
-    if key not in _COMPILE_CACHE:
-        _COMPILE_CACHE[key] = _compile_motion(robot, project, fps)
+    cached = key in _COMPILE_CACHE
+    if not cached:
+        _COMPILE_CACHE[key] = _compile_motion(robot, project, fps, on_segment=on_segment)
         while len(_COMPILE_CACHE) > _COMPILE_CACHE_SIZE:
             _COMPILE_CACHE.popitem(last=False)
     _COMPILE_CACHE.move_to_end(key)
+    if on_segment is not None and cached:
+        motion = _COMPILE_CACHE[key]
+        on_segment(motion['time'].tolist(), motion['qpos'])
     return copy.deepcopy(_COMPILE_CACHE[key])
 
 
@@ -726,7 +730,7 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
     return segment_poses, segment_pin_errors, [k in pins for k in FEET], duration
 
 
-def _compile_motion(robot: Robot, project, fps):
+def _compile_motion(robot: Robot, project, fps, on_segment=None):
     validate_project(robot, project)
     from .interaction import project_with_consistent_interactions
     project = project_with_consistent_interactions(robot, project)
@@ -734,8 +738,13 @@ def _compile_motion(robot: Robot, project, fps):
         raise ValueError('FPS must be 1–120')
     frames = project['keyframes']
     if len(frames) == 1 and frames[0].get('samples') is not None:
-        return compile_motion_clip(robot, frames[0], fps)
+        result = compile_motion_clip(robot, frames[0], fps)
+        if on_segment is not None:
+            on_segment(result['time'].tolist(), result['qpos'])
+        return result
     poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
+    if on_segment is not None:
+        on_segment([0.], poses)
     pin_errors = []
     # Fix the quaternion signs sequentially (cheap); after that every segment is independent.
     endpoints, previous = [], poses[0]
@@ -754,6 +763,8 @@ def _compile_motion(robot: Robot, project, fps):
             times.append(elapsed + i / fps)
             contacts.append(segment_contact)
         pin_errors += segment_pin_errors
+        if on_segment is not None:
+            on_segment([elapsed + i / fps for i in range(1, len(segment_poses) + 1)], segment_poses)
         elapsed += duration
     return motion_result(robot, poses, times, contacts, fps, pin_errors)
 

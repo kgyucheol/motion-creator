@@ -20,6 +20,7 @@ type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reac
 type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
 type Preview = { time: number[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; controller?: 'pd' | 'gear-sonic' | 'objects'; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
+type PhysicsStreamFrame = { type: 'frame'; time: number; state: PoseState; objects: Record<string, SceneObjectPose> };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
 type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; objectGroups: SceneObjectGroup[]; keyframes: Keyframe[]; frameIndex: number; poseDirty: boolean };
@@ -148,6 +149,8 @@ export default function Editor() {
   const [transitionSelection, setTransitionSelection] = useState<number[]>([]);
   const [poseDirty, setPoseDirty] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [previewStreaming, setPreviewStreaming] = useState(false);
+  const previewStream = useRef<{ socket: WebSocket; cancelled: boolean; sourceState: PoseState | null } | null>(null);
   const [sample, setSample] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [physicsEnabled, setPhysicsEnabled] = useState(false);
@@ -156,7 +159,8 @@ export default function Editor() {
   const [policyEnabled, setPolicyEnabled] = useState(false);
   const [policyAvailable, setPolicyAvailable] = useState(false);
   const [policyJob, setPolicyJob] = useState<PolicyJob | null>(null);
-  const policyRequest = useRef<{ id?: string; cancelled: boolean } | null>(null);
+  const [streamTime, setStreamTime] = useState<number | null>(null);
+  const policyRequest = useRef<{ id?: string; cancelled: boolean; socket?: WebSocket } | null>(null);
   const policySource = useRef<{ state: PoseState; pins: string[]; anglePins: string[]; frameIndex: number; dirty: boolean } | null>(null);
   const [fps, setFps] = useState(30);
   const [exportProto, setExportProto] = useState(false);
@@ -704,7 +708,12 @@ export default function Editor() {
       const request = policyRequest.current;
       if (request) {
         request.cancelled = true;
+        request.socket?.close();
         if (request.id) void api(`policy-preview/${request.id}/cancel`, {}).catch(() => {});
+      }
+      if (previewStream.current) {
+        previewStream.current.cancelled = true;
+        previewStream.current.socket.close();
       }
     };
   }, []);
@@ -853,13 +862,13 @@ export default function Editor() {
     });
   }
   useEffect(() => {
-    if (!project || !state || playing || preview?.physics) return;
+    if (!project || !state || playing || preview?.physics || policyJob || previewStreaming) return;
     const timer = setTimeout(() => {
       try { localStorage.setItem(draftKey.current, JSON.stringify({ ...project, mounted_tools: tools, current_qpos: state.qpos, pins, angle_pins: anglePins, scene_objects: objects, scene_groups: objectGroups })); }
       catch { setMessage('브라우저 자동 저장 공간이 부족합니다. 파일 저장을 사용하세요.'); }
     }, 500);
     return () => clearTimeout(timer);
-  }, [project, state, tools, pins, anglePins, objects, objectGroups, playing, preview]);
+  }, [project, state, tools, pins, anglePins, objects, objectGroups, playing, preview, policyJob, previewStreaming]);
   useEffect(() => {
     if (!playing || !preview) return;
     const start = performance.now() - preview.time[sample] * 1000;
@@ -873,12 +882,12 @@ export default function Editor() {
       applyState(preview.states[index]);
       if (preview.object_states?.[index]) scene.current?.setObjectPoses(preview.object_states[index]);
       setSample(index);
-      if (index === end) { setPlaying(false); return; }
+      if (index === end && !previewStreaming) { setPlaying(false); return; }
       id = requestAnimationFrame(tick);
     };
     id = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(id);
-  }, [playing, preview]);
+  }, [playing, preview, previewStreaming]);
 
   function togglePin(key: string) {
     if (busy || solving || playing) return;
@@ -1143,13 +1152,54 @@ export default function Editor() {
     if (preview) { if (sample >= preview.states.length - 1) setSample(0); setPlaying(true); return; }
     await run(async () => {
       if (!physicsEnabled && !objectPhysicsEnabled && !forcePhysics) {
-        const result = await api<Preview>('preview', { project, fps: 30 });
-        setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
-        if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
-        setMessage('원본 모션 재생 · 물리 OFF');
+        setPreviewStreaming(true);
+        setMessage('키프레임 모션을 구간별로 계산하며 재생합니다…');
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const socket = new WebSocket(`${protocol}//${location.host}/api/preview/stream`);
+            const request = { socket, cancelled: false, sourceState: state };
+            previewStream.current = request;
+            let settled = false, started = false;
+            const finish = (failure?: Error) => {
+              if (settled) return;
+              settled = true;
+              socket.close();
+              if (failure) reject(failure); else resolve();
+            };
+            socket.onopen = () => socket.send(JSON.stringify({ project, fps: 30 }));
+            socket.onmessage = event => {
+              const packet = JSON.parse(event.data) as { type: 'batch'; time: number[]; states: PoseState[] }
+                | { type: 'done'; max_pin_error_mm: number } | { type: 'error'; message: string };
+              if (request.cancelled || !alive.current) return;
+              if (packet.type === 'batch') {
+                if (!started) {
+                  started = true;
+                  setPreview({ time: packet.time, states: packet.states, max_pin_error_mm: 0 });
+                  setSample(0); setPlaying(true); setPoseDirty(false);
+                } else setPreview(previous => previous ? { ...previous,
+                  time: [...previous.time, ...packet.time], states: [...previous.states, ...packet.states] } : previous);
+              } else if (packet.type === 'done') {
+                setPreview(previous => previous ? { ...previous, max_pin_error_mm: packet.max_pin_error_mm } : previous);
+                finish();
+              } else finish(new Error(packet.message));
+            };
+            socket.onerror = () => finish(new Error('키프레임 스트리밍 연결이 끊겼습니다.'));
+            socket.onclose = () => finish(request.cancelled ? undefined : new Error('키프레임 스트리밍이 중단되었습니다.'));
+          });
+          if (previewStream.current?.cancelled) return;
+          setMessage('원본 모션 재생 · 물리 OFF');
+        } catch (failure) {
+          setPreview(null); setPlaying(false);
+          if (state) applyState(state);
+          throw failure;
+        } finally {
+          previewStream.current = null;
+          setPreviewStreaming(false);
+        }
         return;
       }
-      const request: { id?: string; cancelled: boolean } = { cancelled: false };
+      const request: { id?: string; cancelled: boolean; socket?: WebSocket } = { cancelled: false };
       const physicsStartFrame = startFrameOverride ?? frameIndex;
       // The override selects where the simulation begins; restoring Physics OFF must
       // still return to the pose/keyframe that was visible before the run.
@@ -1165,19 +1215,51 @@ export default function Editor() {
           return;
         }
         setPolicyJob(job);
-        while (job.status === 'running') {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          if (!alive.current || request.cancelled) return;
-          job = await api<PolicyJob>(`policy-preview/${job.id}`);
-          setPolicyJob(job);
-          setMessage(`${controllerLabel} · ${physicsStartFrame + 1}번 키프레임부터 물리 계산 ${Math.round(job.progress * 100)}% · CPU`);
+        if (job.status === 'running') {
+          job = await new Promise<PolicyJob>((resolve, reject) => {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const socket = new WebSocket(`${protocol}//${location.host}/api/policy-preview/${job.id}/stream`);
+            request.socket = socket;
+            let settled = false;
+            const finish = (result?: PolicyJob, failure?: Error) => {
+              if (settled) return;
+              settled = true;
+              socket.close();
+              if (failure) reject(failure);
+              else resolve(result!);
+            };
+            socket.onmessage = event => {
+              const packet = JSON.parse(event.data) as PhysicsStreamFrame | ({ type: 'status' } & PolicyJob);
+              if (packet.type === 'frame') {
+                if (request.cancelled || !alive.current) return;
+                applyState(packet.state);
+                scene.current?.setObjectPoses(packet.objects);
+                setStreamTime(packet.time);
+                setMessage(`${controllerLabel} · 물리 실시간 재생 ${packet.time.toFixed(2)}초 · CPU`);
+              } else {
+                setPolicyJob(packet);
+                if (packet.status !== 'running') finish(packet);
+              }
+            };
+            socket.onerror = () => finish(undefined, new Error('물리 스트리밍 연결이 끊겼습니다.'));
+            socket.onclose = () => finish(request.cancelled
+              ? { id: job.id, status: 'cancelled', progress: 0 } : undefined,
+              request.cancelled ? undefined : new Error('물리 스트리밍이 중단되었습니다.'));
+          });
         }
-        if (job.status === 'cancelled') { setMessage('물리 계산을 취소했습니다.'); return; }
+        if (!alive.current || request.cancelled || job.status === 'cancelled') return;
         if (job.status !== 'completed') throw new Error(job.message || '물리 계산에 실패했습니다.');
         const result = await api<Preview>(`policy-preview/${job.id}/result`);
         if (!alive.current || request.cancelled) return;
-        setPreview(result); setSample(0); setPlaying(true); setPoseDirty(false);
-        if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
+        setStreamTime(null); setPreview(result); setPoseDirty(false);
+        if (job.status === 'completed' && job.progress === 1 && result.states.length && request.socket) {
+          setSample(result.states.length - 1);
+          applyState(result.states[result.states.length - 1]);
+          if (result.object_states?.length) scene.current?.setObjectPoses(result.object_states[result.object_states.length - 1]);
+        } else {
+          setSample(0); setPlaying(true);
+          if (result.object_states?.[0]) scene.current?.setObjectPoses(result.object_states[0]);
+        }
         const summary = result.summary!;
         const outcome = summary.reason === 'fallen' ? '넘어짐으로 조기 종료' : summary.reason === 'completed' ? '계산 완료'
           : summary.reason === 'interaction_force_limit' ? '접촉력 상한으로 안전 중단' : '수치 불안정으로 중단';
@@ -1188,8 +1270,10 @@ export default function Editor() {
         setMessage(`${controllerLabel} ${outcome} · ${physicsStartFrame + 1}번 키프레임부터 ${summary.sim_seconds.toFixed(2)}초 · 관절 추종 오차 ${(summary.joint_rmse_rad * 180 / Math.PI).toFixed(1)}°${gripText}${interactionText}`);
       } catch (failure) {
         if (request.id) await api(`policy-preview/${request.id}/cancel`, {}).catch(() => {});
+        restorePolicySource();
         throw failure;
       } finally {
+        request.socket?.close();
         if (alive.current) setPolicyJob(null);
         policyRequest.current = null;
       }
@@ -1205,10 +1289,31 @@ export default function Editor() {
     const request = policyRequest.current;
     if (!request?.id) return;
     try {
-      await api(`policy-preview/${request.id}/cancel`, {});
       request.cancelled = true;
-      setMessage('물리 계산을 취소했습니다.');
+      await api(`policy-preview/${request.id}/cancel`, {});
+      request.socket?.close();
+      restorePolicySource();
+      setMessage('물리 재생을 중단하고 편집 자세로 돌아왔습니다.');
     } catch (failure) { setError((failure as Error).message); }
+  }
+  function cancelPreviewStream() {
+    const request = previewStream.current;
+    if (!request) return;
+    request.cancelled = true;
+    request.socket.close();
+    setPreview(null); setSample(0); setPlaying(false);
+    if (request.sourceState) applyState(request.sourceState);
+    setMessage('키프레임 재생을 중단하고 편집으로 돌아왔습니다.');
+  }
+  function restorePolicySource() {
+    const source = policySource.current;
+    if (source) {
+      applyState(source.state); setFrameIndex(source.frameIndex); setPins(source.pins);
+      setAnglePins(source.anglePins); setPoseDirty(source.dirty);
+    }
+    policySource.current = null;
+    scene.current?.setSceneObjects(current.current.objects);
+    setStreamTime(null); setPreview(null); setSample(0); setPlaying(false);
   }
   function changeSimulation(physics: boolean, policy: boolean, objects = false) {
     const source = policySource.current;
@@ -1220,8 +1325,8 @@ export default function Editor() {
     invalidate(); setPhysicsEnabled(physics); setObjectPhysicsEnabled(objects); setPolicyEnabled(physics && policy);
     setMessage(objects ? '키프레임 로봇 자세를 유지하고 오브젝트만 중력·접촉으로 움직입니다. 로봇 토크·파지 가능성은 검증하지 않습니다.'
       : !physics ? '원본 모션 재생 · 물리 OFF' : policy
-      ? 'MuJoCo + GEAR-SONIC · 재생하면 CPU 계산 후 결과를 보여줍니다.'
-      : 'MuJoCo + 기본 PD · 균형 정책 없이 관절을 제어합니다. 불안정한 모션은 넘어질 수 있습니다.');
+      ? 'MuJoCo + GEAR-SONIC · 계산되는 자세와 충돌을 실시간으로 보여줍니다.'
+      : 'MuJoCo + 기본 PD · 계산되는 자세와 충돌을 실시간으로 보여줍니다. 균형 정책이 없어 넘어질 수 있습니다.');
   }
   const disabled = !state || busy || solving || playing || !!preview?.physics;
   const selectionPinned = members.some(k => pins.includes(k));
@@ -1301,14 +1406,19 @@ export default function Editor() {
       <div ref={host} className="canvas-host"/>
       <div className="viewport-top"><div className="view-title"><span className="status-dot"/>POSE WORKSPACE<span>m · rad · Z-up</span></div><div className="view-buttons"><button className={showCollisions ? 'chosen' : ''} aria-pressed={showCollisions} title="원본 메시를 숨기고 Physics/WBC에서 사용하는 오브젝트 충돌체만 표시합니다." onClick={() => setShowCollisions(value => !value)}><Boxes size={13}/>콜리전</button>{(['perspective', 'front', 'side'] as const).map((v, i) => <button key={v} onClick={() => scene.current?.setView(v)}>{['자유', '정면', '측면'][i]}</button>)}</div></div>
       {policyJob && <div className="policy-progress">
-        <span>{controllerLabel} 물리 계산 <b>{Math.round(policyJob.progress * 100)}%</b></span>
+        <span>{controllerLabel} 실시간 물리 재생 · 계산 <b>{Math.round(policyJob.progress * 100)}%</b></span>
         <progress aria-label="물리 계산 진행률" max={1} value={policyJob.progress}/>
-        <button type="button" onClick={() => void cancelPolicy()}>계산 취소</button>
+        <button type="button" onClick={() => void cancelPolicy()}>중단하고 편집</button>
+      </div>}
+      {previewStreaming && <div className="policy-progress">
+        <span>키프레임 구간 계산 · 실시간 재생</span>
+        <progress aria-label="키프레임 계산 진행률" max={1} value={duration > 0 ? Math.min(1, (preview?.time.at(-1) ?? 0) / duration) : 0}/>
+        <button type="button" onClick={cancelPreviewStream}>중단하고 편집</button>
       </div>}
       <div className="viewport-tools"><button title="되돌리기 (Ctrl+Z)" aria-label="되돌리기" aria-keyshortcuts="Control+Z Meta+Z" disabled={disabled || !historyCount} onClick={() => changeHistory(false)}><Undo2 size={17}/></button><button title="되돌리기 취소 (Ctrl+Shift+Z)" aria-label="되돌리기 취소" aria-keyshortcuts="Control+Shift+Z Meta+Shift+Z" disabled={disabled || !futureCount} onClick={() => changeHistory(true)}><Redo2 size={17}/></button><span/><button className={showHandles ? 'chosen' : ''} title="조작 표시 켜기/끄기" onClick={() => setShowHandles(!showHandles)}><MousePointer2 size={17}/></button></div>
       <div className="scene-legend"><span><i className="cyan"/>이동 가능</span><span><i className="amber"/>위치 고정</span><span><i className="violet"/>각도 고정</span><span><i className="mint"/>선택</span></div>
       <div className="viewport-bottom"><span>드래그: 회전 · 휠: 확대 · 우클릭: 이동 · 로봇 W/E · 물체 W/E/R · F: 선택 보기</span><span className="axes"><b>X</b> 전방 <b>Y</b> 왼쪽 <b>Z</b> 위</span></div>
-      {busy && <div className="busy-overlay"><span className="spinner"/>{message.startsWith('파지법 계산 중') ? message : '모션을 계산하고 있습니다…'}</div>}
+      {busy && !policyJob && !previewStreaming && <div className="busy-overlay"><span className="spinner"/>{message.startsWith('파지법 계산 중') ? message : '모션을 계산하고 있습니다…'}</div>}
     </main>
     <aside className="right-panel panel">
       <div className="panel-heading"><span>TRANSFORM</span><small>{transformMode === 'rotate' && (hinge || ankle) ? '관절축' : space.toUpperCase()}</small></div>
@@ -1417,7 +1527,7 @@ export default function Editor() {
     </aside>
     <section className="timeline">
       <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{motionClip ? `1 clip · ${motionClip.length} frames` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<small className="transition-hint">{transitionSelection.length === 2 ? `${Math.min(...transitionSelection) + 1}–${Math.max(...transitionSelection) + 1}번 선택` : transitionSelection.length === 1 ? '두 번째 프레임 선택' : '프레임 2개 선택'}</small><button disabled={disabled || transitionSelection.length !== 2 || poseDirty || !!motionClip} onClick={createSmoothTransition} title="두 키프레임 사이에 편집 가능한 중간 자세를 생성합니다. 파지·도구 상호작용이 포함된 구간과 장애물 회피는 아직 지원하지 않습니다.">중간 키프레임 생성</button><button disabled={disabled || !activeFrame || !!motionClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || !!motionClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
-      <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled || objectPhysicsEnabled ? `${controllerLabel} 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label>
+      <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled || objectPhysicsEnabled ? `${controllerLabel} 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(streamTime ?? preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label>
         <div className="simulation-toggles">
         <button className="policy-toggle" type="button" aria-pressed={physicsEnabled} disabled={!state || busy || solving || playing || !physicsAvailable} onClick={() => changeSimulation(!physicsEnabled, false)} title={!physicsAvailable ? '물리 재생을 사용하려면 서버를 업데이트하고 재시작하세요.' : 'ON: 중력·접촉·관절 토크 계산 · OFF: 정책도 끄고 원본 편집으로 돌아가기'}>
           <span className="policy-indicator"/>Physics <b>{physicsEnabled ? 'ON' : 'OFF'}</b>

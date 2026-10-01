@@ -1,8 +1,11 @@
+import asyncio
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Literal
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -402,6 +405,74 @@ def preview(payload: ProjectInput):
     return checked(run)
 
 
+@app.websocket('/api/preview/stream')
+async def preview_stream(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        payload = await websocket.receive_json()
+        project = payload['project']
+        fps = min(int(payload.get('fps', 30)), 30)
+        if not 1 <= fps <= 30:
+            raise ValueError('재생 FPS는 1–30이어야 합니다.')
+    except (ValueError, KeyError, TypeError) as exc:
+        await websocket.send_json({'type': 'error', 'message': str(exc)})
+        await websocket.close()
+        return
+    active_robot = robot
+    loop = asyncio.get_running_loop()
+    packets = asyncio.Queue()
+    cancelled = threading.Event()
+
+    def emit(times, poses):
+        if cancelled.is_set():
+            raise InterruptedError('키프레임 스트리밍 중단')
+        for offset in range(0, len(times), 10):
+            if cancelled.is_set():
+                raise InterruptedError('키프레임 스트리밍 중단')
+            end = offset + 10
+            packet = {'type': 'batch', 'time': times[offset:end],
+                      'states': [active_robot.state(pose) for pose in poses[offset:end]]}
+            asyncio.run_coroutine_threadsafe(packets.put(packet), loop).result()
+
+    def compile_preview():
+        try:
+            motion = compile_motion(active_robot, project, fps, on_segment=emit)
+            packet = {'type': 'done', 'max_pin_error_mm': float(motion['max_pin_error_mm'])}
+        except InterruptedError:
+            return
+        except Exception as exc:
+            packet = {'type': 'error', 'message': str(exc)}
+        asyncio.run_coroutine_threadsafe(packets.put(packet), loop).result()
+
+    async def watch_disconnect():
+        try:
+            while True:
+                await websocket.receive_text()
+        except WebSocketDisconnect:
+            cancelled.set()
+            await packets.put({'type': 'closed'})
+
+    worker = asyncio.create_task(asyncio.to_thread(compile_preview))
+    disconnect = asyncio.create_task(watch_disconnect())
+    try:
+        while True:
+            packet = await packets.get()
+            if packet['type'] == 'closed':
+                break
+            await websocket.send_json(packet)
+            if packet['type'] in ('done', 'error'):
+                break
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
+        cancelled.set()
+        disconnect.cancel()
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
+
+
 @app.get('/api/policy-preview/runtime')
 def policy_runtime():
     from .policy_preview import runtime
@@ -424,6 +495,54 @@ def policy_status(identifier: str):
 def policy_result(identifier: str):
     from .policy_preview import jobs
     return checked(lambda: jobs.result(identifier))
+
+
+@app.websocket('/api/policy-preview/{identifier}/stream')
+async def policy_stream(websocket: WebSocket, identifier: str):
+    from .policy_preview import jobs
+    try:
+        path = jobs.stream_path(identifier)
+    except KeyError:
+        await websocket.close(code=4404)
+        return
+    await websocket.accept()
+    source = None
+    last_progress = -1.
+    stream_origin = None
+    try:
+        while True:
+            if source is None and path.is_file():
+                source = path.open(encoding='utf-8')
+            if source is not None:
+                while True:
+                    position = source.tell()
+                    line = source.readline()
+                    if not line.endswith('\n'):
+                        source.seek(position)
+                        break
+                    frame = json.loads(line)
+                    if stream_origin is None:
+                        stream_origin = time.monotonic() - frame['time']
+                    delay = stream_origin + frame['time'] - time.monotonic()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    await websocket.send_text(line)
+            status = jobs.status(identifier)
+            if status['progress'] != last_progress or status['status'] != 'running':
+                await websocket.send_json({'type': 'status', **status})
+                last_progress = status['progress']
+            if status['status'] != 'running':
+                break
+            await asyncio.sleep(.05)
+    except (WebSocketDisconnect, OSError, KeyError):
+        pass
+    finally:
+        if source is not None:
+            source.close()
+        try:
+            await websocket.close()
+        except RuntimeError:
+            pass
 
 
 @app.post('/api/policy-preview/{identifier}/cancel')
