@@ -78,6 +78,8 @@ export type Keyframe = {
   grasp?: TwoHandGrasp;
   interaction?: ToolInteraction;
   generated_transition?: boolean;
+  lab_grasp?: { group_id: string; target_id: string; tools: [string, string]; source_signature: string;
+    point_index: number; authored_signature: string };
 };
 
 export function duplicateKeyframeAfter(keyframes: Keyframe[], selectedIndex: number) {
@@ -86,6 +88,7 @@ export function duplicateKeyframeAfter(keyframes: Keyframe[], selectedIndex: num
   const duplicate = structuredClone(keyframes[selectedIndex]);
   // The new pose will be edited independently; inherited TCP targets would pin playback.
   delete duplicate.interaction;
+  delete duplicate.lab_grasp;
   return { keyframes: [...keyframes.slice(0, index), duplicate, ...keyframes.slice(index)], index };
 }
 

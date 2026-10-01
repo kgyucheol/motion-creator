@@ -1,6 +1,6 @@
 'use client';
 import NumericInput from './numeric-input';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import SceneObjectControls from './scene-object-controls';
 import GraspControls, { type GraspPickMode } from './grasp-controls';
 import RamenSequenceControls, { type RamenSequenceSettings } from './ramen-sequence-controls';
@@ -12,6 +12,7 @@ import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRota
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp } from '../lib/keyframes';
 import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
+import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } from '../lib/lab-grasp-group';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
@@ -172,6 +173,18 @@ export default function Editor() {
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
   const [graspPreviewId, setGraspPreviewId] = useState<string | null>(null);
   const [labPathPreview, setLabPathPreview] = useState<LabPathPreview | null>(null);
+  const [labStorageRevision, setLabStorageRevision] = useState(0);
+  const [pendingLabReplacement, setPendingLabReplacement] = useState<{ project: Project; start: number; end: number;
+    frames: Keyframe[]; firstState: PoseState; editedNames: string[]; targetId: string } | null>(null);
+  const [collapsedLabGroups, setCollapsedLabGroups] = useState<string[]>([]);
+  useEffect(() => {
+    const changed = (event: StorageEvent) => {
+      if (['motioncreator-cylinder-lab-v2', 'motioncreator-cylinder-lab-tool-settings-v1',
+        'motioncreator-cylinder-lab-tool-grasps-v1'].includes(event.key ?? '')) setLabStorageRevision(value => value + 1);
+    };
+    window.addEventListener('storage', changed);
+    return () => window.removeEventListener('storage', changed);
+  }, []);
   const [graspCoefficients, setGraspCoefficients] = useState<RamenGraspCoefficients>(DEFAULT_RAMEN_GRASP_COEFFICIENTS);
   const [graspCoefficientsLoaded, setGraspCoefficientsLoaded] = useState(false);
   useEffect(() => {
@@ -764,7 +777,7 @@ export default function Editor() {
     return index;
   }, [preview, project, playing, sample]);
   useEffect(() => {
-    if (playbackFrame !== null) document.querySelectorAll('.frame-track .frame-card')[playbackFrame]?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    if (playbackFrame !== null) document.querySelector(`.frame-track .frame-card[data-frame-index="${playbackFrame}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [playbackFrame]);
   function applyCandidateGraspToFrame() {
     const frame = project?.keyframes[frameIndex];
@@ -850,6 +863,13 @@ export default function Editor() {
         duration: index === 0 ? .8 : Math.max(.1, preview.times[index] - preview.times[index - 1]),
         qpos, pins: [...source.pins], angle_pins: [...(source.angle_pins ?? [])],
       }));
+      const target = objects.find(object => object.id === preview.targetId);
+      if (!target) throw new Error('파지 대상 용기를 찾지 못했습니다.');
+      const groupId = crypto.randomUUID();
+      const sourceSignature = labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, source);
+      generated.forEach((frame, index) => { frame.lab_grasp = { group_id: groupId, target_id: target.id,
+        tools: [...tools], source_signature: sourceSignature, point_index: index,
+        authored_signature: authoredSignature(frame) }; });
       checkpoint();
       const insert = frameIndex + 1;
       const nextProject = { ...project, keyframes: [...project.keyframes.slice(0, insert), ...generated,
@@ -860,6 +880,90 @@ export default function Editor() {
       setFrameIndex(insert); setPoseDirty(false); setInfo(null); setLabPathPreview(null); invalidate();
       setMessage(`${generated.length}개 파지 키프레임을 선택 프레임 뒤에 생성했습니다.`);
     });
+  }
+  async function updateLabGraspKeyframes(groupIndex: number) {
+    if (!project || !tools || poseDirty) return;
+    const range = labGroupRange(project.keyframes, groupIndex);
+    if (!range?.valid) { setError('파지법 구간의 순서가 변경되었습니다. 구간을 정리한 뒤 다시 시도해 주세요.'); return; }
+    const link = range.frames[0].lab_grasp!;
+    const target = objects.find(object => object.id === link.target_id);
+    if (!target) { setError('파지법에 연결된 용기를 찾지 못했습니다.'); return; }
+    if (tools.some((tool, index) => tool !== link.tools[index])) { setError('연결된 파지법의 장착 툴로 전환한 뒤 업데이트해 주세요.'); return; }
+    setPendingLabReplacement(null);
+    await run(async () => {
+      const source = project.keyframes[range.start - 1];
+      const mounted = await api<{ model_id: string; tools: [string, string] | null }>('tools');
+      if (mounted.model_id !== modelId || !mounted.tools || mounted.tools.some((tool, index) => tool !== tools[index]))
+        throw new Error('서버의 장착 툴이 다릅니다. 메인 편집기를 새로고침해 주세요.');
+      const paths = readLabToolPaths(target.id, tools, graspCoefficients);
+      const initialSourceSignature = labSourceSignature({ sourcePaths: paths }, target, source);
+      for (const path of Object.values(paths)) {
+        if (!path || path.source || path.projectName.startsWith('데모:')) continue;
+        try {
+          const savedProject = await api<Project>(`project/${fileApiPath(path.projectName)}`);
+          const response = await api<{ scene: CylinderScene & { plane_y: number } }>('cylinder-lab/scene',
+            { project: savedProject, target_id: target.id });
+          const settled = restingScene(response.scene);
+          path.source = { center: [...settled.target.center], radius: settled.target.radius, planeY: response.scene.plane_y };
+        } catch { throw new Error(`${path.toolId}의 경로 기준 위치를 찾지 못했습니다. Cylinder Lab에서 경로를 다시 저장해 주세요.`); }
+      }
+      const anchorPose = await api<PoseState>('pose', { qpos: source.qpos });
+      const pelvis = anchorPose.handles.pelvis;
+      const next = buildLabPathPreview(target, pelvis.position, pelvis.quaternion, paths,
+        100 - project.keyframes.length + range.frames.length);
+      const activeSides = (['left', 'right'] as HandSide[]).filter(side => !!next.tracks[side]);
+      for (const side of activeSides) {
+        if (source.pins.includes(`${side}_hand`) || source.angle_pins?.includes(`${side}_hand`))
+          throw new Error(`${side === 'left' ? '왼손' : '오른손'} TCP 고정을 해제한 뒤 다시 시도하세요.`);
+      }
+      const waypoints = next.times.map((_, index) => {
+        const targets: Record<string, number[]> = {}, orientations: Record<string, number[]> = {};
+        for (const side of activeSides) {
+          const pose = toolPoseAtKeyPoint(next.tracks[side]!, index);
+          targets[`${side}_hand`] = pose.position;
+          orientations[`${side}_hand`] = pose.quaternion_xyzw;
+        }
+        return { targets, orientations };
+      });
+      setLabPathPreview(next);
+      setMessage(`변경된 파지법 계산 중 · 웨이포인트 ${waypoints.length}개`);
+      const solved = await api<{ qpos: number[][]; first_state: PoseState }>('cylinder-lab/solve-path', {
+        qpos: source.qpos, tools, pins: source.pins, angle_pins: source.angle_pins ?? [], waypoints,
+      });
+      if (solved.qpos.length !== next.times.length) throw new Error('계산된 키프레임 개수가 웨이포인트와 다릅니다.');
+      if (current.current.project !== project) throw new Error('계산 중 프로젝트가 변경되었습니다. 다시 업데이트해 주세요.');
+      const sourceSignature = labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, source);
+      if (sourceSignature !== initialSourceSignature) throw new Error('계산 중 Cylinder Lab 경로가 변경되었습니다. 다시 업데이트해 주세요.');
+      const frames: Keyframe[] = solved.qpos.map((qpos, index) => ({
+        name: index === 0 ? '그린 점 1 · 파지점' : `그린 점 ${index + 1}`,
+        duration: index === 0 ? .8 : Math.max(.1, next.times[index] - next.times[index - 1]),
+        qpos, pins: [...source.pins], angle_pins: [...(source.angle_pins ?? [])],
+      }));
+      frames.forEach((frame, index) => { frame.lab_grasp = { group_id: range.id, target_id: target.id,
+        tools: [...tools], source_signature: sourceSignature, point_index: index,
+        authored_signature: authoredSignature(frame) }; });
+      setPendingLabReplacement({ project, start: range.start, end: range.end, frames,
+        firstState: solved.first_state, editedNames: range.edited.map(frame => frame.name), targetId: target.id });
+      setMessage(`새 파지법 ${frames.length}개를 계산했습니다. 교체 내용을 확인해 주세요.`);
+    });
+  }
+  function applyLabReplacement() {
+    const pending = pendingLabReplacement;
+    if (!pending || !project || project !== pending.project) { setPendingLabReplacement(null); setError('프로젝트가 변경되었습니다. 다시 계산해 주세요.'); return; }
+    const target = objects.find(object => object.id === pending.targetId);
+    const anchor = project.keyframes[pending.start - 1];
+    if (!target || !anchor || !tools || labSourceSignature({ sourcePaths: readLabToolPaths(target.id, tools, graspCoefficients) }, target, anchor)
+      !== pending.frames[0].lab_grasp?.source_signature) {
+      setPendingLabReplacement(null); setError('확인 중 Cylinder Lab 경로나 장면이 변경되었습니다. 다시 계산해 주세요.'); return;
+    }
+    checkpoint();
+    const nextProject = { ...project, keyframes: [...project.keyframes.slice(0, pending.start),
+      ...pending.frames, ...project.keyframes.slice(pending.end + 1)] };
+    current.current.project = nextProject; setProject(nextProject); setFrameIndex(pending.start);
+    setTransitionSelection([]); applyState(pending.firstState);
+    setPins([...pending.frames[0].pins]); setAnglePins([...(pending.frames[0].angle_pins ?? [])]);
+    setPoseDirty(false); setInfo(null); setLabPathPreview(null); setPendingLabReplacement(null); invalidate();
+    setMessage(`파지법 구간을 ${pending.frames.length}개 키프레임으로 교체했습니다.`);
   }
   useEffect(() => {
     if (!project || !state || playing || preview?.physics || policyJob || previewStreaming) return;
@@ -1344,6 +1448,47 @@ export default function Editor() {
   const hingeIndex = hinge ? project?.joint_names.indexOf(hinge.joint_name) ?? -1 : -1;
   const jointDirty = !!state && jointDraft.some((v, i) => Math.abs(v - state.qpos[7+i]*180/Math.PI) > .001);
   const activeFrame = project?.keyframes[frameIndex];
+  const selectedLabGroup = (() => {
+    if (!project || !selectedObjectId) return null;
+    const active = labGroupRange(project.keyframes, frameIndex);
+    if (active?.frames[0].lab_grasp?.target_id === selectedObjectId) return active;
+    for (let index = project.keyframes.length - 1; index > 0; index--) {
+      if (project.keyframes[index].lab_grasp?.target_id === selectedObjectId)
+        return labGroupRange(project.keyframes, index);
+    }
+    return null;
+  })();
+  const selectedLabStatus = (() => {
+    void labStorageRevision;
+    if (!selectedLabGroup || !project || !tools || !selectedObjectId) return null;
+    const link = selectedLabGroup.frames[0].lab_grasp!;
+    const target = objects.find(object => object.id === link.target_id);
+    const anchor = project.keyframes[selectedLabGroup.start - 1];
+    if (!target || !anchor || tools.some((tool, index) => tool !== link.tools[index])) return '툴 또는 용기 확인 필요';
+    const paths = readLabToolPaths(target.id, tools, graspCoefficients);
+    if (!paths.left && !paths.right) return '저장 경로 없음';
+    return labSourceSignature({ sourcePaths: paths }, target, anchor) === link.source_signature ? '최신' : '경로 변경됨';
+  })();
+  const selectedLegacyLab = project ? legacyLabRange(project.keyframes, frameIndex) : null;
+  function linkLegacyLab() {
+    if (!project || !tools || !selectedLegacyLab || !selectedObjectId) return;
+    const target = objects.find(object => object.id === selectedObjectId);
+    const anchor = project.keyframes[selectedLegacyLab.start - 1];
+    if (!target || !anchor) return;
+    const paths = readLabToolPaths(target.id, tools, graspCoefficients);
+    if (!paths.left && !paths.right) { setError('Cylinder Lab에 저장된 경로가 없습니다.'); return; }
+    const sourceSignature = labSourceSignature({ sourcePaths: paths }, target, anchor);
+    const groupId = crypto.randomUUID();
+    checkpoint();
+    const frames = project.keyframes.map((frame, index) => index < selectedLegacyLab.start || index > selectedLegacyLab.end ? frame : {
+      ...frame, lab_grasp: { group_id: groupId, target_id: target.id, tools: [...tools] as [string, string],
+        source_signature: sourceSignature, point_index: index - selectedLegacyLab.start,
+        authored_signature: authoredSignature(frame) },
+    });
+    const nextProject = { ...project, keyframes: frames };
+    current.current.project = nextProject; setProject(nextProject);
+    setMessage(`${selectedLegacyLab.end - selectedLegacyLab.start + 1}개 기존 파지 키프레임을 ${target.name}에 연결했습니다.`);
+  }
   const motionClip = project?.keyframes.length === 1 ? project.keyframes[0].samples : undefined;
   const duration = motionClip ? project!.keyframes[0].duration : project?.keyframes.slice(1).reduce((sum, f) => sum + f.duration, 0) ?? 0;
   const selectedGroup = allNodes().find(node => node.children && nodeMembers(node).length === members.length && nodeMembers(node).every(key => members.includes(key)));
@@ -1485,6 +1630,24 @@ export default function Editor() {
         const mismatched = !!path && Object.values(path.sourcePaths).some(value => value?.source && Math.abs(value.source.radius - radius) > .005);
         return <div className="lab-grasp-apply">
           <div className="panel-heading"><span>CYLINDER LAB 파지법</span><small>{object.name}</small></div>
+          {selectedLabGroup && <div className="lab-group-status">
+            <strong>파지법 구간 · {selectedLabGroup.frames.length}개 키프레임</strong>
+            <span>{selectedLabGroup.valid ? selectedLabStatus : '구간 순서 변경됨'} · 직접 수정 {selectedLabGroup.edited.length}개</span>
+            <button className="wide" disabled={disabled || poseDirty || !selectedLabGroup.valid || selectedLabStatus === '툴 또는 용기 확인 필요' || selectedLabStatus === '저장 경로 없음'}
+              onClick={() => void updateLabGraspKeyframes(selectedLabGroup.start)}>Cylinder Lab 경로로 업데이트</button>
+            <p className="hint">계산 후 교체 내용을 확인합니다. 이 구간 밖의 키프레임은 유지됩니다.</p>
+          </div>}
+          {!selectedLabGroup && selectedLegacyLab && <div className="lab-group-status">
+            <strong>기존 파지법 키프레임 {selectedLegacyLab.end - selectedLegacyLab.start + 1}개</strong>
+            <p className="hint">현재 키프레임들을 선택한 용기에 연결하면 다음부터 경로 변경을 확인하고 일괄 업데이트할 수 있습니다.</p>
+            <button className="wide" disabled={disabled} onClick={linkLegacyLab}>기존 구간 연결</button>
+          </div>}
+          {pendingLabReplacement?.targetId === object.id && <div className="lab-group-review">
+            <strong>교체 전 확인 · {pendingLabReplacement.end - pendingLabReplacement.start + 1}개 → {pendingLabReplacement.frames.length}개</strong>
+            {pendingLabReplacement.editedNames.length > 0 && <p className="hint lab-grasp-warning">직접 수정한 {pendingLabReplacement.editedNames.length}개도 교체됩니다: {pendingLabReplacement.editedNames.join(', ')}</p>}
+            <div className="lab-grasp-actions"><button className="primary" disabled={disabled || project !== pendingLabReplacement.project} onClick={applyLabReplacement}>이 구간 교체</button>
+              <button onClick={() => { setPendingLabReplacement(null); setLabPathPreview(null); }}>취소</button></div>
+          </div>}
           <button className="wide" disabled={disabled || !activeFrame || !!motionClip} onClick={() => void prepareLabGrasp()}>파지법 적용</button>
           {path && <>
             <p className="hint">장면의 초록 경로는 왼손, 주황 경로는 오른손입니다. 큰 점과 자세 축이 파지점입니다.</p>
@@ -1540,7 +1703,14 @@ export default function Editor() {
         </button>
         </div>
       </div>
-        <div className="frame-track">{project?.keyframes.map((f, i) => <button disabled={disabled} key={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title="두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다"><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>)}</div>
+        <div className="frame-track">{project?.keyframes.map((f, i) => {
+          const group = f.lab_grasp ? labGroupRange(project.keyframes, i) : null;
+          const collapsed = !!group && collapsedLabGroups.includes(group.id);
+          return <Fragment key={i}>
+            {group?.start === i && <button className="lab-frame-header" disabled={disabled} onClick={() => setCollapsedLabGroups(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])} title="파지법 구간 접기/펼치기">파지법 {group.frames.length}개 {collapsed ? '▸' : '▾'}</button>}
+            {(!collapsed || group?.start === i) && <button disabled={disabled} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.lab_grasp ? '파지법 · ' : ''}{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
+          </Fragment>;
+        })}</div>
         <div className="frame-edit">{activeFrame && <><input aria-label="키프레임 이름" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/><div><label>{motionClip ? '클립 재생 시간' : '이동 시간'} <NumericInput aria-label="키프레임 이동 시간"  min={motionClip ? 1/120 : .1} max={motionClip ? 600 : 60} step=".01" disabled={disabled || (!motionClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = motionClip ? 1/120 : .1; const maximum = motionClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label><button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); setTransitionSelection([]); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); setTransitionSelection([]); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); setTransitionSelection([]); invalidate(); }}><Trash2 size={14}/></button></div></>}</div>
       </div>
       <input className="scrubber" aria-label="모션 시간 탐색" type="range" min="0" max={Math.max(1, (preview?.states.length ?? 1)-1)} value={sample} disabled={!preview || busy} onChange={e => { setPlaying(false); const i = +e.target.value; setSample(i); if (preview) { applyState(preview.states[i]); if (preview.object_states?.[i]) scene.current?.setObjectPoses(preview.object_states[i]); } }}/>
