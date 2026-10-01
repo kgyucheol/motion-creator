@@ -20,9 +20,12 @@ type Stored = { project?: string; mode?: string; params?: Record<string, number>
   tools?: [string, string];
   selectedTool?: string;
   legacyDrawingTool?: string;
-  drawings?: Record<string, { points: DrawnPoint[]; flip: boolean; source?: { center: number[]; radius: number; planeY: number } }>;
+  drawings?: Record<string, { points: DrawnPoint[]; flip: boolean; source?: { center: number[]; radius: number; planeY: number;
+    far?: number[]; up?: number[]; boxAligned?: boolean } }>;
   pathTemplates?: Record<string, string>;
   pathOverrides?: Record<string, boolean>;
+  toolPaths?: Record<string, { points: DrawnPoint[]; flip: boolean; source: { center: number[]; radius: number;
+    planeY: number; far: number[]; up: number[]; boxAligned: boolean }; origin?: { project: string; target: string } }>;
   physics?: { material?: string; softMm?: number; scope?: string; shape?: string; force?: number; tracking?: number;
     muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number; mass?: string } };
 const $ = <T = HTMLElement>(id: string) => document.getElementById(id) as unknown as T;
@@ -163,6 +166,7 @@ function saveDrawing() {
   const drawings = saved.drawings ?? {};
   drawings[drawKey()] = { points, flip: input('flip').value === '1', source: {
     center: [...scene.target.center], radius: scene.target.radius, planeY: scene.plane_y ?? 0,
+    far: [...scene.frame.far], up: [...scene.frame.up], boxAligned: !!scene.box,
   } };
   if (usingSharedPath) {
     remember({ drawings, pathOverrides: { ...saved.pathOverrides, [drawKey()]: true } });
@@ -172,15 +176,30 @@ function saveDrawing() {
 }
 function loadDrawing() {
   const settings = stored(), drawings = settings.drawings ?? {};
+  const global = settings.toolPaths?.[activeToolId];
+  const useGlobal = !!scene && !!global && !settings.pathOverrides?.[drawKey()];
   const sourceId = sharedTargetId();
-  const useShared = !!scene && !!sourceId && sourceId !== scene.target_id && !settings.pathOverrides?.[drawKey()];
+  const useShared = !useGlobal && !!scene && !!sourceId && sourceId !== scene.target_id && !settings.pathOverrides?.[drawKey()];
   const source = useShared ? drawings[`${activeToolId}|${projectName}|${sourceId}`] : undefined;
   const center = source?.source?.center ?? scene?.circles.find(circle => circle.id === sourceId)?.center;
-  const saved = source && center && scene ? source : drawings[drawKey()]
+  const saved = useGlobal ? global : source && center && scene ? source : drawings[drawKey()]
     ?? (activeToolId === legacyToolId() ? drawings[legacyDrawKey()] : undefined);
-  usingSharedPath = !!(source && center && scene);
-  const offset = usingSharedPath ? [scene!.target.center[0] - center![0], scene!.target.center[1] - center![1]] : [0, 0];
-  points = Array.isArray(saved?.points) ? saved.points.map(point => ({ ...point, x: point.x + offset[0], z: point.z + offset[1] })) : [];
+  usingSharedPath = useGlobal || !!(source && center && scene);
+  const offset = source && center && scene ? [scene.target.center[0] - center[0], scene.target.center[1] - center[1]] : [0, 0];
+  points = Array.isArray(saved?.points) ? saved.points.map(point => {
+    if (useGlobal && global && scene) {
+      const dx = point.x - global.source.center[0], dz = point.z - global.source.center[1];
+      const far = dx * global.source.far[0] + dz * global.source.far[1];
+      const up = dx * global.source.up[0] + dz * global.source.up[1];
+      const directionFar = point.angle === null ? 0 : Math.cos(point.angle) * global.source.far[0] + Math.sin(point.angle) * global.source.far[1];
+      const directionUp = point.angle === null ? 0 : Math.cos(point.angle) * global.source.up[0] + Math.sin(point.angle) * global.source.up[1];
+      return { ...point, x: scene.target.center[0] + far * scene.frame.far[0] + up * scene.frame.up[0],
+        z: scene.target.center[1] + far * scene.frame.far[1] + up * scene.frame.up[1],
+        angle: point.angle === null ? null : Math.atan2(directionFar * scene.frame.far[1] + directionUp * scene.frame.up[1],
+          directionFar * scene.frame.far[0] + directionUp * scene.frame.up[0]) };
+    }
+    return { ...point, x: point.x + offset[0], z: point.z + offset[1] };
+  }) : [];
   if (saved) input('flip').value = saved.flip ? '1' : '0';
   selected = points.length - 1;
   if (saved && !saved.source && points.length && !usingSharedPath) saveDrawing();
@@ -189,35 +208,47 @@ function loadDrawing() {
 function renderPathTemplateInfo() {
   const info = $('path-template-info');
   if (!info) return;
+  const global = stored().toolPaths?.[activeToolId];
   const sourceId = sharedTargetId();
-  const sourceName = scene?.circles.find(circle => circle.id === sourceId)?.name ?? sourceId;
-  const hasTemplate = !!sourceId && !!scene && sourceId !== scene.target_id;
+  const sourceName = global?.origin?.target ?? scene?.circles.find(circle => circle.id === sourceId)?.name ?? sourceId;
+  const hasTemplate = !!global || !!sourceId && !!scene && sourceId !== scene.target_id;
   $('detach-path').hidden = !hasTemplate || !usingSharedPath;
+  $('restore-individual').hidden = !usingSharedPath || !stored().drawings?.[drawKey()];
   $('reset-to-shared').hidden = !hasTemplate || usingSharedPath;
-  $<HTMLButtonElement>('share-path').disabled = !scene || points.length < 2 || scene.circles.length < 2;
-  info.textContent = usingSharedPath ? `${sourceName}의 공통 경로를 이 용기 위치에 맞춰 표시 중입니다. 점을 고치면 이 용기만 개별 경로가 됩니다.`
+  $<HTMLButtonElement>('share-path').disabled = !scene || points.length < 2;
+  info.textContent = usingSharedPath ? `${sourceName ?? '기준 용기'}의 ${global ? '툴 공통 파지법' : '장면 공통 경로'}을 이 용기 위치에 맞춰 표시 중입니다. 점을 고치면 이 장면의 용기만 개별 경로가 됩니다.`
     : hasTemplate ? `${sourceName}의 공통 경로와 별도로 저장된 이 용기의 개별 경로입니다.`
       : sourceId === scene?.target_id ? '현재 용기가 공통 경로 기준입니다. 이 경로를 고치면 연결된 용기에도 반영됩니다.'
         : '현재 용기의 경로를 다른 용기에 공통으로 적용할 수 있습니다. 바닥·벽 근처는 별도 검증하세요.';
 }
 function sharePath() {
-  if (!scene || points.length < 2 || scene.circles.length < 2) return;
-  saveDrawing();
+  if (!scene || points.length < 2) return;
   const saved = stored();
   const overrides = { ...saved.pathOverrides };
-  for (const circle of scene.circles) if (circle.id !== scene.target_id)
-    delete overrides[`${activeToolId}|${projectName}|${circle.id}`];
-  remember({ pathTemplates: { ...saved.pathTemplates, [templateKey()]: scene.target_id }, pathOverrides: overrides });
+  delete overrides[drawKey()];
+  remember({ toolPaths: { ...saved.toolPaths, [activeToolId]: { points: structuredClone(points),
+    flip: input('flip').value === '1', source: { center: [...scene.target.center], radius: scene.target.radius,
+      planeY: scene.plane_y ?? 0, far: [...scene.frame.far], up: [...scene.frame.up], boxAligned: !!scene.box },
+    origin: { project: projectName, target: scene.circles.find(circle => circle.id === scene!.target_id)?.name ?? scene.target_id } } },
+    pathOverrides: overrides });
+  usingSharedPath = true;
   renderPathTemplateInfo();
-  status(`${scene.circles.length - 1}개 용기에 ${toolLabel(activeToolId)} 공통 경로를 연결했습니다. 각 용기에서 충돌을 확인하세요.`);
+  status(`${toolLabel(activeToolId)} 공통 파지법을 저장했습니다. 장면을 바꿔도 사용할 수 있습니다. 용기별 충돌을 확인하세요.`);
 }
 function detachPath() {
   if (!usingSharedPath) return;
   saveDrawing();
   status('현재 용기의 경로를 개별 저장했습니다. 이후 공통 경로를 바꿔도 유지됩니다.');
 }
+function restoreIndividualPath() {
+  if (!scene || !stored().drawings?.[drawKey()]) return;
+  const saved = stored();
+  remember({ pathOverrides: { ...saved.pathOverrides, [drawKey()]: true } });
+  loadDrawing(); resetHistory(); clearResult(); renderPoints(); draw();
+  status('이 장면에 저장돼 있던 개별 경로를 다시 불러왔습니다.');
+}
 function resetToSharedPath() {
-  if (!scene || !sharedTargetId()) return;
+  if (!scene || !stored().toolPaths?.[activeToolId] && !sharedTargetId()) return;
   const saved = stored(), overrides = { ...saved.pathOverrides };
   delete overrides[drawKey()];
   remember({ pathOverrides: overrides });
@@ -244,17 +275,20 @@ async function loadProject(name: string) {
   remember({ project: name });
   await loadScene(undefined);
 }
-async function loadScene(targetId: string | undefined) {
+async function loadScene(targetId: string | undefined, preservePitch = false) {
   setTargetPickMode(false);
+  const currentPitch = preservePitch && baseScene ? boxPitchDeg(baseScene) : null;
   const response = await api<{ scene: LabScene; defaults: Record<string, number>; limits: Record<string, [number, number]>; targets: { id: string; name: string }[] }>(
     'cylinder-lab/scene', { project, target_id: targetId ?? null });
-  baseScene = response.scene; defaults = response.defaults; limits = response.limits;
+  const loadedPitch = boxPitchDeg(response.scene);
+  baseScene = currentPitch !== null && loadedPitch !== null ? tiltScene(response.scene, currentPitch).scene : response.scene;
+  defaults = response.defaults; limits = response.limits;
   syncCylinderDiameter();
   $<HTMLSelectElement>('target').innerHTML = response.targets.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
   $<HTMLSelectElement>('target').value = baseScene.target_id;
   renderParams({ ...defaults, ...Object.fromEntries(Object.entries(savedSections().auto ?? {}).filter(([key]) => key in defaults)) as Record<string, number> });
   restoreSections();
-  syncPitch();
+  syncPitch(loadedPitch);
   status('정착 중…');
   await new Promise(resolve => setTimeout(resolve, 10));
   scene = settled(baseScene);
@@ -687,7 +721,7 @@ function setupCanvas() {
       if (id) {
         hoverId = null;
         setTargetPickMode(false);
-        if (id !== scene?.target_id) void loadScene(id).catch(error => status(error.message));
+        if (id !== scene?.target_id) void loadScene(id, true).catch(error => status(error.message));
         else status('이미 선택된 원통입니다.');
       } else status('원통 위를 클릭하세요.');
       return;
@@ -953,11 +987,12 @@ function setMode(next: 'draw' | 'auto') {
 // ---------------------------------------------------------------- box tilt
 
 /** Show the loaded box pitch and remember it for "원래 기울기로". */
-function syncPitch() {
-  originalPitch = baseScene ? boxPitchDeg(baseScene) : null;
-  input('box-pitch').value = originalPitch === null ? '' : originalPitch.toFixed(1);
-  input('box-pitch').disabled = originalPitch === null;
-  $<HTMLButtonElement>('box-pitch-reset').disabled = originalPitch === null;
+function syncPitch(loadedPitch: number | null = baseScene ? boxPitchDeg(baseScene) : null) {
+  originalPitch = loadedPitch;
+  const current = baseScene ? boxPitchDeg(baseScene) : null;
+  input('box-pitch').value = current === null ? '' : current.toFixed(1);
+  input('box-pitch').disabled = current === null;
+  $<HTMLButtonElement>('box-pitch-reset').disabled = loadedPitch === null;
 }
 
 /** Turn the box and its contents to `pitch`, settle again, and carry the drawn points along. */
@@ -978,7 +1013,9 @@ async function applyPitch(pitch: number) {
   await new Promise(resolve => setTimeout(resolve, 10));
   scene = settled(tilted);
   view.cx = scene.frame.origin[0]; view.cz = scene.frame.origin[1] + .05;
-  changed(); renderGraspInfo();
+  clearResult();
+  if (usingSharedPath) loadDrawing(); else saveDrawing();
+  renderPoints(); draw(); renderGraspInfo();
   status(`상자 기울기 ${clamped.toFixed(1)}° · 상자와 용기를 함께 돌리고 다시 정착시켰습니다.`);
 }
 
@@ -1235,7 +1272,7 @@ async function init() {
   select.innerHTML = names.map(name => `<option value="${name}">${name.replace(/\/project\.json$/, '')}</option>`).join('');
   select.value = saved.project && names.includes(saved.project) ? saved.project : names[0];
   select.onchange = () => { if (!select.value) return; renderDemos(); select.querySelector('option[data-demo]')?.remove(); void loadProject(select.value).catch(error => status(error.message)); };
-  $<HTMLSelectElement>('target').onchange = event => void loadScene((event.target as HTMLSelectElement).value).catch(error => status(error.message));
+  $<HTMLSelectElement>('target').onchange = event => void loadScene((event.target as HTMLSelectElement).value, true).catch(error => status(error.message));
   $('run').onclick = () => void run();
   $('select-sim-target').onclick = () => setTargetPickMode(!targetPickMode);
   $('reset').onclick = () => { renderParams(defaults); persistSection('auto'); renderGraspInfo(); };
@@ -1245,6 +1282,7 @@ async function init() {
   $('to-draw').onclick = copyToDrawing;
   $('share-path').onclick = sharePath;
   $('detach-path').onclick = detachPath;
+  $('restore-individual').onclick = restoreIndividualPath;
   $('reset-to-shared').onclick = resetToSharedPath;
   $('pick-mode').onclick = () => setPickMode(!pickMode);
   input('box-pitch').addEventListener('change', () => void applyPitch(num('box-pitch')));
@@ -1381,5 +1419,6 @@ async function init() {
   requestAnimationFrame(tick);
   if (toolModelId !== 'g1-tools' || !mountedTools?.includes(activeToolId)) await changeMountedTool(activeToolId);
   if (select.value) await loadProject(select.value);
+  else if ((DEMOS as unknown as Demo[]).length) await loadDemo((DEMOS as unknown as Demo[])[0].id);
 }
 init().catch(error => status(error instanceof Error ? error.message : String(error)));

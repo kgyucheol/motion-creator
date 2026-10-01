@@ -60,18 +60,18 @@ select,input{width:100%}
 <div class="lab">
   <aside>
     <h1>원통 꺼내기 2D 물리 검증</h1>
-    <p class="hint">원통 축(로봇 좌우)에 수직인 단면입니다. 장면과 작업 툴을 고르면 해당 툴의 파지점·설정·경로와 충돌 단면을 불러옵니다.</p>
-    <h2>장면</h2>
-    <label class="row">장면 프로젝트<select id="project"></select></label>
+    <p class="hint">파지법은 장착 툴에 저장합니다. 프로젝트는 용기·상자와의 충돌을 확인할 검증 장면으로 사용합니다.</p>
+    <h2>툴 파지법</h2>
+    <label class="row">장착 툴<select id="mounted-tool" aria-label="작업 툴"></select></label>
+    <p class="hint" id="mounted-tool-info"></p>
+    <h2>검증 장면</h2>
+    <label class="row">장면 프로젝트<small>파지법과 별개인 검증용 장면</small><select id="project"></select></label>
     <label class="row">시뮬레이션 대상 원통<small>처음에는 가장 위 용기가 선택됩니다. 목록이나 캔버스에서 바꿀 수 있습니다.</small><select id="target"></select></label>
     <label class="row">대상 원통 지름 (m)<small>이 Lab 장면에서만 변경 · 질량은 유지</small><input id="cylinder-diameter" type="number" step="0.001" min="0.01" max="0.5"/></label>
     <div class="buttons"><button id="cylinder-diameter-reset">불러온 지름으로</button></div>
     <label class="row">예시 데모<select id="demo-select" aria-label="예시 데모"></select></label>
     <label class="row">상자 기울기 (pitch, °)<small>상자와 안의 용기가 함께 회전</small><input id="box-pitch" type="number" step="1" min="-90" max="90"/></label>
     <div class="buttons"><button id="box-pitch-reset">원래 기울기로</button></div>
-    <h2>작업 툴</h2>
-    <label class="row">툴 모델<select id="mounted-tool" aria-label="작업 툴"></select></label>
-    <p class="hint" id="mounted-tool-info"></p>
     <div class="tabs" role="tablist"><button id="tab-draw" aria-pressed="true">직접 그리기</button><button id="tab-auto" aria-pressed="false">자동 계획</button></div>
     <section id="draw-panel">
       <p class="hint">빈 곳 클릭: 점 추가 · 점 드래그: 이동 · 점의 손잡이 드래그: 날 각도 · 점 더블클릭: 각도 자동 · 점 우클릭: 삭제 · 휠: 확대 · Shift+드래그: 화면 이동 · Ctrl+Z: 되돌리기 · Ctrl+Shift+Z: 다시 실행</p>
@@ -81,8 +81,8 @@ select,input{width:100%}
       <div class="buttons"><button id="grasp-defaults">이 툴 계수 기본값</button></div>
       <p class="hint" id="grasp-info"></p>
       <div class="buttons"><button id="from-grasp">파지점에서 시작</button><button id="undo-point">마지막 점 삭제</button><button id="clear-points">모두 지우기</button></div>
-      <div class="buttons"><button id="share-path">현재 용기를 공통 경로 기준으로</button><button id="detach-path" hidden>이 용기만 개별 경로로</button><button id="reset-to-shared" hidden>공통 경로로 되돌리기</button></div>
-      <p class="hint" id="path-template-info">공통 경로를 지정하면 다른 용기에 위치를 맞춰 적용합니다. 바닥·벽 근처 용기는 개별 경로로 수정할 수 있습니다.</p>
+      <div class="buttons"><button id="share-path">현재 경로를 이 툴의 공통 파지법으로 저장</button><button id="detach-path" hidden>이 용기만 개별 경로로</button><button id="restore-individual" hidden>기존 개별 경로 불러오기</button><button id="reset-to-shared" hidden>툴 공통 파지법으로 되돌리기</button></div>
+      <p class="hint" id="path-template-info">툴 공통 파지법은 다른 장면의 용기에도 위치를 맞춰 적용합니다. 바닥·벽 근처 용기는 개별 경로로 수정할 수 있습니다.</p>
       <label class="row">접촉 면<small>경로 기준 위·아래로 툴 단면을 뒤집습니다.</small><select id="flip"><option value="0">윗면 접촉</option><option value="1">아랫면 접촉</option></select></label>
       <label class="check"><input type="checkbox" id="snap" checked/>원통 표면에 붙이기</label>
       <label class="row">쐐기 깊이 (m)<small>붙일 때 표면 안쪽으로</small><input id="snap-wedge" type="number" step="0.001" value="0.003"/></label>

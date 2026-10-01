@@ -7,7 +7,7 @@ const DRAWINGS_KEY = 'motioncreator-cylinder-lab-v2';
 const SETTINGS_KEY = 'motioncreator-cylinder-lab-tool-settings-v1';
 const GRASPS_KEY = 'motioncreator-cylinder-lab-tool-grasps-v1';
 export type HandSide = 'left' | 'right';
-export type LabPathSource = { center: number[]; radius: number; planeY: number };
+export type LabPathSource = { center: number[]; radius: number; planeY: number; far?: number[]; up?: number[]; boxAligned?: boolean };
 export type LabToolPath = { side: HandSide; toolId: string; projectName: string; points: DrawnPoint[]; flip: boolean;
   source: LabPathSource | null; stepping: DrawnStepping; coefficients: GraspPointCoefficients };
 export type ToolPose = { position: number[]; quaternion_xyzw: number[] };
@@ -48,6 +48,7 @@ export function readLabToolPaths(targetId: string, mounted: [string, string], ed
   const grasps = parseMap(storage, GRASPS_KEY);
   const preferredProject = typeof saved.project === 'string' ? saved.project : '';
   const templates = objectMap(saved.pathTemplates), overrides = objectMap(saved.pathOverrides);
+  const toolPaths = objectMap(saved.toolPaths);
   const result: Partial<Record<HandSide, LabToolPath>> = {};
   for (const [index, side] of (['left', 'right'] as const).entries()) {
     const toolId = mounted[index];
@@ -59,8 +60,10 @@ export function readLabToolPaths(targetId: string, mounted: [string, string], ed
       ? `${toolId}|${preferredProject}|${templateId}` : undefined;
     const key = sharedKey && sharedKey in drawings ? sharedKey : matches[0]
       ?? (saved.legacyDrawingTool === toolId && legacyKey in drawings ? legacyKey : undefined);
-    const drawing = objectMap(key ? drawings[key] : undefined);
-    if (!key || !Array.isArray(drawing.points) || drawing.points.length < 2) continue;
+    const global = objectMap(toolPaths[toolId]);
+    const useGlobal = Array.isArray(global.points) && overrides[`${toolId}|${preferredProject}|${targetId}`] !== true;
+    const drawing = useGlobal ? global : objectMap(key ? drawings[key] : undefined);
+    if ((!key && !useGlobal) || !Array.isArray(drawing.points) || drawing.points.length < 2) continue;
     const points = drawing.points.map(value => {
       const item = objectMap(value);
       return { x: Number(item.x), z: Number(item.z),
@@ -72,11 +75,13 @@ export function readLabToolPaths(targetId: string, mounted: [string, string], ed
     const section = objectMap(objectMap(sections[toolId]).stepping);
     const savedStepping = { stepM: Number(section['step-m']), stepDeg: Number(section['step-deg']),
       speedMS: Number(section.speed), turnDegS: Number(section.turn), minStepS: Number(section['min-step']) };
-    result[side] = { side, toolId, projectName: key === legacyKey ? preferredProject : key.slice(toolId.length + 1, key.lastIndexOf('|')), points,
+    result[side] = { side, toolId, projectName: useGlobal ? '툴 공통 파지법' : key === legacyKey ? preferredProject : key!.slice(toolId.length + 1, key!.lastIndexOf('|')), points,
       flip: drawing.flip === true,
       source: finiteVector(source.center, 2) && typeof source.radius === 'number' && source.radius > 0 &&
         typeof source.planeY === 'number' && Number.isFinite(source.planeY)
-        ? { center: source.center, radius: source.radius, planeY: source.planeY } : null,
+        ? { center: source.center, radius: source.radius, planeY: source.planeY,
+          ...(finiteVector(source.far, 2) && finiteVector(source.up, 2) ? { far: source.far, up: source.up,
+            boxAligned: source.boxAligned === true } : {}) } : null,
       stepping: stepping(savedStepping), coefficients: coefficients(grasps[toolId], editorCoefficients[side]),
     };
   }
@@ -96,10 +101,19 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
   if (maxFrames < 1) throw new Error('키프레임 최대 100개에 도달했습니다. 기존 프레임을 줄여 주세요.');
   const configured = Object.fromEntries(sides.map(side => [side, sourcePaths[side]?.coefficients ?? DEFAULT_RAMEN_GRASP_COEFFICIENTS[side]])) as RamenGraspCoefficients;
   const grasp = candidateRamenGraspPoints(target, robotPosition, robotQuaternion, configured);
+  const targetRotation = new THREE.Quaternion().fromArray(target.quaternion_xyzw).normalize();
+  const targetFar3 = new THREE.Vector3(1, 0, 0).applyQuaternion(targetRotation);
+  const targetUp3 = new THREE.Vector3(0, 0, 1).applyQuaternion(targetRotation);
+  const targetFar = [targetFar3.x, targetFar3.z], targetUp = [targetUp3.x, targetUp3.z];
+  if ((robotPosition[0] - target.position[0]) * targetFar[0] > 0) {
+    targetFar[0] *= -1; targetFar[1] *= -1;
+  }
   const tracks: Partial<Record<HandSide, ToolPathTrack>> = {};
   for (const side of active) {
     const path = sourcePaths[side]!;
     if (!path.source) throw new Error(`${side === 'left' ? '왼손' : '오른손'} ${path.toolId} 경로에 기준 용기 위치가 없습니다. Cylinder Lab에서 해당 툴의 경로를 다시 열어 저장해 주세요.`);
+    const sourceFar = path.source.boxAligned ? path.source.far : undefined;
+    const sourceUp = path.source.boxAligned ? path.source.up : undefined;
     const waypoints = drawnWaypoints(path.points, path.stepping);
     if (waypoints.length > 1000) throw new Error(`${path.toolId} 경로의 보간점이 너무 많습니다. Cylinder Lab에서 간격을 늘려 주세요.`);
     const base = new THREE.Quaternion().fromArray(grasp.orientation[side]);
@@ -121,17 +135,26 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
         controlEnd += Math.max(1, Math.round(path.points[controlIndex].steps ?? autoSteps(path.points, controlIndex, path.stepping)));
       }
       const anchor = i === controlEnd;
-      const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -(waypoint.angle - baseAngle));
+      const directionFar = sourceFar && sourceUp ? Math.cos(waypoint.angle) * sourceFar[0] + Math.sin(waypoint.angle) * sourceFar[1] : 0;
+      const directionUp = sourceFar && sourceUp ? Math.cos(waypoint.angle) * sourceUp[0] + Math.sin(waypoint.angle) * sourceUp[1] : 0;
+      const angle = sourceFar && sourceUp ? Math.atan2(directionFar * targetFar[1] + directionUp * targetUp[1],
+        directionFar * targetFar[0] + directionUp * targetUp[0]) : waypoint.angle;
+      const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -(angle - baseAngle));
       const rotation = yaw.multiply(base.clone());
       if (path.flip !== baseFlip) rotation.multiply(faceTurn);
-      const position = [target.position[0] + waypoint.tcp[0] - path.source.center[0], grasp[side][1],
-        target.position[2] + waypoint.tcp[1] - path.source.center[1]];
+      const dx = waypoint.tcp[0] - path.source.center[0], dz = waypoint.tcp[1] - path.source.center[1];
+      const position = sourceFar && sourceUp
+        ? [target.position[0] + (dx * sourceFar[0] + dz * sourceFar[1]) * targetFar[0]
+            + (dx * sourceUp[0] + dz * sourceUp[1]) * targetUp[0], grasp[side][1],
+          target.position[2] + (dx * sourceFar[0] + dz * sourceFar[1]) * targetFar[1]
+            + (dx * sourceUp[0] + dz * sourceUp[1]) * targetUp[1]]
+        : [target.position[0] + dx, grasp[side][1], target.position[2] + dz];
       const time = Number(elapsed.toFixed(6));
       const point = { time, position, quaternion_xyzw: rotation.toArray(),
         label: anchor ? `그린 점 ${controlIndex + 1}` : waypoint.label, anchor };
       if (anchor) keyPoints.push(point);
       if (i === 0 && Math.hypot(position[0] - grasp[side][0], position[2] - grasp[side][2]) < .005
-        && Math.abs(waypoint.angle - baseAngle) < Math.PI / 36 && path.flip === baseFlip) continue;
+        && Math.abs(angle - baseAngle) < Math.PI / 36 && path.flip === baseFlip) continue;
       points.push(point);
     }
     tracks[side] = { side, toolId: path.toolId, points, keyPoints, drawnCount: path.points.length, grasp: points[0] };
