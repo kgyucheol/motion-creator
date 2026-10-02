@@ -36,7 +36,10 @@ class RamenEnv(base_sim.DefaultEnv):
         # presses "9". Hang the robot over its own start position instead and release it automatically once the
         # policy has had time to start, which is what the person would do.
         start = json.loads(sidecar.read_text(encoding="utf-8"))["robot_start_xy_yaw"]
-        self._band_release_s = float(os.environ.get("RAMEN_BAND_RELEASE_S", 3.0))
+        self._band_min_s = float(os.environ.get("RAMEN_BAND_MIN_S", 1.0))
+        self._band_tolerance_rad = float(os.environ.get("RAMEN_BAND_TOLERANCE_RAD", 0.15))
+        self._converged_since = None
+        self._last_log = -1.0
         if getattr(self, "elastic_band", None) is not None:
             self.elastic_band.point = np.array([start[0], start[1], 1.0])
         self._extractor = TruthExtractor(self.mj_model, sidecar,
@@ -56,13 +59,41 @@ class RamenEnv(base_sim.DefaultEnv):
         # upstream's sim loop swallows exceptions and shuts ROS down; make the cause visible first
         try:
             super().sim_step()
-            band = getattr(self, "elastic_band", None)
-            if band is not None and band.enable and self.mj_data.time >= self._band_release_s:
-                band.enable = False
-                print(f"[ramen] elastic band released at sim time {self.mj_data.time:.2f} s", flush=True)
+            self._maybe_release_band()
+            self._log_progress()
         except Exception:
             traceback.print_exc()
             raise
+
+    def _legs_at_commanded_stance(self) -> bool:
+        """True once the whole-body policy is commanding and the leg joints have converged to its targets."""
+        bridge = self.unitree_bridge
+        if bridge is None or not getattr(bridge, "low_cmd_received", False):
+            return False
+        commanded = np.array([bridge.low_cmd.motor_cmd[i].q for i in range(12)])
+        return float(np.max(np.abs(commanded - self.mj_data.qpos[7:19]))) < self._band_tolerance_rad
+
+    def _maybe_release_band(self):
+        band = getattr(self, "elastic_band", None)
+        if band is None or not band.enable:
+            return
+        now = self.mj_data.time
+        if now < self._band_min_s or not self._legs_at_commanded_stance():
+            self._converged_since = None
+            return
+        self._converged_since = now if self._converged_since is None else self._converged_since
+        if now - self._converged_since >= 0.5:
+            band.enable = False
+            print(f"[ramen] elastic band released at sim time {now:.2f} s", flush=True)
+
+    def _log_progress(self):
+        now = self.mj_data.time
+        if now - self._last_log >= 1.0 and now < 12.0:
+            self._last_log = now
+            band = getattr(self, "elastic_band", None)
+            print(f"[ramen] t={now:5.1f}s pelvis z={self.mj_data.qpos[2]:.3f} "
+                  f"cmd_received={getattr(self.unitree_bridge, 'low_cmd_received', None)} "
+                  f"band={'on' if band is not None and band.enable else 'off'}", flush=True)
 
     def update_render_caches(self):
         try:
