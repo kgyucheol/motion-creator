@@ -8,7 +8,7 @@ BUNDLE="${1:?usage: run_sim2sim.sh <bundle-dir> [options]}"; shift
 set +u   # ROS setup.bash reads unset variables
 . scripts/activate_sim.sh
 set -u
-python scripts/build_scene.py "$BUNDLE" build/scene --target "${TARGET:-Mupama_Stack_L03_R04}" >/dev/null || exit 1
+python scripts/build_sim_scene.py "$BUNDLE" build/scene --target "${TARGET:-Mupama_Stack_L03_R04}" >/dev/null || exit 1
 mkdir -p logs
 setsid python -m ramen_controller.sim.stack --scene-dir build/scene > logs/stack.log 2>&1 &
 STACK=$!

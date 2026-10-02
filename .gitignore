@@ -30,3 +30,8 @@ assets/g1/robot-g1-tools.glb
 /assets/ramen_scan/*.png
 /assets/ramen_scan/*.json
 assets/tools/.generated/
+
+# Controller runtime (sim2sim) working files
+/build/
+/logs/
+/data/

@@ -1,12 +1,15 @@
-"""Generate the sim2sim MJCF: tool-equipped G1 + MotionCreator scene objects + head camera.
+"""Generate the sim2sim MJCF for the whole-body-controller simulator from this package's own models.
 
-Inputs are plain data: the exported robot model (assets/g1_tools, see scripts/export_robot_assets.py) and
-the `environment.json` of a MotionCreator bundle. Nothing in upstream decoupled_wbc is modified; the
-generated files live in a build directory and can be opened in any MuJoCo viewer.
+The robot is the tool-equipped G1 (`tool_model.tool_model_xml`), the scene objects come from a bundle's
+`environment.json` through the same collision proxies the editor uses (`scene_geometry`), and a D435 head camera
+is mounted on the robot. The tools default to the pair the bundle was authored with (`metadata.json`
+`mounted_tools`), so swapping tools in the editor changes the simulated robot without any export step.
 
-Collision proxies follow MotionCreator's conventions (sizes are full extents): box, cylinder, sphere,
-convex hull (mesh) and a five-panel open box. Objects use MuJoCo's default collision masks, so they
-collide with the floor, each other and the whole robot.
+Outputs `scene.xml` plus a `scene_objects.json` sidecar (camera, tool bodies, object names/geoms) that the
+runtime (`ramen_controller.sim`) reads; the sidecar is the only contract between the two packages.
+
+Unlike the editor's preview physics, objects use MuJoCo's default collision masks (they collide with the floor,
+each other and the whole robot) instead of an explicit contact allow-list.
 """
 from __future__ import annotations
 
@@ -17,12 +20,22 @@ from pathlib import Path
 
 import numpy as np
 
+from .scene_geometry import append_collision_geoms, grounded_position
+from .tool_model import DEFAULT_TOOLS, parse_tools, tool_model_xml
+
 CAMERA_NAME = "head"
+
+# The whole-body policy was trained on the stock G1 model, whose joints carry these dynamics (see
+# g1_29dof_with_hand.xml classes). The URDF-derived tool model has none, so they are applied explicitly.
+STOCK_JOINT_DAMPING = 0.05
+STOCK_FRICTIONLOSS = 0.2
+STOCK_WRIST_FRICTIONLOSS = 0.1
+STOCK_FLOOR_FRICTION = (1.0, 0.005, 0.0001)
 
 
 @dataclass(frozen=True)
 class CameraSpec:
-    """Pinhole head camera rigidly mounted on a body. Defaults approximate a D435 colour stream (69 x 42 deg)."""
+    """Pinhole head camera rigidly mounted on a body. Defaults approximate a D435 colour stream (42 deg vertical)."""
     body: str = "d435_link"
     width: int = 640
     height: int = 480
@@ -35,12 +48,19 @@ class CameraSpec:
         return np.array([[f, 0, self.width / 2], [0, f, self.height / 2], [0, 0, 1.0]])
 
 
-# The whole-body policy was trained on the stock G1 model, whose joints carry these dynamics (see
-# g1_29dof_with_hand.xml classes). The URDF-derived tool model has none, so they are applied explicitly.
-STOCK_JOINT_DAMPING = 0.05
-STOCK_FRICTIONLOSS = 0.2
-STOCK_WRIST_FRICTIONLOSS = 0.1
-STOCK_FLOOR_FRICTION = (1.0, 0.005, 0.0001)
+def bundle_tools(bundle_dir) -> tuple[str, str]:
+    """(left, right) tool ids a bundle was authored with; the stock pair if the bundle does not say."""
+    path = Path(bundle_dir) / "metadata.json"
+    mounted = json.loads(path.read_text(encoding="utf-8")).get("mounted_tools") if path.is_file() else None
+    return parse_tools(":".join(mounted)) if mounted else DEFAULT_TOOLS
+
+
+def _numbers(values) -> str:
+    return " ".join(repr(float(v)) for v in np.asarray(values, dtype=float).ravel())
+
+
+def _wxyz(quaternion_xyzw) -> str:
+    return _numbers(np.asarray(quaternion_xyzw, dtype=float)[[3, 0, 1, 2]])
 
 
 def _apply_stock_dynamics(root: ET.Element) -> None:
@@ -55,53 +75,7 @@ def _apply_stock_dynamics(root: ET.Element) -> None:
         floor.set("friction", _numbers(STOCK_FLOOR_FRICTION))
 
 
-def _numbers(values) -> str:
-    return " ".join(repr(float(v)) for v in np.asarray(values, dtype=float).ravel())
-
-
-def _wxyz(quaternion_xyzw) -> str:
-    q = np.asarray(quaternion_xyzw, dtype=float)
-    return _numbers(q[[3, 0, 1, 2]])
-
-
-def _add_collision_geoms(body: ET.Element, asset: ET.Element, index: int, item: dict) -> list[str]:
-    shape = item.get("collision_shape", item["shape"])
-    size = np.asarray(item.get("collision_size", item["size"]), dtype=float)
-    friction = _numbers([item["friction"], .005, .0001])
-    base = f"obj{index}_geom"
-    mass = float(item["mass_kg"])
-    if shape == "convex_hull":
-        mesh = f"obj{index}_hull"
-        ET.SubElement(asset, "mesh", name=mesh, scale=_numbers(item["size"]),
-                      vertex=_numbers(np.asarray(item["collision_hull_vertices"])),
-                      face=" ".join(str(int(v)) for v in np.asarray(item["collision_hull_faces"]).ravel()))
-        ET.SubElement(body, "geom", name=base, type="mesh", mesh=mesh, mass=str(mass), friction=friction)
-        return [base]
-    if shape != "open_box":
-        half = size / 2 if shape == "box" else [size[0] / 2] if shape == "sphere" else [size[0] / 2, size[2] / 2]
-        attributes = {"name": base, "type": shape, "size": _numbers(half), "mass": str(mass), "friction": friction}
-        if item.get("collision_quaternion_xyzw") is not None:
-            attributes["quat"] = _wxyz(item["collision_quaternion_xyzw"])
-        ET.SubElement(body, "geom", **attributes)
-        return [base]
-    t = float(np.clip(item.get("wall_thickness_m", .02), .001, min(size) / 3))
-    h = size[2] - t
-    panels = [("bottom", [size[0], size[1], t], [0, 0, -size[2] / 2 + t / 2]),
-              ("left", [t, size[1] - 2 * t, h], [-(size[0] - t) / 2, 0, t / 2]),
-              ("right", [t, size[1] - 2 * t, h], [(size[0] - t) / 2, 0, t / 2]),
-              ("front", [size[0], t, h], [0, -(size[1] - t) / 2, t / 2]),
-              ("back", [size[0], t, h], [0, (size[1] - t) / 2, t / 2])]
-    volumes = [float(np.prod(d)) for _, d, _ in panels]
-    names = []
-    for (part, dims, pos), volume in zip(panels, volumes):
-        name = f"{base}_{part}"
-        ET.SubElement(body, "geom", name=name, type="box", size=_numbers(np.asarray(dims) / 2), pos=_numbers(pos),
-                      mass=str(mass * volume / sum(volumes)), friction=friction)
-        names.append(name)
-    return names
-
-
-def build_scene(assets_dir, environment_json, out_dir, camera: CameraSpec = CameraSpec(),
+def build_scene(environment_json, out_dir, tools: tuple[str, str] = DEFAULT_TOOLS, camera: CameraSpec = CameraSpec(),
                 target_name: str | None = None, robot_start_xy_yaw: tuple[float, float, float] = (-1.0, 0.0, 0.0)) -> Path:
     """Write out_dir/scene.xml and out_dir/scene_objects.json; return the scene path.
 
@@ -109,12 +83,11 @@ def build_scene(assets_dir, environment_json, out_dir, camera: CameraSpec = Came
     robot starts `robot_start_xy_yaw` away, because the default arms-down pose would intersect the tools
     with the box; the operator walks it to the authored spot (MANUAL_POSITION), as on the real robot.
     """
-    assets_dir, out_dir = Path(assets_dir).resolve(), Path(out_dir)
+    out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    root = ET.parse(assets_dir / "g1_tools.xml").getroot()
-    root.find("compiler").set("meshdir", str(assets_dir / "meshes"))
-
+    root, handles = tool_model_xml(tuple(tools))
     _apply_stock_dynamics(root)
+
     mount = root.find(f".//body[@name='{camera.body}']")
     if mount is None:
         raise ValueError(f"robot model has no body {camera.body!r} to mount the camera on")
@@ -129,18 +102,19 @@ def build_scene(assets_dir, environment_json, out_dir, camera: CameraSpec = Came
     pelvis.set("quat", _numbers([np.cos(yaw / 2), 0, 0, np.sin(yaw / 2)]))
     ET.SubElement(world, "light", pos="0 0 3", dir="0 0 -1", directional="true", diffuse=".8 .8 .8")
     ET.SubElement(world, "light", pos="1 -2 2.5", dir="-.3 .6 -.7", diffuse=".4 .4 .4")
-    asset = root.find("asset")
-    if asset is None:
-        asset = ET.SubElement(root, "asset")
 
     environment = json.loads(Path(environment_json).read_text(encoding="utf-8"))
     sidecar = []
     for index, item in enumerate(environment["scene_objects"]):
-        body = ET.SubElement(world, "body", name=f"obj{index}", pos=_numbers(item["position"]),
+        body = ET.SubElement(world, "body", name=f"obj{index}", pos=_numbers(grounded_position(item)),
                              quat=_wxyz(item["quaternion_xyzw"]))
         if not item.get("fixed", False):
             ET.SubElement(body, "freejoint", name=f"obj{index}_joint")
-        geoms = _add_collision_geoms(body, asset, index, item)
+        geoms = append_collision_geoms(body, "sim", index, item, root)
+        for name in geoms:                                   # the editor's proxies are contact-free until paired
+            geom = body.find(f"geom[@name='{name}']")
+            geom.set("contype", "1")
+            geom.set("conaffinity", "1")
         sidecar.append({"index": index, "body": f"obj{index}", "id": item.get("id"), "name": item["name"],
                         "fixed": bool(item.get("fixed", False)), "geoms": geoms,
                         "is_target": item["name"] == target_name})
@@ -150,11 +124,10 @@ def build_scene(assets_dir, environment_json, out_dir, camera: CameraSpec = Came
     ET.indent(root)
     scene_path = out_dir / "scene.xml"
     scene_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
-    handles_path = assets_dir / "tcp_handles.json"
-    handles = json.loads(handles_path.read_text(encoding="utf-8")) if handles_path.exists() else {}
-    tool_bodies = {side: handles[f"{side}_hand"]["link"] for side in ("left", "right") if f"{side}_hand" in handles}
+    tool_bodies = {side: handles[f"{side}_hand"][0] for side in ("left", "right") if f"{side}_hand" in handles}
     (out_dir / "scene_objects.json").write_text(json.dumps(
         {"camera": {"name": CAMERA_NAME, "width": camera.width, "height": camera.height,
                     "fovy_deg": camera.fovy_deg, "K": camera.intrinsics().tolist(), "body": camera.body},
-         "tool_bodies": tool_bodies, "robot_start_xy_yaw": list(robot_start_xy_yaw), "objects": sidecar}, indent=1, ensure_ascii=False), encoding="utf-8")
+         "tools": list(tools), "tool_bodies": tool_bodies, "robot_start_xy_yaw": list(robot_start_xy_yaw),
+         "objects": sidecar}, indent=1, ensure_ascii=False), encoding="utf-8")
     return scene_path
