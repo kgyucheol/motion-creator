@@ -35,6 +35,26 @@ class CameraSpec:
         return np.array([[f, 0, self.width / 2], [0, f, self.height / 2], [0, 0, 1.0]])
 
 
+# The whole-body policy was trained on the stock G1 model, whose joints carry these dynamics (see
+# g1_29dof_with_hand.xml classes). The URDF-derived tool model has none, so they are applied explicitly.
+STOCK_JOINT_DAMPING = 0.05
+STOCK_FRICTIONLOSS = 0.2
+STOCK_WRIST_FRICTIONLOSS = 0.1
+STOCK_FLOOR_FRICTION = (1.0, 0.005, 0.0001)
+
+
+def _apply_stock_dynamics(root: ET.Element) -> None:
+    for joint in root.iter("joint"):
+        name = joint.get("name", "")
+        if joint.get("type", "hinge") != "hinge" or not name.endswith("_joint"):
+            continue
+        joint.set("damping", str(STOCK_JOINT_DAMPING))
+        joint.set("frictionloss", str(STOCK_WRIST_FRICTIONLOSS if "wrist" in name else STOCK_FRICTIONLOSS))
+    floor = root.find("worldbody/geom[@name='floor']")
+    if floor is not None:
+        floor.set("friction", _numbers(STOCK_FLOOR_FRICTION))
+
+
 def _numbers(values) -> str:
     return " ".join(repr(float(v)) for v in np.asarray(values, dtype=float).ravel())
 
@@ -94,6 +114,7 @@ def build_scene(assets_dir, environment_json, out_dir, camera: CameraSpec = Came
     root = ET.parse(assets_dir / "g1_tools.xml").getroot()
     root.find("compiler").set("meshdir", str(assets_dir / "meshes"))
 
+    _apply_stock_dynamics(root)
     mount = root.find(f".//body[@name='{camera.body}']")
     if mount is None:
         raise ValueError(f"robot model has no body {camera.body!r} to mount the camera on")

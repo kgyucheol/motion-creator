@@ -108,3 +108,12 @@ def test_sidecar_lists_the_tool_bodies_for_grip_detection(tmp_path):
     model = load(tmp_path / "out" / "scene.xml")
     for link in sidecar["tool_bodies"].values():
         assert model.body(link).id > 0                                  # the named bodies exist in the compiled model
+
+
+def test_joints_and_floor_carry_the_stock_dynamics_the_policy_was_trained_on(tmp_path):
+    model = load(build_scene(ASSETS, environment(tmp_path, []), tmp_path / "out"))
+    for name in JOINT_NAMES:
+        joint = model.joint(name)
+        assert np.isclose(joint.damping[0], 0.05), name
+        assert np.isclose(joint.frictionloss[0], 0.1 if "wrist" in name else 0.2), name
+    assert np.allclose(model.geom_friction[mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "floor")], [1.0, 0.005, 0.0001])
