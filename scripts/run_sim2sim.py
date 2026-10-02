@@ -34,6 +34,7 @@ parser.add_argument("--cycles", type=int, default=1)
 parser.add_argument("--timeout-s", type=float, default=240.0)
 parser.add_argument("--gui-port", type=int, default=0, help="0 disables the debug GUI")
 parser.add_argument("--keyboard", action="store_true", help="position the robot by keyboard instead of automatically")
+parser.add_argument("--hold-s", type=float, default=0.0, help="keep the debug GUI (and camera) open this long after the run")
 parser.add_argument("--no-bringup", action="store_true", help="skip the ] / 9 key sequence (already done)")
 parser.add_argument("--grasp-tolerance-m", type=float, default=0.03)
 parser.add_argument("--proxy-grasp", action="store_true",
@@ -91,6 +92,9 @@ started = time.monotonic()
 try:
     runner.run(duration_s=args.timeout_s, until=lambda: fsm.cycles >= args.cycles or
                (runner.last_state is not None and runner.last_state.fallen))
+    if server and args.hold_s > 0:
+        print(f"run finished; holding the debug GUI open for {args.hold_s:.0f} s (Ctrl+C to stop)", flush=True)
+        time.sleep(args.hold_s)
 finally:
     if server:
         server.stop()
