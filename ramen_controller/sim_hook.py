@@ -39,6 +39,11 @@ class RamenEnv(base_sim.DefaultEnv):
         self._socket.bind(f"tcp://127.0.0.1:{int(os.environ.get('RAMEN_FEED_PORT', DEFAULT_PORT))}")
         self.frames_published = 0
 
+    def init_renderers(self):
+        # An EGL context is bound to the thread that creates it. The sim loop runs in its own thread, so the
+        # renderers are created there on the first frame instead of here (main thread).
+        self.renderers = {}
+
     def sim_step(self):
         # upstream's sim loop swallows exceptions and shuts ROS down; make the cause visible first
         try:
@@ -55,6 +60,8 @@ class RamenEnv(base_sim.DefaultEnv):
             raise
 
     def _render_and_publish(self):
+        if not self.renderers:
+            super().init_renderers()
         caches = super().update_render_caches()
         renderer = self.renderers[CAMERA_NAME]
         renderer.enable_depth_rendering()
