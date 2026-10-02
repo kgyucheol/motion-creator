@@ -22,6 +22,18 @@ HANDS = ("left_hand", "right_hand")
 RELAXATIONS = ((.8, 180), (.3, 280), (.08, 400))      # posture weight, IK evaluations: tighten, then relax the preference
 
 
+def measured_qpos(robot: Robot, state: RobotState) -> np.ndarray:
+    """The measured state as a valid editor pose: unit root quaternion, joints clipped to the model limits.
+
+    Encoders and the simulation report joints a hair beyond their range (a leg or arm resting on its stop), which
+    `Robot.validate_q` rejects; a controller must not stop for that.
+    """
+    q = np.concatenate([state.root_position, state.root_quaternion_wxyz, state.joint_positions]).astype(float)
+    q[3:7] /= np.linalg.norm(q[3:7])
+    q[robot.q_indices] = np.clip(q[robot.q_indices], robot.lower, robot.upper)
+    return robot.validate_q(q)
+
+
 def _rotation(quaternion_xyzw) -> Rotation:
     return Rotation.from_quat(np.asarray(quaternion_xyzw, dtype=float))
 
@@ -74,8 +86,11 @@ class RetargetedGraspPlanner:
             raise GraspPlanError(f"object is {shift * 1000:.0f} mm from where the grasp was authored "
                                  f"(limit {self.max_object_shift_m * 1000:.0f} mm)")
         robot = self.robot
-        start = np.concatenate([state.root_position, state.root_quaternion_wxyz, state.joint_positions])
-        seed, solved = robot.validate_q(start), []
+        try:
+            start = measured_qpos(robot, state)
+        except ValueError as error:
+            raise GraspPlanError(f"measured robot state is unusable: {error}") from error
+        seed, solved = start.copy(), []
         for time, row in zip(self.sample_times, self.relative_paths):
             targets = {hand: frame.apply(row[hand][0]) + center for hand in HANDS}
             orientations = {hand: (frame * row[hand][1]).as_quat() for hand in HANDS}
@@ -155,11 +170,7 @@ class TcpCorrector:
         if t - self.last_time >= self.correction_period:
             self.last_time = t
             began = clock.perf_counter()
-            measured = np.concatenate([state.root_position, state.root_quaternion_wxyz, state.joint_positions])
-            robot = self.planner.robot
-            measured[3:7] /= np.linalg.norm(measured[3:7])
-            measured[robot.q_indices] = np.clip(measured[robot.q_indices], robot.lower, robot.upper)   # sensor noise at a limit
-            seed = robot.validate_q(measured)
+            seed = measured_qpos(self.planner.robot, state)
             position, orientation = self._target_at(t)
             solved, info = self.planner.robot.solve(
                 seed, seed, pins=self.planner.pins, angle_pins=["pelvis", "waist"], mode="free", resistance=0.,

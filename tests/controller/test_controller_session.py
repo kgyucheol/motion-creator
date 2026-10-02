@@ -180,7 +180,8 @@ def test_reset_rebuilds_the_controller_and_stops_the_robot(tmp_path):
         assert not session.simulation.running and session.simulation.control_mode == "external"
         assert session.fsm.state.value == "INITIALIZE" and session.fsm.cycles == 0 and session.runner.ticks == 0
         session.set_options({"proxy_grasp": False, "unknown": True})
-        assert session.options == {"proxy_grasp": False, "vision_visible": True, "adaptive_grasp": False}
+        assert session.options == {"proxy_grasp": False, "vision_visible": True, "adaptive_grasp": False,
+                                   "skip_positioning": False}
     finally:
         session.close()
 
@@ -331,5 +332,61 @@ def test_a_planner_that_cannot_reach_the_object_sends_the_task_to_recovery_with_
         assert run(session, 40, until=lambda s: s.fsm.state.value == "RECOVERY")
         assert "authored" in session.fsm.recovery_reason or "unreachable" in session.fsm.recovery_reason
         assert session.snapshot()["task"]["planner"]["last_error"]
+    finally:
+        session.close()
+
+
+@needs_assets
+def test_skipping_positioning_starts_at_the_work_position_and_never_walks(tmp_path):
+    session = make_session(tmp_path, proxy_grasp=True, skip_positioning=True)
+    try:
+        assert session.simulation.data.qpos[0] == pytest.approx(session.simulation.model.qpos0[0])   # not the -0.6 m walk-in start
+        session.start()
+        # (the fixed planner may then refuse: the standing robot settles ~9 cm back of its start, beyond its 8 cm tolerance)
+        assert run(session, 20, until=lambda s: s.fsm.state.value == "PLAN_GRASP"), transitions(session)
+        assert "MANUAL_POSITION" not in transitions(session)
+        assert transitions(session)[:2] == ["OBSERVE", "PLAN_GRASP"]
+        assert abs(session.simulation.data.qpos[0]) < 0.15                     # never walked anywhere
+        assert session.snapshot()["task"]["options"]["skip_positioning"] is True
+    finally:
+        session.close()
+
+
+@needs_assets
+def test_toggling_skip_positioning_resets_to_the_matching_start_and_back(tmp_path):
+    session = make_session(tmp_path, proxy_grasp=True)
+    try:
+        origin = session.simulation.model.qpos0[0]
+        session.start()
+        run(session, 3)
+        session.set_options({"skip_positioning": True})
+        assert not session.simulation.running and session.fsm.state.value == "INITIALIZE"
+        assert session.simulation.data.qpos[0] == pytest.approx(origin)
+        assert session.fsm.config.skip_manual_position is True
+        session.set_options({"skip_positioning": True, "proxy_grasp": False})      # unchanged skip: no second reset
+        assert session.simulation.data.qpos[0] == pytest.approx(origin)
+        session.set_options({"skip_positioning": False})
+        assert session.simulation.data.qpos[0] == pytest.approx(origin - 0.6)
+        assert session.fsm.config.skip_manual_position is False
+    finally:
+        session.close()
+
+
+@needs_assets
+def test_step_state_runs_to_the_next_state_then_pauses(tmp_path):
+    session = make_session(tmp_path, proxy_grasp=True, skip_positioning=True)
+    try:
+        session.step_state()
+        assert session.snapshot()["task"]["stepping"] is True
+        assert run(session, 10, until=lambda s: not s.simulation.running)
+        assert session.fsm.state.value == "OBSERVE" and session.snapshot()["task"]["stepping"] is False
+        time_paused = session.simulation.play_time
+        for _ in range(300):                                                    # a paused simulation does not advance
+            session.simulation.step()
+            session.poll()
+        assert session.simulation.play_time == time_paused and session.fsm.state.value == "OBSERVE"
+        session.step_state()
+        assert run(session, 10, until=lambda s: not s.simulation.running)
+        assert session.fsm.state.value == "PLAN_GRASP"
     finally:
         session.close()

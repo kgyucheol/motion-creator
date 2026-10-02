@@ -161,7 +161,8 @@ class ControllerSession:
         self.simulation = simulation
         self.bundle_dir = Path(bundle_dir)
         self.stages = _validated_stages(stages)
-        self.options = {"proxy_grasp": False, "vision_visible": True, "adaptive_grasp": True, **(options or {})}
+        self.options = {"proxy_grasp": False, "vision_visible": True, "adaptive_grasp": True, "skip_positioning": False,
+                        **(options or {})}
         self.error = ""
         self.closed = False
         names = {item["name"]: item for item in simulation.scene_objects}
@@ -171,15 +172,21 @@ class ControllerSession:
         self.target = names[self.stages["target_object"]]
         self._build()
         simulation.set_control_mode("external")
-        start = self.stages.get("robot_start_xy_yaw", [-1.0, 0.0, 0.0])
-        simulation.set_start_pose(*start)
+        simulation.set_start_pose(*self._start_pose())
         self._next_tick = 0.0
         self._fall_reported = False
+        self._step_until_transition = False
         self.thread = threading.Thread(target=self._loop, name="task-controller", daemon=True)
         if autostart:
             self.thread.start()
 
     # -- assembly ---------------------------------------------------------------------------------------
+
+    def _start_pose(self) -> tuple[float, float, float]:
+        """Where the robot begins: the authored work position when positioning is skipped, else the staged walk-in start."""
+        if self.options["skip_positioning"]:
+            return self.work_pose
+        return tuple(float(value) for value in self.stages.get("robot_start_xy_yaw", [-1.0, 0.0, 0.0]))
 
     def _target_pose_in_base(self) -> ObjectPose | None:
         if not self.options["vision_visible"]:
@@ -212,13 +219,14 @@ class ControllerSession:
         self.planners = {"fixed": TimedPlanner("fixed", fixed), "adaptive": TimedPlanner("adaptive", adaptive)}
         library = MotionLibrary(entries, self._planner())
         yaw = float(root.as_euler("xyz")[2])
-        operator = AutoPositioner(target_xy_yaw=(float(root_position[0]), float(root_position[1]), yaw))
+        self.work_pose = (float(root_position[0]), float(root_position[1]), yaw)
+        operator = AutoPositioner(target_xy_yaw=self.work_pose)
         vision = VisionService(TruthCamera(self.simulation),
                                MockPoseEstimator(truth=self._target_pose_in_base, position_sigma_m=0.003,
                                                  rotation_sigma_deg=1.0, dropout_probability=0.1,
                                                  outlier_probability=0.03, seed=0))
         self.contact = ContactGraspMonitor(self.simulation, self.target["id"])
-        self.fsm = TaskFsm(vision, library, operator, self.contact, TaskFsmConfig(base_height=0.74))
+        self.fsm = TaskFsm(vision, library, operator, self.contact, TaskFsmConfig(base_height=0.74, skip_manual_position=self.options["skip_positioning"]))
         self.proxy = ProxyGraspMonitor(self.fsm)
         self.fsm.grasp = self.proxy if self.options["proxy_grasp"] else self.contact
         self.runner = TaskRunner(self.fsm, SimSessionLink(self.simulation), operator,
@@ -235,8 +243,12 @@ class ControllerSession:
         if not (unreported_fall or (simulation.running and simulation.play_time >= self._next_tick)):
             return False
         self._fall_reported = self._fall_reported or unreported_fall
+        state_before = self.fsm.state
         try:
             self.runner.tick()
+            if self._step_until_transition and self.fsm.state is not state_before:
+                self._step_until_transition = False
+                simulation.stop()                 # "run to the next state" finished: hold here for inspection
         except Exception as exc:                # a controller fault must stop the robot, not the server
             self.error = f"{type(exc).__name__}: {exc}"
             simulation.stop()
@@ -254,13 +266,20 @@ class ControllerSession:
     def stop(self) -> None:
         self.simulation.stop()
 
+    def step_state(self) -> None:
+        """Run until the FSM enters its next state, then pause the simulation."""
+        self._step_until_transition = True
+        self.simulation.play()
+
     def reset(self) -> None:
+        self._build()
+        self.simulation.set_start_pose(*self._start_pose())
         self.simulation.reset()
         self.simulation.set_control_mode("external")
         self.error = ""
         self._next_tick = 0.0
         self._fall_reported = False
-        self._build()
+        self._step_until_transition = False
 
     def operator_reset(self) -> None:
         """The operator's acknowledgement after a stop (RECOVERY -> INITIALIZE)."""
@@ -270,9 +289,13 @@ class ControllerSession:
         return self.planners["adaptive" if self.options["adaptive_grasp"] else "fixed"]
 
     def set_options(self, options: dict) -> None:
-        for key in ("proxy_grasp", "vision_visible", "adaptive_grasp"):
+        skip_before = self.options["skip_positioning"]
+        for key in ("proxy_grasp", "vision_visible", "adaptive_grasp", "skip_positioning"):
             if key in options:
                 self.options[key] = bool(options[key])
+        if self.options["skip_positioning"] != skip_before:
+            self.reset()                          # the start position and the FSM's state list both change
+            return
         self.fsm.grasp = self.proxy if self.options["proxy_grasp"] else self.contact
         self.fsm.motion.grasp_planner = self._planner()
 
@@ -291,6 +314,7 @@ class ControllerSession:
         task.update({"held": all(force >= self.contact.threshold_n for force in forces.values()),
                      "grip_forces_n": {k: round(v, 2) for k, v in forces.items()},
                      "options": dict(self.options), "target_object": self.target["name"],
+                     "stepping": self._step_until_transition,
                      "planner": {"name": self._planner().name, "last_plan_s": self._planner().last_seconds,
                                  "last_error": self._planner().last_error},
                      "authored_target_base": np.round(self.authored_position, 3).tolist(),

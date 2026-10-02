@@ -56,3 +56,4 @@
 .task-events{display:grid;gap:0;max-height:260px;overflow-y:auto}.task-events div{display:grid;grid-template-columns:42px 108px 1fr;gap:6px;padding:4px 0;border-bottom:1px solid #263340;font-size:10px;line-height:1.4}.task-events span{color:#6f8597;font-variant-numeric:tabular-nums}.task-events b{color:#9fc2b6;font-weight:500}.task-events i{color:#b5c5d0;font-style:normal}.task-events .warning i{color:#e5b36f}
 .wbc-header .wbc-back{justify-self:start}
 .task-hud{top:auto;bottom:18px}.task-stages{table-layout:fixed}.task-stages th:first-child,.task-stages td:first-child{width:40px;white-space:nowrap}
+.task-stepper li button{all:unset;cursor:pointer}.task-stepper li:has(button):hover{border-color:#8be6c3}.task-stepper li.skipped{text-decoration:line-through;opacity:.55}.task-stepper li.skipped button{text-decoration:line-through}.task-hint{margin:-4px 0 10px;font-size:10px;color:#6f8597}

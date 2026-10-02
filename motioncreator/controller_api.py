@@ -20,7 +20,7 @@ class SessionInput(BaseModel):
 
 
 class CommandInput(BaseModel):
-    action: Literal["start", "stop", "reset", "operator-reset", "options"]
+    action: Literal["start", "stop", "reset", "operator-reset", "step-state", "options"]
     options: dict | None = None
 
 
@@ -87,5 +87,6 @@ def session_command(identifier: str, payload: CommandInput):
     elif payload.action == "stop": session.stop()
     elif payload.action == "reset": checked(session.reset)
     elif payload.action == "operator-reset": session.operator_reset()
+    elif payload.action == "step-state": session.step_state()
     else: session.set_options(payload.options or {})
     return session.snapshot()

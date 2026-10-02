@@ -79,6 +79,18 @@ scripts/run_sim2sim.sh data/bundle_a --cycles 3 --gui-port 8765   # scene 생성
 - `--proxy-grasp`: 파지 모션이 끝나면 잡힌 것으로 **가정**한다(파지 물리 미검증). 기본은 양쪽 툴과 타깃의 접촉력(≥ 1 N)으로 판정.
 - 디버그 GUI: `http://127.0.0.1:<gui-port>/` (실행 중에만 존재; 다른 PC에서는 SSH 터널).
 
+## 위치 잡기 (MANUAL_POSITION)와 건너뛰기
+
+FSM은 `MANUAL_POSITION`에서 매 틱 OperatorPort의 이동 명령(vx, vy, yaw rate)을 WBC의 `navigate_cmd`로 넘기고, 작업자 확인(`position_confirmed`)이
+서고 이동 명령이 0일 때 `OBSERVE`로 넘어간다. 오퍼레이터 구현은 두 가지다. `KeyboardOperator`는 키 입력(실로봇/수동), `AutoPositioner`(sim2sim)는
+시뮬 월드 좌표를 읽어 저작 모션의 루트 위치(`authored_root_at_s`)를 목표로 P 제어(최소/최대 속도 제한, 위치 3 cm·요 0.05 rad 허용, 1 s 유지 시
+확인, 서 있는 로봇의 흔들림 때문에 허용 오차의 1.7배까지는 유지로 간주)한다. 월드 좌표를 쓰므로 sim 전용이다.
+
+로코모션은 선택 사항이라 건너뛸 수 있다: 작업 상태의 **위치 잡기** 칩(또는 테스트 옵션 ‘위치 잡기 건너뜀’)을 클릭하면 `skip_positioning`이 켜지고 로봇이
+작업 위치(저작 원점)에서 시작하며 FSM은 `INITIALIZE → OBSERVE`로 간다. 설정을 바꾸면 시작 위치가 바뀌므로 세션이 초기화된다(Start를 다시 누른다).
+서 있는 로봇은 시작 직후 약 6~9 cm 뒤로 자리잡는다(WBC 서기에서 골반이 발 뒤에 놓임). 고정 파지(허용 8 cm)는 이 때문에 거부될 수 있어 건너뛸 때는
+포즈 적응 파지를 쓴다. **다음 상태까지** 버튼(`step-state`)은 FSM이 다음 상태로 넘어가는 순간까지 실행한 뒤 일시정지한다.
+
 ## 파지 계획: 포즈 적응 (재조준)
 
 `pose_adaptive_grasp.RetargetedGraspPlanner`는 저작된 파지 구간의 양손 툴 경로를 **저작 당시 물체 좌표계 기준으로 표현**하고,

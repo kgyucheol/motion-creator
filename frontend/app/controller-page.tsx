@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, ArrowLeft, Check, Eye, EyeOff, FolderOpen, Play, RotateCcw, Square } from 'lucide-react';
+import { Activity, ArrowLeft, Check, Eye, EyeOff, FolderOpen, Play, RotateCcw, SkipForward, Square } from 'lucide-react';
 import { RobotScene, type PoseState } from '../lib/robot-scene';
 import type { SceneObject, SceneObjectPose } from '../lib/scene-objects';
 
@@ -13,7 +13,7 @@ type Task = {
   command: null | { nav: number[]; waist_ypr: number[]; arms_max_abs: number };
   target: null | { position: number[]; source: string };
   events: TaskEvent[]; held: boolean; grip_forces_n: Record<'left' | 'right', number>;
-  options: { proxy_grasp: boolean; vision_visible: boolean; adaptive_grasp: boolean }; target_object: string;
+  options: { proxy_grasp: boolean; vision_visible: boolean; adaptive_grasp: boolean; skip_positioning: boolean }; stepping: boolean; target_object: string;
   planner: { name: string; last_plan_s: number | null; last_error: string };
   authored_target_base: number[]; controller_error: string;
 };
@@ -58,7 +58,7 @@ export default function ControllerPage() {
   const [message, setMessage] = useState('런타임을 확인하는 중…');
   const [error, setError] = useState('');
   const [showReference, setShowReference] = useState(false);
-  const [options, setOptions] = useState({ proxy_grasp: false, vision_visible: true, adaptive_grasp: true });
+  const [options, setOptions] = useState({ proxy_grasp: false, vision_visible: true, adaptive_grasp: true, skip_positioning: false });
 
   const renderSnapshot = useCallback((next: Snapshot) => {
     setSnapshot(next);
@@ -119,7 +119,7 @@ export default function ControllerPage() {
     return () => { cancelled = true; };
   }, [choice, runtime]);
 
-  const sendCommand = useCallback(async (action: 'start' | 'stop' | 'reset' | 'operator-reset' | 'options', optionValues?: Record<string, boolean>) => {
+  const sendCommand = useCallback(async (action: 'start' | 'stop' | 'reset' | 'operator-reset' | 'step-state' | 'options', optionValues?: Record<string, boolean>) => {
     if (!sessionId.current) { setError('먼저 작업을 준비하세요.'); return; }
     try {
       const next = await fetch(`/api/controller/sessions/${sessionId.current}/command`, {
@@ -161,10 +161,13 @@ export default function ControllerPage() {
     finally { setBusy(false); }
   }
 
-  function toggleOption(key: 'proxy_grasp' | 'vision_visible' | 'adaptive_grasp') {
+  function toggleOption(key: 'proxy_grasp' | 'vision_visible' | 'adaptive_grasp' | 'skip_positioning') {
     const next = { ...options, [key]: !options[key] };
     setOptions(next);
     if (sessionId.current) void sendCommand('options', { [key]: next[key] });
+    if (key === 'skip_positioning' && sessionId.current)
+      setMessage(next.skip_positioning ? '위치 잡기를 건너뜁니다. 작업 위치(저작 원점)에서 다시 시작하도록 초기화했습니다. Start를 누르세요.'
+        : '위치 잡기를 사용합니다. 걸어서 들어오는 시작 위치로 초기화했습니다. Start를 누르세요.');
   }
 
   function editStage(name: StageName, edge: 'start_s' | 'end_s', value: string) {
@@ -189,7 +192,16 @@ export default function ControllerPage() {
       {task && <section className="wbc-command-card">
         <h2>작업 상태</h2>
         <div className={`task-state ${current}`}>{stateLabel[current] || current}<small>{current}</small></div>
-        <ol className="task-stepper">{STATES.map((name, index) => <li key={name} className={name === current ? 'now' : index < currentIndex ? 'done' : ''}>{stateLabel[name]}</li>)}</ol>
+        <ol className="task-stepper">{STATES.map((name, index) => {
+          const skipped = name === 'MANUAL_POSITION' && options.skip_positioning;
+          const style = `${name === current ? 'now' : index < currentIndex ? 'done' : ''} ${skipped ? 'skipped' : ''}`;
+          return name === 'MANUAL_POSITION'
+            ? <li key={name} className={style}><button type="button" onClick={() => toggleOption('skip_positioning')}
+                title="클릭하면 위치 잡기를 건너뜁니다. 로봇이 작업 위치(원점)에서 시작하고, 설정을 바꾸면 처음 상태로 초기화됩니다.">
+                {stateLabel[name]}{skipped ? ' · 건너뜀' : ''}</button></li>
+            : <li key={name} className={style}>{stateLabel[name]}</li>;
+        })}</ol>
+        <p className="task-hint">‘위치 잡기’ 칩을 클릭하면 건너뛰고 원점에서 시작합니다.</p>
         {current === 'RECOVERY' && <p className="error">{task.recovery_reason}</p>}
         <dl><dt>완료 사이클</dt><dd>{task.cycles}</dd><dt>자동 재시도</dt><dd>{task.retries}</dd>
           <dt>로봇 위치</dt><dd>{fixed(task.robot?.root_xyz)}</dd><dt>기울기</dt><dd>{task.robot ? `${task.robot.tilt_deg}°` : '-'}{task.robot?.fallen ? ' · 낙상' : ''}</dd>
@@ -230,8 +242,9 @@ export default function ControllerPage() {
           <button className={options.adaptive_grasp ? 'chosen' : ''} onClick={() => toggleOption('adaptive_grasp')}>포즈 적응 파지</button>
           <button className={options.proxy_grasp ? 'chosen' : ''} onClick={() => toggleOption('proxy_grasp')}>파지 가정(proxy)</button>
           <button className={!options.vision_visible ? 'chosen' : ''} onClick={() => toggleOption('vision_visible')}>목표 가림</button>
+          <button className={options.skip_positioning ? 'chosen' : ''} onClick={() => toggleOption('skip_positioning')}>위치 잡기 건너뜀</button>
         </div>
-        <p>{options.adaptive_grasp ? '관측된 물체 자세와 현재 로봇 자세에서 저작 파지 경로를 다시 계산합니다.' : '저작된 파지 한 가지를 그대로 재생합니다(저작 위치에서 벗어나면 거부).'} {options.proxy_grasp ? '파지 모션이 끝나면 잡힌 것으로 가정합니다. 파지 물리는 검증되지 않습니다.' : '양쪽 툴이 물체를 1 N 이상으로 누를 때만 잡힌 것으로 판정합니다.'} {options.vision_visible ? '' : '비전이 목표를 보지 못해 관측이 실패하는 경우를 시험합니다.'}</p>
+        <p>{options.adaptive_grasp ? '관측된 물체 자세와 현재 로봇 자세에서 저작 파지 경로를 다시 계산합니다.' : '저작된 파지 한 가지를 그대로 재생합니다(저작 위치에서 벗어나면 거부).'} {options.proxy_grasp ? '파지 모션이 끝나면 잡힌 것으로 가정합니다. 파지 물리는 검증되지 않습니다.' : '양쪽 툴이 물체를 1 N 이상으로 누를 때만 잡힌 것으로 판정합니다.'} {options.vision_visible ? '' : '비전이 목표를 보지 못해 관측이 실패하는 경우를 시험합니다.'} {options.skip_positioning ? '위치 잡기 없이 작업 위치(저작 원점)에서 시작합니다. 서 있는 로봇은 시작 직후 약 6~9 cm 뒤로 자리잡으므로 고정 파지는 거부될 수 있어 포즈 적응 파지를 권장합니다.' : ''}</p>
       </section>
     </aside>
     <section className="wbc-stage">
@@ -258,6 +271,8 @@ export default function ControllerPage() {
       <div className="wbc-controls">
         <button className="primary" disabled={!ready || running} onClick={() => void sendCommand('start')}><Play size={17}/> Start</button>
         <button disabled={!ready || !running} onClick={() => void sendCommand('stop')}><Square size={15}/> Stop</button>
+        <button disabled={!ready || running} onClick={() => void sendCommand('step-state')}
+          title="다음 상태로 넘어가는 순간까지 실행한 뒤 일시정지합니다. 상태마다 로봇과 값을 살펴볼 때 씁니다."><SkipForward size={15}/> 다음 상태까지</button>
         <button disabled={!ready} onClick={() => void sendCommand('reset')}><RotateCcw size={15}/> Reset</button>
         <button disabled={!ready || current !== 'RECOVERY'} onClick={() => void sendCommand('operator-reset')}
           title="정지 원인을 확인한 뒤 준비 자세부터 다시 시작합니다. 낙상 후에는 Reset이 먼저 필요합니다."><Check size={15}/> 작업자 확인</button>

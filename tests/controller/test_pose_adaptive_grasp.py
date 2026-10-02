@@ -149,3 +149,14 @@ def test_locking_the_waist_never_returns_a_plan_that_moves_it(robot, planner_and
     else:
         assert np.ptp(segment.waist_ypr, axis=0).max() < 5e-3
     assert RetargetedGraspPlanner(robot, qpos, 10, AUTHORED_CENTER, AUTHORED_QUATERNION).angle_pins == ["pelvis"]
+
+
+def test_a_joint_resting_a_hair_beyond_its_limit_does_not_stop_the_planner(robot, planner_and_motion):
+    planner, _, home = planner_and_motion
+    observed = base_pose(AUTHORED_CENTER, AUTHORED_QUATERNION, home)
+    q = home.copy()
+    knee = robot.model.joint("left_knee_joint")
+    q[knee.qposadr[0]] = robot.model.jnt_range[knee.id, 1] + 1e-3          # measurement noise past the stop
+    q[3:7] *= 1.0005                                                       # and a root quaternion off unit length
+    segment = planner.plan(observed, state_from(q))
+    assert segment.arm_targets.shape[1] == 14
