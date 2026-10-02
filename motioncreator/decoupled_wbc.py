@@ -382,6 +382,7 @@ class DecoupledSimulation:
         self.policy = LowerBodyPolicy(self.parameters)
         self.command = CommandState(height=self.parameters["initial_height"])
         self.control_mode = "auto"
+        self.external = self._neutral_external()
         self.grasp_force_enabled = bool(self.parameters["grasp_force_control"]["enabled"])
         self.lock = threading.RLock()
         self.condition = threading.Condition(self.lock)
@@ -403,6 +404,12 @@ class DecoupledSimulation:
         self.thread = threading.Thread(target=self._loop, name="decoupled-wbc", daemon=True)
         if autostart:
             self.thread.start()
+
+    def _neutral_external(self) -> dict:
+        """External-mode command that holds the authored first frame and stands still."""
+        first = self._reference_at(0.)
+        return {"arms": first[22:36].copy(), "waist_ypr": first[19:22].copy(),
+                "nav": np.zeros(3), "height": float(self.parameters["initial_height"])}
 
     def _reference_grasp_heights(self) -> np.ndarray:
         """Return the authored mean grip-plane height for load-support tracking."""
@@ -457,6 +464,7 @@ class DecoupledSimulation:
             mujoco.mj_forward(self.model, self.data)
             self.policy.reset()
             self.command = CommandState(height=self.parameters["initial_height"])
+            self.external = self._neutral_external()
             self.running = False
             self.phase = "ready"
             self.error = ""
@@ -493,15 +501,34 @@ class DecoupledSimulation:
             if self.control_mode == "manual" and self.command.apply_key(key, self.parameters): self._changed()
 
     def set_control_mode(self, mode: str) -> None:
-        if mode not in ("auto", "manual"):
-            raise ValueError("Control mode must be auto or manual")
+        if mode not in ("auto", "manual", "external"):
+            raise ValueError("Control mode must be auto, manual or external")
         with self.lock:
             self.control_mode = mode
             self.command.nav[:] = 0
             self.command.height = float(self.parameters["initial_height"])
             self.command.torso_offset_rpy[:] = 0
+            self.external = self._neutral_external()
             self.policy.reset()
             self._changed()
+
+    def set_external_command(self, arms, waist_ypr, nav, height: float) -> None:
+        """Command from an external task controller: 14 arm joint targets, the authored-style waist
+        (yaw, roll, pitch), locomotion velocity (vx, vy, yaw rate) and base height. Values are clamped to the
+        same limits as the keyboard."""
+        arms, waist_ypr, nav = (np.asarray(value, dtype=float) for value in (arms, waist_ypr, nav))
+        if arms.shape != (14,) or waist_ypr.shape != (3,) or nav.shape != (3,):
+            raise ValueError("external command needs arms (14,), waist_ypr (3,) and nav (3,)")
+        limits = self.parameters["command_limits"]
+        with self.lock:
+            if self.control_mode != "external":
+                raise ValueError("Control mode must be external to accept external commands")
+            self.external = {
+                "arms": arms.copy(), "waist_ypr": waist_ypr.copy(),
+                "nav": np.concatenate([np.clip(nav[:2], -limits["linear_velocity"], limits["linear_velocity"]),
+                                       np.clip(nav[2:], -limits["angular_velocity"], limits["angular_velocity"])]),
+                "height": float(np.clip(height, limits["minimum_height"], limits["maximum_height"])),
+            }
 
     def set_grasp_force_control(self, enabled: bool) -> None:
         with self.lock:
@@ -514,6 +541,8 @@ class DecoupledSimulation:
         self.condition.notify_all()
 
     def _arm_target(self) -> np.ndarray:
+        if self.control_mode == "external":
+            return self.external["arms"]
         target = self._reference_at(self.motion_time)[22:36]
         settle = self.parameters["upper_body_settle_seconds"]
         if self.play_time < settle:
@@ -713,7 +742,8 @@ class DecoupledSimulation:
             p = self.parameters
             reference = self._reference_at(self.motion_time)
             limits = np.asarray(p["command_limits"]["torso_rpy"], dtype=np.float32)
-            self.torso_rpy = np.clip(authored_waist_to_torso_rpy(reference[19:22], limits)
+            waist = self.external["waist_ypr"] if self.control_mode == "external" else reference[19:22]
+            self.torso_rpy = np.clip(authored_waist_to_torso_rpy(waist, limits)
                                      + self.command.torso_offset_rpy, -limits, limits).astype(np.float32)
             lower_target = np.asarray(p["default_angles"], dtype=np.float32) + self.policy.action * p["action_scale"]
             self.data.ctrl[:15] = self._pd(lower_target, self.data.qpos[7:22], np.asarray(p["lower_kp"]),
@@ -749,9 +779,13 @@ class DecoupledSimulation:
             self.play_time += p["simulation_dt"]
             if self.play_time >= p["upper_body_settle_seconds"]:
                 self.phase = "playing"
-                self.motion_time = min(self.duration, self.motion_time + p["simulation_dt"])
+                if self.control_mode != "external":          # an external controller owns the upper body's timeline
+                    self.motion_time = min(self.duration, self.motion_time + p["simulation_dt"])
             if self.step_count % p["control_decimation"] == 0:
                 if self.control_mode == "auto": self._update_auto_command(reference)
+                elif self.control_mode == "external":
+                    self.command.nav[:] = self.external["nav"]
+                    self.command.height = self.external["height"]
                 observation = build_observation(self.data, self.policy.action, self.command, self.torso_rpy, p)
                 self.policy.infer(observation, np.linalg.norm(self.command.nav) > .05)
             # Record at 25 Hz (every eight 200 Hz physics steps).

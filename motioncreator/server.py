@@ -60,6 +60,8 @@ from .task_api import router as task_router
 app.include_router(task_router)
 from .decoupled_api import router as decoupled_router
 app.include_router(decoupled_router)
+from .controller_api import router as controller_router
+app.include_router(controller_router)
 app.add_middleware(CORSMiddleware, allow_origins=['http://127.0.0.1:3000', 'http://localhost:3000'], allow_methods=['GET', 'POST', 'DELETE'], allow_headers=['Content-Type'])
 
 

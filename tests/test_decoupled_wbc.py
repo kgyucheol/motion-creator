@@ -362,3 +362,59 @@ def test_policy_drives_lower_body_while_authored_arm_tracks():
         assert simulation.data.qpos[0] > .01
     finally:
         simulation.close()
+
+
+def _stand_still_project():
+    robot = Robot()
+    project = new_project(robot)
+    project["keyframes"][0]["pins"] = []
+    later = json.loads(json.dumps(project["keyframes"][0]))
+    later.update(name="later", duration=1., pins=[])              # gives the authored timeline a length to (not) advance
+    project["keyframes"].append(later)
+    return robot, project
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_external_mode_follows_commanded_arm_waist_and_locomotion():
+    robot, project = _stand_still_project()
+    simulation = DecoupledSimulation(robot, project, autostart=False)
+    try:
+        simulation.set_control_mode("external")
+        arms = simulation._reference_at(0.)[22:36].copy()
+        arms[0] = .35
+        simulation.set_external_command(arms, [0., .12, 0.], [0., 0., 0.], .74)
+        simulation.play()
+        for index in range(700):
+            if index == 450: simulation.set_external_command(arms, [0., .12, 0.], [.3, 0., 0.], .74)
+            simulation.step()
+        snapshot = simulation.snapshot()
+        assert snapshot["control_mode"] == "external" and snapshot["phase"] == "playing"
+        assert snapshot["policy"] == "walk" and simulation.data.qpos[0] > .01        # locomotion command was followed
+        assert simulation.data.qpos[22] == pytest.approx(.35, abs=.08)               # the commanded arm target was tracked
+        assert simulation.torso_rpy[0] == pytest.approx(.12, abs=1e-3)               # waist roll became the torso roll request
+        assert snapshot["upper_time"] == 0.                                          # the authored timeline never advanced
+    finally:
+        simulation.close()
+
+
+@pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
+def test_external_command_is_validated_clamped_and_reset():
+    robot, project = _stand_still_project()
+    simulation = DecoupledSimulation(robot, project, autostart=False)
+    try:
+        arms = np.zeros(14)
+        with pytest.raises(ValueError, match="external"):
+            simulation.set_external_command(arms, [0, 0, 0], [0, 0, 0], .74)       # still in auto mode
+        simulation.set_control_mode("external")
+        with pytest.raises(ValueError, match="arms"):
+            simulation.set_external_command(np.zeros(13), [0, 0, 0], [0, 0, 0], .74)
+        with pytest.raises(ValueError, match="Control mode"):
+            simulation.set_control_mode("remote")
+        simulation.set_external_command(arms, [0, 0, 0], [5., -5., 9.], 2.)
+        np.testing.assert_allclose(simulation.external["nav"], [.5, -.5, 1.])
+        assert simulation.external["height"] == pytest.approx(.74)
+        simulation.reset()
+        np.testing.assert_allclose(simulation.external["nav"], 0.)
+        np.testing.assert_allclose(simulation.external["arms"], simulation._reference_at(0.)[22:36])
+    finally:
+        simulation.close()

@@ -49,7 +49,9 @@ entries = load_entries(config_path)
 # Where the authored grasp expects the target, in the base frame of the authored root pose.
 root_position, root_wxyz = root_pose_at(entries[MotionKind.GRASP].bundle, settings["authored_root_at_s"])
 rotation = Rotation.from_quat([root_wxyz[1], root_wxyz[2], root_wxyz[3], root_wxyz[0]])
-authored_position = rotation.inv().apply(np.asarray(settings["target_world"]) - root_position)
+environment = json.loads((entries[MotionKind.GRASP].bundle / "environment.json").read_text(encoding="utf-8"))
+target = next(o for o in environment["scene_objects"] if o["name"] == settings["target_object"])
+authored_position = rotation.inv().apply(np.asarray(target["position"]) - root_position)
 grasp = entries[MotionKind.GRASP]
 planner = FixedGraspPlanner(load_segment(grasp.bundle, MotionKind.GRASP, grasp.start_s, grasp.end_s),
                             authored_position, tolerance_m=args.grasp_tolerance_m)

@@ -8,6 +8,8 @@ ROOT = Path(__file__).resolve().parents[2]
 # authoring modules the runtime may import; they must stay importable without the server or ML stacks
 CORE = {"robot", "tool_model", "scene_geometry", "grasp", "ramen_sequence", "interaction", "motion", "reference",
         "kimodo_format", "grip_geometry", "hand_collision", "sim_scene"}
+# the only authoring modules that may import the runtime: they assemble editor simulation + task controller
+COMPOSITION = {"controller_session", "controller_api"}
 HEAVY = ["fastapi", "uvicorn", "starlette", "pydantic", "torch", "kimodo", "onnxruntime", "protomotions"]
 
 
@@ -29,9 +31,9 @@ def test_runtime_only_imports_core_authoring_modules():
     assert not offenders, offenders
 
 
-def test_authoring_package_never_imports_the_runtime():
+def test_only_the_composition_layer_imports_the_runtime():
     offenders = [str(path.relative_to(ROOT)) for path in (ROOT / "motioncreator").glob("*.py")
-                 if any(name.split(".")[0] == "ramen_controller" for name in imports_of(path))]
+                 if path.stem not in COMPOSITION and any(name.split(".")[0] == "ramen_controller" for name in imports_of(path))]
     assert not offenders, offenders
 
 
