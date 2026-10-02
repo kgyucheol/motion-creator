@@ -26,6 +26,7 @@ def patch_config(scene_xml: Path, image_dt: float) -> None:
         config["ROBOT_SCENE"] = str(scene_xml)          # absolute path: the sim joins it onto the package root
         config["NUM_HAND_JOINTS"] = 0                   # the tool-equipped model has no hand actuators,
         config["NUM_HAND_MOTORS"] = 0                   # so neither the sim env nor the DDS bridge may expect them
+        config["motor_effort_limit_list"] = list(config["motor_effort_limit_list"])[:config["NUM_JOINTS"]]   # body joints only
         config["IMAGE_DT"] = image_dt
         return config
 
