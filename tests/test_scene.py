@@ -95,6 +95,8 @@ def test_robot_starts_at_the_requested_pose_and_yaw(tmp_path):
     data = mujoco.MjData(model)
     assert np.allclose(data.qpos[:2], [-1.2, 0.3]) and np.isclose(data.qpos[2], 0.79)
     assert np.allclose(data.qpos[3:7], [np.cos(np.pi / 4), 0, 0, np.sin(np.pi / 4)])
+    sidecar = json.loads((tmp_path / "out" / "scene_objects.json").read_text())
+    assert sidecar["robot_start_xy_yaw"] == [-1.2, 0.3, np.pi / 2]
     default = load(build_scene(ASSETS, environment(tmp_path, []), tmp_path / "default"))
     assert np.allclose(mujoco.MjData(default).qpos[:2], [-1.0, 0.0])
 

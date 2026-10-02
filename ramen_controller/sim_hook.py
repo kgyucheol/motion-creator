@@ -12,6 +12,7 @@ import time
 import traceback
 from pathlib import Path
 
+import numpy as np
 import zmq
 
 from decoupled_wbc.control.envs.g1.sim import base_sim
@@ -31,6 +32,13 @@ class RamenEnv(base_sim.DefaultEnv):
                                                                             "width": camera["width"]}},
                          onscreen=onscreen, offscreen=True, enable_image_publish=False)
         self._camera = camera
+        # Upstream starts with a stiff virtual elastic band holding the pelvis at world (0, 0, 1) until a person
+        # presses "9". Hang the robot over its own start position instead and release it automatically once the
+        # policy has had time to start, which is what the person would do.
+        start = json.loads(sidecar.read_text(encoding="utf-8"))["robot_start_xy_yaw"]
+        self._band_release_s = float(os.environ.get("RAMEN_BAND_RELEASE_S", 3.0))
+        if getattr(self, "elastic_band", None) is not None:
+            self.elastic_band.point = np.array([start[0], start[1], 1.0])
         self._extractor = TruthExtractor(self.mj_model, sidecar,
                                          tool_bodies=json.loads(sidecar.read_text(encoding="utf-8"))["tool_bodies"],
                                          camera_name=camera["name"])
@@ -48,6 +56,10 @@ class RamenEnv(base_sim.DefaultEnv):
         # upstream's sim loop swallows exceptions and shuts ROS down; make the cause visible first
         try:
             super().sim_step()
+            band = getattr(self, "elastic_band", None)
+            if band is not None and band.enable and self.mj_data.time >= self._band_release_s:
+                band.enable = False
+                print(f"[ramen] elastic band released at sim time {self.mj_data.time:.2f} s", flush=True)
         except Exception:
             traceback.print_exc()
             raise

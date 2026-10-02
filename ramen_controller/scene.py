@@ -135,5 +135,5 @@ def build_scene(assets_dir, environment_json, out_dir, camera: CameraSpec = Came
     (out_dir / "scene_objects.json").write_text(json.dumps(
         {"camera": {"name": CAMERA_NAME, "width": camera.width, "height": camera.height,
                     "fovy_deg": camera.fovy_deg, "K": camera.intrinsics().tolist(), "body": camera.body},
-         "tool_bodies": tool_bodies, "objects": sidecar}, indent=1, ensure_ascii=False), encoding="utf-8")
+         "tool_bodies": tool_bodies, "robot_start_xy_yaw": list(robot_start_xy_yaw), "objects": sidecar}, indent=1, ensure_ascii=False), encoding="utf-8")
     return scene_path
