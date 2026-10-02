@@ -13,7 +13,8 @@ type Task = {
   command: null | { nav: number[]; waist_ypr: number[]; arms_max_abs: number };
   target: null | { position: number[]; source: string };
   events: TaskEvent[]; held: boolean; grip_forces_n: Record<'left' | 'right', number>;
-  options: { proxy_grasp: boolean; vision_visible: boolean }; target_object: string;
+  options: { proxy_grasp: boolean; vision_visible: boolean; adaptive_grasp: boolean }; target_object: string;
+  planner: { name: string; last_plan_s: number | null; last_error: string };
   authored_target_base: number[]; controller_error: string;
 };
 type Snapshot = {
@@ -57,7 +58,7 @@ export default function ControllerPage() {
   const [message, setMessage] = useState('런타임을 확인하는 중…');
   const [error, setError] = useState('');
   const [showReference, setShowReference] = useState(false);
-  const [options, setOptions] = useState({ proxy_grasp: false, vision_visible: true });
+  const [options, setOptions] = useState({ proxy_grasp: false, vision_visible: true, adaptive_grasp: true });
 
   const renderSnapshot = useCallback((next: Snapshot) => {
     setSnapshot(next);
@@ -160,7 +161,7 @@ export default function ControllerPage() {
     finally { setBusy(false); }
   }
 
-  function toggleOption(key: 'proxy_grasp' | 'vision_visible') {
+  function toggleOption(key: 'proxy_grasp' | 'vision_visible' | 'adaptive_grasp') {
     const next = { ...options, [key]: !options[key] };
     setOptions(next);
     if (sessionId.current) void sendCommand('options', { [key]: next[key] });
@@ -194,7 +195,9 @@ export default function ControllerPage() {
           <dt>로봇 위치</dt><dd>{fixed(task.robot?.root_xyz)}</dd><dt>기울기</dt><dd>{task.robot ? `${task.robot.tilt_deg}°` : '-'}{task.robot?.fallen ? ' · 낙상' : ''}</dd>
           <dt>인식 pose (base)</dt><dd>{task.target ? fixed(task.target.position, 3) : '-'}</dd>
           <dt>저작 기준 (base)</dt><dd>{fixed(task.authored_target_base, 3)}</dd>
+          <dt>파지 계획</dt><dd>{task.planner.name}{task.planner.last_plan_s !== null ? ` · ${task.planner.last_plan_s.toFixed(1)} s` : ''}</dd>
           <dt>파지 접촉력 L / R</dt><dd>{task.grip_forces_n.left.toFixed(1)} / {task.grip_forces_n.right.toFixed(1)} N{task.held ? ' · 잡음' : ''}</dd></dl>
+        {task.planner.last_error && <p className="error">{task.planner.last_error}</p>}
         {task.stalled && <p className="error">로봇 상태가 끊겨 작업이 일시정지되었습니다.</p>}
       </section>}
       {task && <section>
@@ -224,10 +227,11 @@ export default function ControllerPage() {
       <section>
         <h2>2. 테스트 옵션</h2>
         <div className="group-actions">
+          <button className={options.adaptive_grasp ? 'chosen' : ''} onClick={() => toggleOption('adaptive_grasp')}>포즈 적응 파지</button>
           <button className={options.proxy_grasp ? 'chosen' : ''} onClick={() => toggleOption('proxy_grasp')}>파지 가정(proxy)</button>
           <button className={!options.vision_visible ? 'chosen' : ''} onClick={() => toggleOption('vision_visible')}>목표 가림</button>
         </div>
-        <p>{options.proxy_grasp ? '파지 모션이 끝나면 잡힌 것으로 가정합니다. 파지 물리는 검증되지 않습니다.' : '양쪽 툴이 물체를 1 N 이상으로 누를 때만 잡힌 것으로 판정합니다.'} {options.vision_visible ? '' : '비전이 목표를 보지 못해 관측이 실패하는 경우를 시험합니다.'}</p>
+        <p>{options.adaptive_grasp ? '관측된 물체 자세와 현재 로봇 자세에서 저작 파지 경로를 다시 계산합니다.' : '저작된 파지 한 가지를 그대로 재생합니다(저작 위치에서 벗어나면 거부).'} {options.proxy_grasp ? '파지 모션이 끝나면 잡힌 것으로 가정합니다. 파지 물리는 검증되지 않습니다.' : '양쪽 툴이 물체를 1 N 이상으로 누를 때만 잡힌 것으로 판정합니다.'} {options.vision_visible ? '' : '비전이 목표를 보지 못해 관측이 실패하는 경우를 시험합니다.'}</p>
       </section>
     </aside>
     <section className="wbc-stage">

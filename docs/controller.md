@@ -60,7 +60,7 @@ scripts/                  setup_sim_env.sh activate_sim.sh run_sim2sim.sh/.py bu
    **작업자 확인**: 정지(`RECOVERY`) 원인을 확인한 뒤 준비 자세부터 다시 시작한다(낙상 후에는 Reset이 먼저).
 6. 세션은 최대 2개까지 유지되고 더 만들면 가장 오래된 것이 닫힌다. 페이지를 닫으면 세션도 정리된다.
 
-구성: `controller_session.py`(FSM ↔ sim 연결, 비전 목업, 접촉 기반 파지 판정) + `controller_api.py`(`/api/controller/*`) + `frontend/app/controller-page.tsx`.
+구성: `controller_session.py`(FSM ↔ sim 연결, 비전 목업, 접촉 기반 파지 판정) + `pose_adaptive_grasp.py`(포즈 적응 파지 플래너) + `controller_api.py`(`/api/controller/*`) + `frontend/app/controller-page.tsx`.
 실기와의 차이: 이 sim은 편집기의 인프로세스 시뮬이므로 실기와 같은 ROS/DDS 제어 경로가 아니다. 그 경로(실기 어댑터 포함)는 아래 sim2sim 스택이 검증한다.
 
 ## sim2sim
@@ -79,9 +79,23 @@ scripts/run_sim2sim.sh data/bundle_a --cycles 3 --gui-port 8765   # scene 생성
 - `--proxy-grasp`: 파지 모션이 끝나면 잡힌 것으로 **가정**한다(파지 물리 미검증). 기본은 양쪽 툴과 타깃의 접촉력(≥ 1 N)으로 판정.
 - 디버그 GUI: `http://127.0.0.1:<gui-port>/` (실행 중에만 존재; 다른 PC에서는 SSH 터널).
 
+## 파지 계획: 포즈 적응 (재조준)
+
+`pose_adaptive_grasp.RetargetedGraspPlanner`는 저작된 파지 구간의 양손 툴 경로를 **저작 당시 물체 좌표계 기준으로 표현**하고,
+관측된 물체 자세(월드 좌표, 로봇의 현재 루트 자세로 변환)에 다시 얹은 뒤 **현재 자세에서 골반·발을 고정하고** IK를 푼다(팔·허리만 사용).
+Cylinder Lab에서 사용자가 그린 경로의 틈 사이 형상은 그대로 유지되고, 물체/로봇 위치 오차만 보정된다. 계획에 약 0.5 s.
+화면의 **포즈 적응 파지** 토글로 고정 파지(`FixedGraspPlanner`)와 전환한다. 기존 `plan_ramen_sequence`는 이 장면(높은 스택, 기울어진
+박스)에서 IK가 풀리지 않아 쓰지 않았다.
+
+**한계 (측정):** 팔 관절 오차가 0인데도 계획한 TCP와 실제 TCP가 5~6 cm 어긋난다. 저작 모션은 허리 피치를 ±0.5 rad까지 쓰는데
+전신제어기는 허리를 몸통 자세 요청으로 근사해서 실현하므로(명령 대비 최대 0.17 rad, 정상 상태 0.08~0.11 rad 오차, 골반 기울기 최대 9°,
+로봇이 14 cm 밀림) 툴이 틈에 들어가지 못하고 이웃 스택에만 닿는다(타깃 접촉력 0 N). 허리를 잠그면(`lock_waist`) 팔만으로는 닿지 않는다.
+해결하려면 측정된 허리·루트 기준으로 팔을 실시간 보정(TCP 폐루프)하거나, 허리 사용이 적은 모션으로 다시 저작해야 한다.
+
 ## 상태
 
 - 확인됨(GPU PC, RTX 5070): sim 스택 + 가상 카메라(RGB-D, 정답) + FSM이 프록시 파지로 3사이클 무낙상 완료.
+- 포즈 적응 파지(재조준)를 연결했다. 위치 오차는 보정되지만 위 한계 때문에 접촉 판정 모드의 파지는 여전히 실패한다.
 - **파지 물리는 실패한다**(프록시 없이): 고정 파지(`FixedGraspPlanner`)는 저작된 한 자세만 재생하는데 보행 후 로봇이 밀리고 서는 높이가
   0.747 m(저작 0.79 m)라 ~8 cm 빗나간다. 포즈에 적응하는 파지 플래너가 필요하다. 사이클을 반복하면 위치 오차가 누적된다.
 - 합치기 전 sim 모델은 기본 툴 쌍(주걱+받침)으로 고정돼 있어 번들의 `mounted_tools`(주걱+주걱)와 달랐다. 합친 뒤에는 번들을 따른다.

@@ -40,7 +40,8 @@ class VisionPort(Protocol):
 
 class MotionPort(Protocol):
     def segment(self, kind: MotionKind) -> MotionSegment: ...
-    def plan_grasp(self, pose: ObjectPose) -> MotionSegment: ...
+    def plan_grasp(self, pose: ObjectPose, state: RobotState) -> MotionSegment:
+        """Grasp motion for the observed pose; `state` is the robot as it stands now (pose-adaptive planners need it)."""
 
 
 class OperatorPort(Protocol):
@@ -231,7 +232,7 @@ class TaskFsm:
 
     def _tick_plan_grasp(self, now: float, robot: RobotState):
         try:
-            segment = self.motion.plan_grasp(self.target_pose)
+            segment = self.motion.plan_grasp(self.target_pose, robot)
         except GraspPlanError as error:
             self._recoverable = True
             self._transition(TaskState.RECOVERY, now, f"grasp planning failed: {error}")

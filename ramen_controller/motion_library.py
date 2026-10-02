@@ -14,14 +14,15 @@ from typing import Mapping, Protocol
 
 import numpy as np
 
-from .contracts import MotionKind, MotionSegment, ObjectPose
+from .contracts import MotionKind, MotionSegment, ObjectPose, RobotState
 from .fsm import GraspPlanError
 from .motion_bundle import load_segment
 
 
 class GraspPlanner(Protocol):
-    def plan(self, pose: ObjectPose) -> MotionSegment:
-        """Grasp segment for an object pose in the base frame; raise GraspPlanError if infeasible."""
+    def plan(self, pose: ObjectPose, state: RobotState | None = None) -> MotionSegment:
+        """Grasp segment for an object pose in the base frame, planned from the robot's current `state`;
+        raise GraspPlanError if infeasible."""
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,7 @@ class FixedGraspPlanner:
     authored_position: np.ndarray                 # object position (base frame) the grasp was authored for
     tolerance_m: float = 0.03
 
-    def plan(self, pose: ObjectPose) -> MotionSegment:
+    def plan(self, pose: ObjectPose, state: RobotState | None = None) -> MotionSegment:
         if pose.frame_id != "base":
             raise GraspPlanError(f"pose must be in the base frame, got {pose.frame_id!r}")
         offset = float(np.linalg.norm(pose.position - np.asarray(self.authored_position)))
@@ -64,8 +65,8 @@ class MotionLibrary:
             self._cache[kind] = load_segment(entry.bundle, kind, entry.start_s, entry.end_s)
         return self._cache[kind]
 
-    def plan_grasp(self, pose: ObjectPose) -> MotionSegment:
-        return self.grasp_planner.plan(pose)
+    def plan_grasp(self, pose: ObjectPose, state: RobotState | None = None) -> MotionSegment:
+        return self.grasp_planner.plan(pose, state)
 
 
 def load_entries(config_path) -> dict[MotionKind, MotionEntry]:

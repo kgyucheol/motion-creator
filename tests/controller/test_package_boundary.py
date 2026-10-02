@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CORE = {"robot", "tool_model", "scene_geometry", "grasp", "ramen_sequence", "interaction", "motion", "reference",
         "kimodo_format", "grip_geometry", "hand_collision", "sim_scene"}
 # the only authoring modules that may import the runtime: they assemble editor simulation + task controller
-COMPOSITION = {"controller_session", "controller_api"}
+COMPOSITION = {"controller_session", "controller_api", "pose_adaptive_grasp"}
 HEAVY = ["fastapi", "uvicorn", "starlette", "pydantic", "torch", "kimodo", "onnxruntime", "protomotions"]
 
 

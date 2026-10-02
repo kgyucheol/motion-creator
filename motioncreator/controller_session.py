@@ -21,13 +21,14 @@ from scipy.spatial.transform import Rotation
 from ramen_controller.auto_positioner import AutoPositioner
 from ramen_controller.contracts import MotionKind, ObjectPose, RobotState, WbcCommand
 from ramen_controller.fsm import TaskFsm, TaskFsmConfig
-from ramen_controller.motion_bundle import load_segment, root_pose_at
+from ramen_controller.motion_bundle import load_bundle, load_segment, root_pose_at
 from ramen_controller.motion_library import FixedGraspPlanner, MotionEntry, MotionLibrary
 from ramen_controller.sim.proxy_grasp import ProxyGraspMonitor
 from ramen_controller.runner import TaskRunner
 from ramen_controller.vision import CameraFrame, MockPoseEstimator, VisionService
 
 from .decoupled_wbc import DecoupledSimulation, ROOT, verify_assets
+from .pose_adaptive_grasp import RetargetedGraspPlanner
 from .robot import Robot
 
 STAGE_NAMES = ("ready", "grasp", "transfer", "place", "return")
@@ -133,13 +134,34 @@ class ContactGraspMonitor:
         return all(force >= self.threshold_n for force in self.update().values())
 
 
+class TimedPlanner:
+    """Wraps a GraspPlanner to report how long planning took and why it failed."""
+
+    def __init__(self, name: str, inner):
+        self.name, self.inner = name, inner
+        self.last_seconds: float | None = None
+        self.last_error = ""
+
+    def plan(self, pose, state=None):
+        started = time.perf_counter()
+        try:
+            segment = self.inner.plan(pose, state)
+            self.last_error = ""
+            return segment
+        except Exception as exc:
+            self.last_error = str(exc)
+            raise
+        finally:
+            self.last_seconds = time.perf_counter() - started
+
+
 class ControllerSession:
     def __init__(self, simulation: DecoupledSimulation, bundle_dir: Path, stages: dict, options: dict | None = None,
                  autostart: bool = True):
         self.simulation = simulation
         self.bundle_dir = Path(bundle_dir)
         self.stages = _validated_stages(stages)
-        self.options = {"proxy_grasp": False, "vision_visible": True, **(options or {})}
+        self.options = {"proxy_grasp": False, "vision_visible": True, "adaptive_grasp": True, **(options or {})}
         self.error = ""
         self.closed = False
         names = {item["name"]: item for item in simulation.scene_objects}
@@ -180,9 +202,15 @@ class ControllerSession:
         root = Rotation.from_quat([root_wxyz[1], root_wxyz[2], root_wxyz[3], root_wxyz[0]])
         authored_position = root.inv().apply(np.asarray(self.target["position"], float) - root_position)
         grasp = entries[MotionKind.GRASP]
-        planner = FixedGraspPlanner(load_segment(grasp.bundle, MotionKind.GRASP, grasp.start_s, grasp.end_s),
-                                    authored_position, tolerance_m=float(stages.get("grasp_tolerance_m", 0.08)))
-        library = MotionLibrary(entries, planner)
+        fixed = FixedGraspPlanner(load_segment(grasp.bundle, MotionKind.GRASP, grasp.start_s, grasp.end_s),
+                                  authored_position, tolerance_m=float(stages.get("grasp_tolerance_m", 0.08)))
+        fps, authored = load_bundle(grasp.bundle)
+        rows = authored[int(round(grasp.start_s * fps)):int(round(grasp.end_s * fps)) + 1]
+        adaptive = RetargetedGraspPlanner(self.simulation.robot, rows, fps, self.target["position"],
+                                          self.target["quaternion_xyzw"],
+                                          max_object_shift_m=float(stages.get("max_object_shift_m", 0.25)))
+        self.planners = {"fixed": TimedPlanner("fixed", fixed), "adaptive": TimedPlanner("adaptive", adaptive)}
+        library = MotionLibrary(entries, self._planner())
         yaw = float(root.as_euler("xyz")[2])
         operator = AutoPositioner(target_xy_yaw=(float(root_position[0]), float(root_position[1]), yaw))
         vision = VisionService(TruthCamera(self.simulation),
@@ -238,11 +266,15 @@ class ControllerSession:
         """The operator's acknowledgement after a stop (RECOVERY -> INITIALIZE)."""
         self.fsm.operator.request_reset()
 
+    def _planner(self) -> TimedPlanner:
+        return self.planners["adaptive" if self.options["adaptive_grasp"] else "fixed"]
+
     def set_options(self, options: dict) -> None:
-        for key in ("proxy_grasp", "vision_visible"):
+        for key in ("proxy_grasp", "vision_visible", "adaptive_grasp"):
             if key in options:
                 self.options[key] = bool(options[key])
         self.fsm.grasp = self.proxy if self.options["proxy_grasp"] else self.contact
+        self.fsm.motion.grasp_planner = self._planner()
 
     def close(self) -> None:
         self.closed = True
@@ -259,6 +291,8 @@ class ControllerSession:
         task.update({"held": all(force >= self.contact.threshold_n for force in forces.values()),
                      "grip_forces_n": {k: round(v, 2) for k, v in forces.items()},
                      "options": dict(self.options), "target_object": self.target["name"],
+                     "planner": {"name": self._planner().name, "last_plan_s": self._planner().last_seconds,
+                                 "last_error": self._planner().last_error},
                      "authored_target_base": np.round(self.authored_position, 3).tolist(),
                      "controller_error": self.error})
         snapshot["task"] = task

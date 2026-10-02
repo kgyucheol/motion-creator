@@ -39,7 +39,7 @@ class FakeMotion:
         return make_segment(kind, arm_value={MotionKind.READY: 0.0, MotionKind.TRANSFER: 0.5,
                                              MotionKind.PLACE: 0.8, MotionKind.RETURN: 0.0}[kind])
 
-    def plan_grasp(self, pose):
+    def plan_grasp(self, pose, state=None):
         if self.fail_plan:
             raise GraspPlanError("unreachable")
         self.planned.append(pose)

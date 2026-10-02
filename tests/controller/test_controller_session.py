@@ -4,6 +4,8 @@ import json
 import numpy as np
 import pytest
 
+pytest.importorskip("mujoco")        # the editor simulation; the runtime-only environment skips this file
+
 from motioncreator import controller_api
 from motioncreator.controller_session import ControllerSession, _validated_stages, load_stages
 from motioncreator.decoupled_wbc import DecoupledSimulation, verify_assets
@@ -50,7 +52,8 @@ def write_small_bundle(folder, root_z):
 def make_session(tmp_path, **options):
     simulation = DecoupledSimulation(Robot(), project_with_crate(), autostart=False)
     bundle = write_small_bundle(tmp_path / "bundle", float(simulation.data.qpos[2]))
-    return ControllerSession(simulation, bundle, STAGES, options, autostart=False)
+    # the fixed planner is the deterministic one for these wiring tests; adaptive planning has its own tests
+    return ControllerSession(simulation, bundle, STAGES, {"adaptive_grasp": False, **options}, autostart=False)
 
 
 def run(session, seconds, until=None):
@@ -177,7 +180,7 @@ def test_reset_rebuilds_the_controller_and_stops_the_robot(tmp_path):
         assert not session.simulation.running and session.simulation.control_mode == "external"
         assert session.fsm.state.value == "INITIALIZE" and session.fsm.cycles == 0 and session.runner.ticks == 0
         session.set_options({"proxy_grasp": False, "unknown": True})
-        assert session.options == {"proxy_grasp": False, "vision_visible": True}
+        assert session.options == {"proxy_grasp": False, "vision_visible": True, "adaptive_grasp": False}
     finally:
         session.close()
 
@@ -276,3 +279,57 @@ def test_create_keeps_at_most_max_sessions_by_closing_the_oldest(monkeypatch):
     made = [sessions.create({}, None, {})[1] for _ in range(module.MAX_SESSIONS + 1)]
     assert len(sessions.sessions) == module.MAX_SESSIONS
     assert made[0].closed and not made[-1].closed
+
+
+
+@needs_assets
+def test_the_planner_option_swaps_the_grasp_planner_and_reports_timing(tmp_path):
+    session = make_session(tmp_path, proxy_grasp=True)
+    try:
+        assert session.fsm.motion.grasp_planner.name == "fixed"
+        session.set_options({"adaptive_grasp": True})
+        assert session.fsm.motion.grasp_planner.name == "adaptive" and session.options["adaptive_grasp"] is True
+        session.set_options({"adaptive_grasp": False})
+        assert session.fsm.motion.grasp_planner.name == "fixed"
+        assert set(session.snapshot()["task"]["planner"]) == {"name", "last_plan_s", "last_error"}
+    finally:
+        session.close()
+
+
+@needs_assets
+def test_the_fsm_hands_the_observed_pose_and_the_current_robot_state_to_the_planner(tmp_path):
+    from ramen_controller.contracts import MotionKind, RobotState
+
+    seen = []
+    session = make_session(tmp_path, proxy_grasp=True)
+    try:
+        real = session.planners["fixed"].inner
+
+        class Recorder:
+            def plan(self, pose, state=None):
+                seen.append((pose, state))
+                return real.plan(pose, state)
+
+        session.planners["fixed"].inner = Recorder()
+        session.start()
+        assert run(session, 30, until=lambda s: "EXECUTE_GRASP" in transitions(s))
+        pose, state = seen[0]
+        assert pose.frame_id == "base" and isinstance(state, RobotState) and state.joint_positions.shape == (29,)
+        assert state.root_position[2] == pytest.approx(session.simulation.data.qpos[2], abs=0.05)
+        assert session.snapshot()["task"]["planner"]["last_plan_s"] is not None
+    finally:
+        session.close()
+
+
+@needs_assets
+def test_a_planner_that_cannot_reach_the_object_sends_the_task_to_recovery_with_its_reason(tmp_path):
+    session = make_session(tmp_path, proxy_grasp=True, adaptive_grasp=True, vision_visible=True)
+    try:
+        session.stages["max_object_shift_m"] = 0.0           # nothing counts as "where it was authored"
+        session._build()
+        session.start()
+        assert run(session, 40, until=lambda s: s.fsm.state.value == "RECOVERY")
+        assert "authored" in session.fsm.recovery_reason or "unreachable" in session.fsm.recovery_reason
+        assert session.snapshot()["task"]["planner"]["last_error"]
+    finally:
+        session.close()
