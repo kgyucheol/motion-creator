@@ -3,6 +3,8 @@
     python scripts/probe_stack.py [--save-frame out.png] [--seconds 5]
 """
 import argparse
+import os
+import sys
 import time
 
 import numpy as np
@@ -47,3 +49,5 @@ if state is None:
 else:
     print(f"robot: root z {state.root_position[2]:.3f} m, xy {np.round(state.root_position[:2], 3)}, fallen={state.fallen}")
 link.close()
+sys.stdout.flush()
+os._exit(0)   # skip interpreter teardown (rclpy/DDS threads abort on exit)

@@ -7,6 +7,8 @@ exercised before a real estimator is plugged in (see ramen_controller/vision.py)
 """
 import argparse
 import json
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -102,4 +104,6 @@ if fsm.state.value == "RECOVERY":
     print(f"recovery reason: {fsm.recovery_reason}")
 print("transitions:", transitions)
 link.close()
-raise SystemExit(0 if fsm.cycles >= args.cycles and not fallen else 1)
+sys.stdout.flush(); sys.stderr.flush()
+# Skip interpreter teardown: rclpy/DDS threads abort() on exit, which would turn a good run into exit code 134.
+os._exit(0 if fsm.cycles >= args.cycles and not fallen else 1)

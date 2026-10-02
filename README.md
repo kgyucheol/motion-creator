@@ -43,9 +43,29 @@ python -m decoupled_wbc.control.main.teleop.run_sim_loop --no-enable-onscreen --
 
 주의: pinocchio는 2.7.0(4.x는 numpy 2 필요), Unitree SDK는 GR00T가 포함한 사본(`OdoState_` 포함)을 쓴다.
 
+## sim2sim
+
+```bash
+. scripts/activate_sim.sh
+python scripts/export_robot_assets.py ~/motioncreator            # 한 번: 툴 장착 G1 MJCF를 데이터로 내보냄 (assets/, git 제외)
+scripts/run_sim2sim.sh data/bundle_a --cycles 3 --gui-port 8765  # scene 생성 → sim 스택 기동 → FSM 실행 → 정리
+```
+
+구성 (실기와 같은 분리): `sim_stack`(MuJoCo sim + WBC 정책 + ROS 노드, 한 프로세스) ⇄ ROS 2 ⇄ FSM 프로세스, 카메라 RGB-D와
+sim 정답은 ZMQ(`sim_feed`)로 전달. 비전은 `MockPoseEstimator`(정답 + 노이즈·누락·이상치)이며 `PoseEstimator`를 구현한
+백엔드로 교체한다(깊이가 필요하면 `needs_depth=True`로 선언). 디버그 GUI: `http://127.0.0.1:<gui-port>/`(SSH 터널로 접속).
+
+- `--proxy-grasp`: 파지 모션이 끝나면 잡힌 것으로 **가정**한다(파지 물리 미검증). 나머지 단계 검증용.
+- 기본(`SimFeed.held`)은 양쪽 툴과 타깃의 접촉력(≥1 N)으로 판정한다.
+- sim 시작 시 로봇은 박스 1 m 뒤에 서고, `AutoPositioner`가 오도메트리로 지정 위치까지 걸어간다(`--keyboard`로 수동 가능).
+- 업스트림은 정책을 `]`로 켜고 `9`로 탄성 밴드를 풀어야 한다. `bringup_sim`이 이 키를 보낸다.
+
 ## 상태
 
-- 구현·테스트됨(가짜 포트 기준): 계약, 번들 로더, 포즈 평균, FSM 전체 사이클·실패 경로.
-- 확인됨(GPU PC): decoupled_wbc sim 루프가 헤드리스로 ~200 Hz `rt/lowstate`를 발행, EGL이 RTX 5070으로 RGB-D 렌더링.
-- **미구현:** 가상 카메라(RGB-D) 소스, 비전 모듈 어댑터, `decoupled_wbc` sim 어댑터, 디버그 GUI, 실기 어댑터.
-- 실제 로봇·시뮬레이터·비전과 연결해 본 적 없음.
+- 확인됨(GPU PC, RTX 5070): sim 스택 + 가상 카메라(RGB-D, 정답) + FSM이 **프록시 파지로 3사이클(작업 시간 73 s) 무낙상 완료**.
+  비전 관측(1 s 평균) → 파지 계획 → 모션 → 이송 → 배치 → 복귀가 반복된다.
+- **파지 물리는 실패한다**(프록시 없이): 보행 후 로봇이 ~10 cm 밀리고 서는 높이가 0.747 m(저작 기준 0.79 m)라
+  관절 공간으로 저작된 고정 파지가 ~8 cm 빗나가 툴이 스택에 닿지 않는다(접촉력 0 N). 포즈에 적응하는 파지 플래너가 필요하다.
+  `FixedGraspPlanner`(프로토타입)는 저작 위치에서 3 cm 넘게 벗어난 포즈를 거부한다.
+- 비전: 목업만. 실제 백엔드(FoundationPose-Shap 등, RGB-D 필요)는 `PoseEstimator`로 붙인다. 이 PC에서 GPU 환경은 미구축.
+- 실기 어댑터와 실제 파지 판정(grip 센서)은 미구현. 실제 로봇과 연결해 본 적 없음.
