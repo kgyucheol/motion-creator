@@ -74,6 +74,8 @@ def load_entries(config_path) -> dict[MotionKind, MotionEntry]:
     raw = json.loads(config_path.read_text(encoding="utf-8"))
     entries = {}
     for name, item in raw.items():
+        if name.startswith("_") or not isinstance(item, dict):
+            continue                                    # comments and scalar settings (read separately)
         try:
             kind = MotionKind(name)
         except ValueError as error:

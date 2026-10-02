@@ -73,3 +73,11 @@ def test_average_uses_rotation_space_not_euler_components():
 def test_average_failures_explain_why(poses, message):
     with pytest.raises(PoseAveragingError, match=message):
         average_poses(poses, PoseAveragingConfig())
+
+
+def test_root_pose_at_reads_the_authored_pelvis(tmp_path):
+    from ramen_controller.motion_bundle import root_pose_at
+    folder = write_bundle(tmp_path / "b")
+    position, quaternion = root_pose_at(folder, 0.5)
+    assert np.allclose(position, 0) and np.allclose(quaternion, [1, 0, 0, 0])
+    assert np.allclose(root_pose_at(folder, 99.0)[1], [1, 0, 0, 0])              # clamps to the last sample

@@ -54,3 +54,10 @@ def load_segment(folder, kind: MotionKind, start_s: float = 0.0, end_s: float | 
     joints = qpos[first:last, 7:]
     return MotionSegment(kind=kind, fps=fps, arm_targets=joints[:, ARMS_SLICE],
                          waist_ypr=joints[:, WAIST_SLICE], name=Path(folder).name)
+
+
+def root_pose_at(folder, time_s: float) -> tuple[np.ndarray, np.ndarray]:
+    """(position, quaternion_wxyz) of the authored root (pelvis) at `time_s`; the frame authored scene poses refer to."""
+    fps, qpos = load_bundle(folder)
+    row = qpos[min(int(round(time_s * fps)), len(qpos) - 1)]
+    return row[:3].copy(), row[3:7].copy()
