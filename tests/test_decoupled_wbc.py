@@ -418,3 +418,28 @@ def test_external_command_is_validated_clamped_and_reset():
         np.testing.assert_allclose(simulation.external["arms"], simulation._reference_at(0.)[22:36])
     finally:
         simulation.close()
+
+
+def test_wbc_stand_is_the_default_stand_with_the_lower_body_the_controller_holds():
+    import json
+    from motioncreator.robot import WBC_STAND_PATH, FEET, Robot
+    robot = Robot('g1-tools', ('scoop', 'scoop'))
+    stand, data = robot.wbc_stand, json.loads(WBC_STAND_PATH.read_text())
+    for name, value in data['joints'].items():
+        assert stand[robot.model.joint(name).qposadr[0]] == value
+    assert stand[robot.model.joint('left_knee_joint').qposadr[0]] > robot.home[robot.model.joint('left_knee_joint').qposadr[0]] + .4
+    assert stand[2] < robot.home[2] - .03                       # lower pelvis than the editor default
+    d = robot.data(stand)
+    assert min(robot.point(d, k)[0][2] for k in FEET) == __import__('pytest').approx(0., abs=1e-9)   # feet on the floor
+    assert abs(stand[2] - data['pelvis_height_m']) < .01        # and agrees with the height the controller reached
+    arm = [robot.model.joint(f'{s}_elbow_joint').qposadr[0] for s in ('left', 'right')]
+    assert np.allclose(stand[arm], robot.home[arm])             # only the lower body and waist differ from the default stand
+    robot.validate_q(stand)
+
+
+def test_wbc_stand_endpoint_returns_the_pose():
+    from fastapi.testclient import TestClient
+    from motioncreator import server
+    response = TestClient(server.app).get('/api/wbc-stand')
+    assert response.status_code == 200
+    assert np.allclose(response.json()['state']['qpos'], server.robot.wbc_stand)

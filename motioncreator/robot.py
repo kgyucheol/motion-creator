@@ -1,6 +1,7 @@
 """MuJoCo FK and bounded, weighted whole-body IK. No dynamics stepping."""
 from pathlib import Path
 import hashlib
+import json
 import os
 import copy
 from functools import lru_cache
@@ -14,6 +15,7 @@ from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_rotatio
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / 'assets/g1/g1.xml'
+WBC_STAND_PATH = ROOT / 'configs/wbc_stand.json'
 HANDLES = {
     'pelvis': ('pelvis', (0, 0, 0), '골반'),
     'left_knee': ('left_knee_link', (0, 0, 0), '왼 무릎'),
@@ -145,6 +147,7 @@ class Robot:
         for side, sign in (('left', 1), ('right', -1)):
             self.attention[m.joint(f'{side}_elbow_joint').qposadr[0]] = ATTENTION_ELBOW
             self.attention[m.joint(f'{side}_shoulder_roll_joint').qposadr[0]] = sign * ATTENTION_SHOULDER_ROLL
+        self.wbc_stand = self._wbc_stand_pose()
         self.visual_ids = [i for i in range(m.ngeom) if m.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH and m.geom_group[i] == 1]
         if self.model_id == 'g1':
             fingerprint_source = MODEL_PATH.read_bytes()
@@ -218,6 +221,21 @@ class Robot:
 
     def xml_root(self):
         return copy.deepcopy(self.xml)
+
+    def _wbc_stand_pose(self):
+        """Default stand with the lower body the decoupled-WBC actually holds (see scripts/measure_wbc_stand.py).
+
+        Motion authored on `home` (knee 0.24 rad) assumes a taller stance than the controller delivers (knee ~0.74 rad,
+        pelvis ~4 cm lower), so the upper body ends up lower and further from the target at run time.
+        """
+        data = json.loads(WBC_STAND_PATH.read_text())
+        pose = self.home.copy()
+        for name, value in data['joints'].items():
+            pose[self.model.joint(name).qposadr[0]] = value
+        pose[3:7] = [1., 0., 0., 0.]
+        pose[2] = 0.
+        pose[2] -= min(self.point(self.data(pose), k)[0][2] for k in FEET)   # feet on the floor, as for `home`
+        return pose
 
     def validate_q(self, value):
         q = np.array(value, dtype=float, copy=True)

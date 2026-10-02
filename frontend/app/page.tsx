@@ -6,7 +6,7 @@ import GraspControls, { type GraspPickMode } from './grasp-controls';
 import RamenSequenceControls, { type RamenSequenceSettings } from './ramen-sequence-controls';
 import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
-import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes, PersonStanding } from 'lucide-react';
+import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes, PersonStanding, ArrowDownToLine } from 'lucide-react';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
@@ -1588,7 +1588,8 @@ export default function Editor() {
       <div className="panel-heading"><span>자세 프리셋</span></div>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); const init = await api<{state: PoseState}>('init'); applyState(init.state); setPins(feet); setAnglePins([]); setPoseDirty(true); invalidate(); })}><RotateCcw size={15}/> 기본 서기 자세</button>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); changeGraspPickMode(null); const init = await api<{state: PoseState}>('attention'); applyState(init.state); setPins(feet); setAnglePins([]); setPoseDirty(true); setInfo(null); invalidate(); })}><PersonStanding size={15}/> 차렷 자세</button>
-      <p className="hint">기본 서기는 로봇 초기 자세입니다. 차렷 자세는 관절을 좌우대칭으로 맞춰 두 팔을 몸 옆에 내린 자세입니다.</p>
+      <button className="wide" disabled={disabled} onClick={() => void run(async () => { checkpoint(); changeGraspPickMode(null); const init = await api<{state: PoseState}>('wbc-stand'); applyState(init.state); setPins(feet); setAnglePins([]); setPoseDirty(true); setInfo(null); invalidate(); })}><ArrowDownToLine size={15}/> WBC 서기 자세</button>
+      <p className="hint">기본 서기는 로봇 초기 자세입니다. 차렷 자세는 관절을 좌우대칭으로 맞춰 두 팔을 몸 옆에 내린 자세입니다. WBC 서기 자세는 decoupled-WBC가 실제로 서 있는 하체(무릎을 더 굽힌 낮은 자세)이니, 제어기에서 실행할 모션은 이 자세에서 시작해 만드세요.</p>
       <button className="wide" disabled={disabled} onClick={() => void run(async () => {
         const init = await api<{ project: Project }>('init');
         await loadProject(init.project);

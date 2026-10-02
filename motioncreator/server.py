@@ -282,6 +282,11 @@ def attention():
     return {'state': robot.state(robot.attention)}
 
 
+@app.get('/api/wbc-stand')
+def wbc_stand():
+    return {'state': robot.state(robot.wbc_stand)}
+
+
 def visual_response(model_id: str):
     if model_id != robot.model_id:
         raise HTTPException(409, detail=f'현재 선택된 로봇은 {robot.model_id}입니다. 화면을 새로고침하세요.')
