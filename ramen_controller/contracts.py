@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 from scipy.spatial.transform import Rotation
@@ -116,6 +116,9 @@ class MotionSegment:
     arm_targets: np.ndarray                # (T, 14)
     waist_ypr: np.ndarray                  # (T, 3) authored waist yaw, roll, pitch
     name: str = ""
+    # Optional closed-loop correction applied while the segment plays: (t, arms, waist, measured state) -> (arms, waist).
+    refine: Callable[[float, np.ndarray, np.ndarray, "RobotState"], tuple[np.ndarray, np.ndarray]] | None = \
+        field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         arms = np.asarray(self.arm_targets, dtype=float)

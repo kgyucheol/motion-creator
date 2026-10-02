@@ -160,3 +160,22 @@ def test_transition_time_scales_with_the_pose_gap(harness):
     assert np.isclose(h.fsm._playback.blend_s, 0.5)          # 0.5 rad at 1 rad/s
     h.fsm._play(make_segment(MotionKind.GRASP, arm_value=9.0), 0.0)
     assert h.fsm._playback.blend_s == 3.0                    # capped
+
+
+def test_segment_refine_hook_adjusts_commands_after_the_blend_with_the_measured_state(harness):
+    h = harness()
+    seen = []
+
+    def refine(t, arms, waist, state):
+        seen.append((t, state.root_position.copy()))
+        return arms + 0.05, waist
+
+    plain = h.motion.plan_grasp
+    h.motion.plan_grasp = lambda pose, state=None: __import__("dataclasses").replace(plain(pose, state), refine=refine)
+    reach_observe(h)
+    assert h.run(5, until="EXECUTE_GRASP")
+    n = len(h.commands)
+    h.run(1.0)
+    refined = [c for c in h.commands[n:]]
+    assert seen and all(t >= 0 for t, _ in seen)                 # never during the blend into the first frame
+    assert any(abs(c.arm_targets[0] - 0.35) < 1e-9 for c in refined)   # 0.3 authored + 0.05 correction

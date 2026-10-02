@@ -82,7 +82,7 @@ class _Playback:
     blend_from_waist: np.ndarray
     blend_s: float
 
-    def sample(self, now: float) -> tuple[np.ndarray, np.ndarray, bool]:
+    def sample(self, now: float, robot: RobotState | None = None) -> tuple[np.ndarray, np.ndarray, bool]:
         elapsed = now - self.started
         first_arms, first_waist = self.segment.sample(0.0)
         if elapsed < self.blend_s:
@@ -92,6 +92,8 @@ class _Playback:
                     self.blend_from_waist * (1 - u) + first_waist * u, False)
         t = elapsed - self.blend_s
         arms, waist = self.segment.sample(t)
+        if self.segment.refine is not None and robot is not None:
+            arms, waist = self.segment.refine(t, arms, waist, robot)
         return arms, waist, t >= self.segment.duration
 
 
@@ -179,8 +181,8 @@ class TaskFsm:
         blend = min(self.config.blend_s, gap / self.config.blend_speed_rad_s)
         self._playback = _Playback(segment, now, self._arms.copy(), self._waist.copy(), blend)
 
-    def _advance_playback(self, now: float) -> bool:
-        arms, waist, finished = self._playback.sample(now)
+    def _advance_playback(self, now: float, robot: RobotState) -> bool:
+        arms, waist, finished = self._playback.sample(now, robot)
         self._arms, self._waist = arms, waist
         self._last_playback_finished = finished
         return finished
@@ -201,7 +203,7 @@ class TaskFsm:
     # -- state ticks (return the nav command, or None for zero) --------------------------------------
 
     def _tick_initialize(self, now: float, robot: RobotState):
-        if self._advance_playback(now):
+        if self._advance_playback(now, robot):
             nxt = TaskState.OBSERVE if self.config.skip_manual_position else TaskState.MANUAL_POSITION
             self._transition(nxt, now, "ready pose reached")
 
@@ -241,7 +243,7 @@ class TaskFsm:
         self._play(segment, now)
 
     def _tick_execute_grasp(self, now: float, robot: RobotState):
-        if not self._advance_playback(now):
+        if not self._advance_playback(now, robot):
             return
         if self._held_for(now, self.config.grasp_confirm_s):
             self._transition(TaskState.TRANSFER, now, "grasp confirmed")
@@ -254,11 +256,11 @@ class TaskFsm:
         if not self.grasp.held():
             self._recoverable = False
             self._transition(TaskState.RECOVERY, now, "object lost during transfer")
-        elif self._advance_playback(now):
+        elif self._advance_playback(now, robot):
             self._transition(TaskState.PLACE, now, "transfer pose reached")
 
     def _tick_place(self, now: float, robot: RobotState):
-        if not self._advance_playback(now):
+        if not self._advance_playback(now, robot):
             return
         if not self.grasp.held():
             self._transition(TaskState.RETURN, now, "object released")
@@ -268,7 +270,7 @@ class TaskFsm:
             self._transition(TaskState.RECOVERY, now, "object not released")
 
     def _tick_return(self, now: float, robot: RobotState):
-        if not self._advance_playback(now):
+        if not self._advance_playback(now, robot):
             return
         self.cycles += 1
         self.retries = 0
