@@ -59,7 +59,8 @@ class GraspMonitor(Protocol):
 @dataclass(frozen=True)
 class TaskFsmConfig:
     base_height: float = 0.74
-    blend_s: float = 1.0                    # smooth transition into each segment's first frame
+    blend_s: float = 3.0                    # longest smooth transition into a segment's first frame
+    blend_speed_rad_s: float = 0.8          # transition speed; shorter jumps take proportionally less time
     skip_manual_position: bool = False
     nav_zero_tolerance: float = 0.05
     observe_duration_s: float = 1.0         # detections averaged over this window
@@ -114,6 +115,7 @@ class TaskFsm:
         self._recoverable = False
         self._confirm_since: float | None = None
         self._started = False
+        self._last_playback_finished = False
 
     # -- public -----------------------------------------------------------------------------------
 
@@ -129,6 +131,14 @@ class TaskFsm:
             self._transition(TaskState.RECOVERY, now, "robot fell")
         nav = getattr(self, f"_tick_{self.state.value.lower()}")(now, robot)
         return self._command(now, np.zeros(3) if nav is None else nav)
+
+    @property
+    def playback_finished(self) -> bool:
+        """True when the current stage's motion has played to its end (False if no motion is playing)."""
+        playback = self._playback
+        if playback is None or self._arms is None:
+            return False
+        return self._last_playback_finished
 
     # -- plumbing ---------------------------------------------------------------------------------
 
@@ -148,6 +158,7 @@ class TaskFsm:
         self._entered = now
         self._confirm_since = None
         self._playback = None
+        self._last_playback_finished = False
         if state is TaskState.OBSERVE:
             self._samples, self._last_detection = [], now
         elif state is TaskState.INITIALIZE:
@@ -162,11 +173,15 @@ class TaskFsm:
             self.recovery_reason = reason
 
     def _play(self, segment: MotionSegment, now: float) -> None:
-        self._playback = _Playback(segment, now, self._arms.copy(), self._waist.copy(), self.config.blend_s)
+        first_arms, first_waist = segment.sample(0.0)
+        gap = max(float(np.max(np.abs(first_arms - self._arms))), float(np.max(np.abs(first_waist - self._waist))))
+        blend = min(self.config.blend_s, gap / self.config.blend_speed_rad_s)
+        self._playback = _Playback(segment, now, self._arms.copy(), self._waist.copy(), blend)
 
     def _advance_playback(self, now: float) -> bool:
         arms, waist, finished = self._playback.sample(now)
         self._arms, self._waist = arms, waist
+        self._last_playback_finished = finished
         return finished
 
     def _command(self, now: float, nav: np.ndarray) -> WbcCommand:

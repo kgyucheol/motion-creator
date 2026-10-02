@@ -19,6 +19,7 @@ from .contracts import ARMS_SLICE, JOINT_NAMES, WAIST_SLICE, RobotState, WbcComm
 
 CONTROL_GOAL_TOPIC = "ControlPolicy/upper_body_pose"
 STATE_TOPIC = "G1Env/env_state_act"
+KEYBOARD_TOPIC = "/keyboard_input"
 
 _COMMAND_JOINTS = JOINT_NAMES[WAIST_SLICE] + JOINT_NAMES[ARMS_SLICE]
 
@@ -105,5 +106,22 @@ class RosWbcLink:
         message = self._subscriber.get_msg()
         return None if message is None else parse_state(message, self._names, stamp)
 
+    def press_key(self, key: str) -> None:
+        """Send a key to the control loop's keyboard dispatcher (same topic a person's keyboard feeds)."""
+        if not hasattr(self, "_key_publisher"):
+            from std_msgs.msg import String
+            self._string = String
+            self._key_publisher = self._ros.node.create_publisher(String, KEYBOARD_TOPIC, 10)
+            time.sleep(0.5)                                    # let discovery finish before the first message
+        self._key_publisher.publish(self._string(data=key))
+
     def close(self) -> None:
         self._ros.shutdown()
+
+
+def bringup_sim(press_key, wait, settle_s: float = 3.0) -> None:
+    """What a person does at the keyboard to start the stock sim: `]` activates the lower-body policy while the
+    virtual elastic band still holds the robot, then `9` releases the band so the policy takes the weight."""
+    press_key("]")
+    wait(settle_s)
+    press_key("9")

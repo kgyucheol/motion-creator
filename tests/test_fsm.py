@@ -146,3 +146,17 @@ def test_command_carries_waist_joints_and_derives_torso_rpy(harness):
     command = WbcCommand(stamp=0, arm_targets=np.zeros(14), waist_ypr=[0.0, 0.1, 0.0], base_height=0.74)
     assert np.allclose(command.waist_ypr, [0, 0.1, 0])
     assert np.allclose(command.torso_rpy([0.52, 0.52, 2.618]), [0.1, 0, 0], atol=1e-9)
+
+
+def test_transition_time_scales_with_the_pose_gap(harness):
+    from ramen_controller.contracts import MotionKind
+    h = harness(skip_manual_position=True, blend_s=3.0, blend_speed_rad_s=1.0)
+    h.run(0.02)                                              # first step: INITIALIZE starts, arms were at 0.0
+    near = h.fsm._playback                                   # READY segment holds 0.0: no gap, no blend
+    assert near.blend_s == 0.0
+    from tests.conftest import make_segment
+    h.fsm._arms = np.zeros(14)
+    h.fsm._play(make_segment(MotionKind.GRASP, arm_value=0.5), 0.0)
+    assert np.isclose(h.fsm._playback.blend_s, 0.5)          # 0.5 rad at 1 rad/s
+    h.fsm._play(make_segment(MotionKind.GRASP, arm_value=9.0), 0.0)
+    assert h.fsm._playback.blend_s == 3.0                    # capped

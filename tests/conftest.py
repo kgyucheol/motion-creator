@@ -75,7 +75,7 @@ class Harness:
     def __init__(self, **config):
         self.vision, self.motion, self.operator, self.grasp = FakeVision(), FakeMotion(), FakeOperator(), FakeGrasp()
         self.fsm = TaskFsm(self.vision, self.motion, self.operator, self.grasp,
-                           TaskFsmConfig(blend_s=0.2, **config))
+                           TaskFsmConfig(**{"blend_s": 0.2, **config}))
         self.now = 0.0
         self.fallen = False
         self.commands = []
