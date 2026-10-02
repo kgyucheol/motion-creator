@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import time
+import traceback
 from pathlib import Path
 
 import zmq
@@ -38,7 +39,22 @@ class RamenEnv(base_sim.DefaultEnv):
         self._socket.bind(f"tcp://127.0.0.1:{int(os.environ.get('RAMEN_FEED_PORT', DEFAULT_PORT))}")
         self.frames_published = 0
 
+    def sim_step(self):
+        # upstream's sim loop swallows exceptions and shuts ROS down; make the cause visible first
+        try:
+            super().sim_step()
+        except Exception:
+            traceback.print_exc()
+            raise
+
     def update_render_caches(self):
+        try:
+            return self._render_and_publish()
+        except Exception:
+            traceback.print_exc()
+            raise
+
+    def _render_and_publish(self):
         caches = super().update_render_caches()
         renderer = self.renderers[CAMERA_NAME]
         renderer.enable_depth_rendering()
