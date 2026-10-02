@@ -7,6 +7,11 @@ import { canMirrorSelection, isJointPairSelection } from './pose-transforms.ts';
 import { normalizedObjectSize, normalizedSceneAsset, type CandidateGraspPoints, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
 import type { LabPathPreview, HandSide } from './lab-path-apply.ts';
 
+export type TcpOverlay = {
+  planned: Record<HandSide, number[][]>; actual: Record<HandSide, number[][]>; now: Record<HandSide, number[]>;
+  planned_now: Record<HandSide, number[]> | null;
+};
+
 export type PoseState = {
   model_id?: string;
   qpos: number[];
@@ -141,6 +146,7 @@ export class RobotScene {
   gripMarkers: Record<'left' | 'right', THREE.Mesh>;
   candidateGraspMarkers: Record<'left' | 'right', THREE.Group>;
   labPathPreview = new THREE.Group();
+  tcpOverlay = new THREE.Group();
   gripPads: Record<'left' | 'right', THREE.Mesh>;
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
@@ -339,7 +345,7 @@ export class RobotScene {
       marker.traverse(node => { node.renderOrder = 6; });
       marker.visible = false; this.scene.add(marker); return [side, marker];
     })) as unknown as Record<'left' | 'right', THREE.Group>;
-    this.scene.add(this.labPathPreview);
+    this.scene.add(this.labPathPreview, this.tcpOverlay);
     this.gripPads = Object.fromEntries((['left', 'right'] as const).map(side => {
       const color = side === 'left' ? '#42e5bc' : '#ff9e45';
       const pad = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({
@@ -992,6 +998,37 @@ export class RobotScene {
     }
     this.dirty = true;
   }
+  /** Planned (dim) versus actual (bright) tool-tip paths, the current tips and the gap between them. */
+  setTcpOverlay(overlay: TcpOverlay | null) {
+    this.tcpOverlay.traverse(node => {
+      if (node instanceof THREE.Mesh || node instanceof THREE.Line) {
+        node.geometry.dispose();
+        (Array.isArray(node.material) ? node.material : [node.material]).forEach(material => material.dispose());
+      }
+    });
+    this.tcpOverlay.clear();
+    if (overlay) for (const side of ['left', 'right'] as HandSide[]) {
+      const color = side === 'left' ? 0x55e7c1 : 0xffbd70;
+      const vector = (point: number[]) => new THREE.Vector3().fromArray(point);
+      const line = (points: number[][], opacity: number, lineColor: number) => {
+        if (points.length < 2) return;
+        const object = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points.map(vector)),
+          new THREE.LineBasicMaterial({ color: lineColor, depthTest: false, transparent: true, opacity }));
+        object.renderOrder = 7; this.tcpOverlay.add(object);
+      };
+      const dot = (point: number[], radius: number, dotColor: number) => {
+        const marker = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8), new THREE.MeshBasicMaterial({ color: dotColor, depthTest: false }));
+        marker.position.fromArray(point); marker.renderOrder = 8; this.tcpOverlay.add(marker);
+      };
+      line(overlay.planned[side], .45, color);
+      line(overlay.actual[side], 1, 0xffffff);
+      dot(overlay.now[side], .014, 0xffffff);
+      const planned = overlay.planned_now?.[side];
+      if (planned) { dot(planned, .011, color); line([planned, overlay.now[side]], .95, 0xff5a4d); }
+    }
+    this.dirty = true;
+  }
+
   setLabPathPreview(preview: LabPathPreview | null) {
     this.labPathPreview.traverse(node => {
       if (node instanceof THREE.Mesh || node instanceof THREE.Line) {

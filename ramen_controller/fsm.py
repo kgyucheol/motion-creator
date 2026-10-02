@@ -119,10 +119,19 @@ class TaskFsm:
         self._confirm_since: float | None = None
         self._started = False
         self._last_playback_finished = False
+        self._now = 0.0
 
     # -- public -----------------------------------------------------------------------------------
 
+    def playback_progress(self) -> tuple[MotionSegment, float, bool] | None:
+        """(segment, seconds into the segment, blending) for the segment being played, or None. Negative time = blend."""
+        if self._playback is None:
+            return None
+        elapsed = self._now - self._playback.started - self._playback.blend_s
+        return self._playback.segment, elapsed, elapsed < 0
+
     def step(self, now: float, robot: RobotState) -> WbcCommand:
+        self._now = now
         if self._arms is None:
             self._arms = robot.joint_positions[ARMS_SLICE].copy()
             self._waist = robot.joint_positions[WAIST_SLICE].copy()

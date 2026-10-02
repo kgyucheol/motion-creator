@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Activity, ArrowLeft, Check, Eye, EyeOff, FolderOpen, Play, RotateCcw, SkipForward, Square } from 'lucide-react';
-import { RobotScene, type PoseState } from '../lib/robot-scene';
+import { Activity, ArrowLeft, Check, Eye, EyeOff, FolderOpen, Play, Route, RotateCcw, SkipForward, Square } from 'lucide-react';
+import { RobotScene, type PoseState, type TcpOverlay } from '../lib/robot-scene';
 import type { SceneObject, SceneObjectPose } from '../lib/scene-objects';
 
 type StageName = 'ready' | 'grasp' | 'transfer' | 'place' | 'return';
@@ -16,6 +16,11 @@ type Task = {
   options: { proxy_grasp: boolean; vision_visible: boolean; adaptive_grasp: boolean; skip_positioning: boolean }; stepping: boolean; target_object: string;
   planner: { name: string; last_plan_s: number | null; last_error: string };
   authored_target_base: number[]; controller_error: string;
+};
+type Clearance = { target_mm: number; nearest: null | { name: string; mm: number } };
+type TcpReport = TcpOverlay & {
+  path_id: number; segment: string; t: number | null; blending: boolean; active: boolean;
+  error_mm: null | Record<'left' | 'right', number>; clearance: Record<'left' | 'right', Clearance>;
 };
 type Snapshot = {
   revision: number; phase: string; playing: boolean; error: string; control_mode: string;
@@ -58,6 +63,8 @@ export default function ControllerPage() {
   const [message, setMessage] = useState('런타임을 확인하는 중…');
   const [error, setError] = useState('');
   const [showReference, setShowReference] = useState(false);
+  const [showTcp, setShowTcp] = useState(true);
+  const [tcp, setTcp] = useState<TcpReport | null>(null);
   const [options, setOptions] = useState({ proxy_grasp: false, vision_visible: true, adaptive_grasp: true, skip_positioning: false });
 
   const renderSnapshot = useCallback((next: Snapshot) => {
@@ -93,6 +100,25 @@ export default function ControllerPage() {
   }, []);
 
   useEffect(() => { scene.current?.setReferenceVisible(showReference); }, [showReference]);
+
+  // Planned-versus-actual tool paths: polled more slowly than the robot because the clearance query is heavier.
+  useEffect(() => {
+    if (!showTcp || !snapshot) { scene.current?.setTcpOverlay(null); if (!showTcp) setTcp(null); return; }
+    let cancelled = false;
+    const identifier = sessionId.current;
+    const load = async () => {
+      if (!identifier || sessionId.current !== identifier) return;
+      try {
+        const report = await fetch(`/api/controller/sessions/${identifier}/tcp`).then(responseJson<TcpReport>);
+        if (cancelled) return;
+        setTcp(report);
+        scene.current?.setTcpOverlay(report);
+      } catch { /* the overlay is a debug aid: a failed poll just keeps the last picture */ }
+    };
+    void load();
+    const timer = window.setInterval(() => void load(), 300);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [showTcp, !!snapshot, sourceName]);
 
   useEffect(() => {
     const close = () => {
@@ -212,6 +238,19 @@ export default function ControllerPage() {
         {task.planner.last_error && <p className="error">{task.planner.last_error}</p>}
         {task.stalled && <p className="error">로봇 상태가 끊겨 작업이 일시정지되었습니다.</p>}
       </section>}
+      {task && showTcp && tcp && <section className="tcp-card">
+        <h2>툴 경로 · {tcp.segment || '대기'}{tcp.blending ? ' (자세 전환 중)' : ''}</h2>
+        <table className="tcp-table"><thead><tr><th/><th title="계획(하체 고정 가정)과 실제 툴 끝 사이 거리">계획 대비</th><th>타깃까지</th><th>가장 가까운 이웃</th></tr></thead><tbody>
+          {(['left', 'right'] as const).map(side => {
+            const clearance = tcp.clearance[side]; const error = tcp.error_mm?.[side];
+            return <tr key={side}><td>{side === 'left' ? '왼' : '오른'}</td>
+              <td className={error !== undefined && error > 30 ? 'bad' : ''}>{error !== undefined ? `${error.toFixed(0)} mm` : '-'}</td>
+              <td className={clearance.target_mm <= 0 ? 'touch' : ''}>{clearance.target_mm >= 300 ? '> 300' : clearance.target_mm.toFixed(0)} mm</td>
+              <td className={clearance.nearest && clearance.nearest.mm < 0 ? 'bad' : ''}>{clearance.nearest ? `${clearance.nearest.name.replace(/^Mupama_Stack_/, '')} ${clearance.nearest.mm.toFixed(0)} mm` : '-'}</td></tr>;
+          })}
+        </tbody></table>
+        <p>밝은 선 = 실제 툴 끝, 흐린 선 = 계획(하체가 계획 시점 그대로라는 가정), 빨간 선 = 둘의 차이. 이웃 값이 음수면 이웃 물체를 파고든 것입니다.</p>
+      </section>}
       {task && <section>
         <h2>이벤트</h2>
         <div className="task-events">{task.events.slice().reverse().map((event, index) =>
@@ -254,6 +293,10 @@ export default function ControllerPage() {
         <button type="button" className="wbc-reference-toggle" aria-pressed={showReference} onClick={() => setShowReference(value => !value)}
           title="편집기에서 컴파일된 저작 모션의 첫 프레임을 반투명하게 겹쳐 표시합니다.">
           {showReference ? <Eye size={13}/> : <EyeOff size={13}/>} 편집기 기준
+        </button>
+        <button type="button" className="wbc-reference-toggle" aria-pressed={showTcp} onClick={() => setShowTcp(value => !value)}
+          title="계획한 툴 경로와 실제 툴 끝 경로를 3D에 겹쳐 그립니다.">
+          <Route size={13}/> TCP 오버레이
         </button>
       </div>
       <div className="wbc-hud task-hud">

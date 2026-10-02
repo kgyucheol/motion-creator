@@ -390,3 +390,34 @@ def test_step_state_runs_to_the_next_state_then_pauses(tmp_path):
         assert session.fsm.state.value == "PLAN_GRASP"
     finally:
         session.close()
+
+
+@needs_assets
+def test_tcp_trace_records_planned_and_actual_paths_and_clearances(tmp_path):
+    session = make_session(tmp_path, proxy_grasp=True)
+    try:
+        empty = session.trace.report()
+        assert empty["planned"]["left"] == [] and empty["actual"]["left"] == [] and empty["error_mm"] is None
+        session.start()
+        assert run(session, 40, until=lambda s: s.fsm.state.value == "EXECUTE_GRASP"), transitions(session)
+        run(session, 1.5)
+        report = session.trace.report()
+        json.dumps(report)
+        assert report["segment"] and report["active"] and report["t"] is not None and not report["blending"]
+        assert len(report["planned"]["left"]) >= 5 and len(report["planned"]["right"]) >= 5
+        assert len(report["actual"]["left"]) >= 3
+        assert set(report["error_mm"]) == {"left", "right"} and all(0 <= v < 150 for v in report["error_mm"].values())
+        assert np.linalg.norm(np.subtract(report["planned_now"]["left"], report["now"]["left"])) * 1000 == \
+            pytest.approx(report["error_mm"]["left"], abs=60)               # the reported error is the planned-to-actual gap
+        assert np.allclose(report["now"]["left"], report["actual"]["left"][-1], atol=0.05)
+        for side in ("left", "right"):
+            assert report["clearance"][side]["target_mm"] < 300 + 1e-6
+            assert report["clearance"][side]["nearest"] is None or "name" in report["clearance"][side]["nearest"]
+        first_path = report["path_id"]
+        assert run(session, 20, until=lambda s: s.fsm.state.value == "TRANSFER"), transitions(session)
+        run(session, 0.2)
+        assert session.trace.report()["path_id"] > first_path                 # a new segment starts a new path
+        assert session.trace_error == ""
+        assert session.snapshot()["task"]                                    # the trace does not disturb the snapshot
+    finally:
+        session.close()

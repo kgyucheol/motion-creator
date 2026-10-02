@@ -80,6 +80,12 @@ def session_status(identifier: str):
     return checked(lambda: controller_sessions.get(identifier).snapshot())
 
 
+@router.get("/api/controller/sessions/{identifier}/tcp")
+def session_tcp(identifier: str):
+    session = checked(lambda: controller_sessions.get(identifier))
+    return checked(session.trace.report)
+
+
 @router.post("/api/controller/sessions/{identifier}/command")
 def session_command(identifier: str, payload: CommandInput):
     session = checked(lambda: controller_sessions.get(identifier))

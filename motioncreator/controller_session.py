@@ -30,6 +30,7 @@ from ramen_controller.vision import CameraFrame, MockPoseEstimator, VisionServic
 from .decoupled_wbc import DecoupledSimulation, ROOT, verify_assets
 from .pose_adaptive_grasp import RetargetedGraspPlanner
 from .robot import Robot
+from .tcp_trace import TcpTrace
 
 STAGE_NAMES = ("ready", "grasp", "transfer", "place", "return")
 DEFAULT_STAGES = ROOT / "configs/sim_motions.json"
@@ -227,6 +228,8 @@ class ControllerSession:
                                                  outlier_probability=0.03, seed=0))
         self.contact = ContactGraspMonitor(self.simulation, self.target["id"])
         self.fsm = TaskFsm(vision, library, operator, self.contact, TaskFsmConfig(base_height=0.74, skip_manual_position=self.options["skip_positioning"]))
+        self.trace = TcpTrace(self)
+        self.trace_error = ""
         self.proxy = ProxyGraspMonitor(self.fsm)
         self.fsm.grasp = self.proxy if self.options["proxy_grasp"] else self.contact
         self.runner = TaskRunner(self.fsm, SimSessionLink(self.simulation), operator,
@@ -246,6 +249,10 @@ class ControllerSession:
         state_before = self.fsm.state
         try:
             self.runner.tick()
+            try:
+                self.trace.update()               # debug view only: its failure must never stop the robot
+            except Exception as trace_exc:
+                self.trace_error = f"{type(trace_exc).__name__}: {trace_exc}"
             if self._step_until_transition and self.fsm.state is not state_before:
                 self._step_until_transition = False
                 simulation.stop()                 # "run to the next state" finished: hold here for inspection
