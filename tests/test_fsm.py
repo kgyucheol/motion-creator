@@ -126,7 +126,7 @@ def test_commands_are_continuous_across_segment_boundaries(harness):
 
 
 def test_torso_command_is_clipped_to_limits(harness):
-    from ramen_controller.contracts import waist_to_torso_rpy
+    from ramen_controller.contracts import WbcCommand, waist_to_torso_rpy
     limits = [0.52, 0.52, 2.618]
     assert np.all(np.abs(waist_to_torso_rpy([0.0, 1.5, 0.0], limits)) <= limits)
     assert np.allclose(waist_to_torso_rpy([0.0, 0.1, 0.0], limits), [0.1, 0.0, 0.0], atol=1e-9)
@@ -139,3 +139,10 @@ def test_no_automatic_retry_if_robot_falls_while_already_recovering(harness):
     h.fallen = True
     h.run(10)
     assert h.fsm.state is TaskState.RECOVERY and h.fsm.retries == 0
+
+
+def test_command_carries_waist_joints_and_derives_torso_rpy(harness):
+    from ramen_controller.contracts import WbcCommand
+    command = WbcCommand(stamp=0, arm_targets=np.zeros(14), waist_ypr=[0.0, 0.1, 0.0], base_height=0.74)
+    assert np.allclose(command.waist_ypr, [0, 0.1, 0])
+    assert np.allclose(command.torso_rpy([0.52, 0.52, 2.618]), [0.1, 0, 0], atol=1e-9)

@@ -13,7 +13,7 @@ from typing import Callable, Protocol, Sequence
 import numpy as np
 
 from .contracts import (ARMS_SLICE, WAIST_SLICE, EventKind, MotionKind, MotionSegment, ObjectPose,
-                        RobotState, TaskEvent, WbcCommand, waist_to_torso_rpy)
+                        RobotState, TaskEvent, WbcCommand)
 from .pose_average import PoseAveragingConfig, PoseAveragingError, average_poses
 
 
@@ -59,7 +59,6 @@ class GraspMonitor(Protocol):
 @dataclass(frozen=True)
 class TaskFsmConfig:
     base_height: float = 0.74
-    torso_limits: tuple[float, float, float] = (0.52, 0.52, 2.618)
     blend_s: float = 1.0                    # smooth transition into each segment's first frame
     skip_manual_position: bool = False
     nav_zero_tolerance: float = 0.05
@@ -171,8 +170,8 @@ class TaskFsm:
         return finished
 
     def _command(self, now: float, nav: np.ndarray) -> WbcCommand:
-        return WbcCommand(stamp=now, arm_targets=self._arms, base_height=self.config.base_height, nav=nav,
-                          torso_rpy=waist_to_torso_rpy(self._waist, self.config.torso_limits))
+        return WbcCommand(stamp=now, arm_targets=self._arms, waist_ypr=self._waist,
+                          base_height=self.config.base_height, nav=nav)
 
     def _held_for(self, now: float, seconds: float) -> bool:
         """True once held() has been continuously true for `seconds`."""

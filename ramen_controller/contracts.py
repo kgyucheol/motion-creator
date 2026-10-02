@@ -83,14 +83,18 @@ class WbcCommand:
     """What the FSM asks of the whole-body controller. The controller owns the final joint commands."""
     stamp: float
     arm_targets: np.ndarray                # (14,) left 7 + right 7
-    torso_rpy: np.ndarray                  # (3,) XYZ roll/pitch/yaw torso orientation request
+    waist_ypr: np.ndarray                  # (3,) authored waist yaw, roll, pitch; the WBC derives the torso pose
     base_height: float
     nav: np.ndarray = field(default_factory=lambda: np.zeros(3))   # vx, vy, yaw_rate
 
     def __post_init__(self):
         object.__setattr__(self, "arm_targets", _array(self.arm_targets, (ARM_DOF,), "arm_targets"))
-        object.__setattr__(self, "torso_rpy", _array(self.torso_rpy, (3,), "torso_rpy"))
+        object.__setattr__(self, "waist_ypr", _array(self.waist_ypr, (3,), "waist_ypr"))
         object.__setattr__(self, "nav", _array(self.nav, (3,), "nav"))
+
+    def torso_rpy(self, limits) -> np.ndarray:
+        """Policy-style XYZ torso RPY for backends that take a torso command instead of waist joints."""
+        return waist_to_torso_rpy(self.waist_ypr, limits)
 
 
 def waist_to_torso_rpy(waist_yaw_roll_pitch, limits) -> np.ndarray:
