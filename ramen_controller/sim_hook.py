@@ -41,7 +41,8 @@ class RamenEnv(base_sim.DefaultEnv):
             self.elastic_band.point = np.array([start[0], start[1], 1.0])
         self._extractor = TruthExtractor(self.mj_model, sidecar,
                                          tool_bodies=json.loads(sidecar.read_text(encoding="utf-8"))["tool_bodies"],
-                                         camera_name=camera["name"])
+                                         camera_name=camera["name"],
+                                         visible_margin_px=float(os.environ.get("RAMEN_VISIBLE_MARGIN_PX", 100.0)))
         self._socket = zmq.Context.instance().socket(zmq.PUB)
         self._socket.setsockopt(zmq.SNDHWM, 2)
         self._socket.bind(f"tcp://127.0.0.1:{int(os.environ.get('RAMEN_FEED_PORT', DEFAULT_PORT))}")

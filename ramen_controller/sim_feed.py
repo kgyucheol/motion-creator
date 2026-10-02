@@ -40,10 +40,10 @@ class TruthExtractor:
     """Ground truth from a MuJoCo model built by `scene.build_scene` (uses its scene_objects.json sidecar)."""
 
     def __init__(self, model, sidecar_path, tool_bodies: dict[str, str], camera_name: str = "head",
-                 root_body: str = "pelvis", min_grip_force_n: float = 1.0):
+                 root_body: str = "pelvis", min_grip_force_n: float = 1.0, visible_margin_px: float = 0.0):
         import mujoco
         self._mj = mujoco
-        self.model, self.min_grip_force_n = model, min_grip_force_n
+        self.model, self.min_grip_force_n, self.visible_margin_px = model, min_grip_force_n, visible_margin_px
         sidecar = json.loads(Path(sidecar_path).read_text(encoding="utf-8"))
         self.camera = sidecar["camera"]
         self.objects = sidecar["objects"]
@@ -81,7 +81,8 @@ class TruthExtractor:
         return T[:3, 3], Rotation.from_matrix(T[:3, :3]).as_quat()
 
     def in_view(self, data, name: str) -> bool:
-        """Target centre in front of the camera and inside the image (no occlusion test)."""
+        """Target centre in front of the camera and inside the image, allowing `visible_margin_px` of overhang
+        because a detector still finds a partly visible object (no occlusion test)."""
         T_base_cam = self.camera_pose_in_base(data)
         position, _ = self.object_pose_in_base(data, name)
         in_camera = _invert(T_base_cam) @ np.append(position, 1.0)
@@ -89,7 +90,8 @@ class TruthExtractor:
             return False
         K = np.asarray(self.camera["K"])
         u, v = (K @ in_camera[:3])[:2] / in_camera[2]
-        return 0 <= u < self.camera["width"] and 0 <= v < self.camera["height"]
+        m = self.visible_margin_px
+        return -m <= u < self.camera["width"] + m and -m <= v < self.camera["height"] + m
 
     def grip_forces(self, data) -> dict[str, float]:
         """Summed normal force (N) between the target object and each tool."""

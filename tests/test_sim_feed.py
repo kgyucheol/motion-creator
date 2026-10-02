@@ -74,6 +74,20 @@ def test_in_view_follows_geometry(tmp_path):
     assert not ex.in_view(data, "can")
 
 
+def test_partly_visible_target_counts_only_within_the_margin(tmp_path):
+    model, data, ex = setup(tmp_path)
+    place(model, data, [-1.0, 1.0, 1.7])                                  # centre projects 33 px above the image top
+    assert not ex.in_view(data, "can")
+    ex.visible_margin_px = 20
+    assert not ex.in_view(data, "can")
+    ex.visible_margin_px = 60
+    assert ex.in_view(data, "can")
+    ex.visible_margin_px = 0
+    place(model, data, [-1.0, -2.0, 0.8])                                 # behind the camera is never visible, whatever the margin
+    ex.visible_margin_px = 1000
+    assert not ex.in_view(data, "can")
+
+
 def test_held_needs_both_tools_squeezing_the_target(tmp_path):
     model, data, ex = setup(tmp_path)
     truth = ex.truth(data)
