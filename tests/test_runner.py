@@ -40,17 +40,9 @@ class ScriptedLink:
         self.arms = command.arm_targets.copy()           # the robot tracks the command perfectly
 
 
-class Grasp:
-    """A grip sensor that follows the task the way a real one would: closed once the grasp motion ends, open
-    again after the place motion ends."""
-    def __init__(self):
-        self.fsm = None
-
-    def held(self):
-        state = self.fsm.state
-        return (state is TaskState.TRANSFER
-                or (state is TaskState.EXECUTE_GRASP and self.fsm.playback_finished)
-                or (state is TaskState.PLACE and not self.fsm.playback_finished))
+def Grasp():
+    from ramen_controller.proxy_grasp import ProxyGraspMonitor
+    return ProxyGraspMonitor(None)
 
 
 def make(clock, **config):

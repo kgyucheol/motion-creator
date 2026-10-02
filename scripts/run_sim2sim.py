@@ -20,6 +20,7 @@ from ramen_controller.fsm import TaskFsm, TaskFsmConfig
 from ramen_controller.motion_bundle import load_segment, root_pose_at
 from ramen_controller.motion_library import FixedGraspPlanner, MotionLibrary, load_entries
 from ramen_controller.operator import KeyboardOperator
+from ramen_controller.proxy_grasp import ProxyGraspMonitor
 from ramen_controller.runner import TaskRunner
 from ramen_controller.sim_feed import SimFeed
 from ramen_controller.vision import MockPoseEstimator, VisionService
@@ -32,7 +33,9 @@ parser.add_argument("--timeout-s", type=float, default=240.0)
 parser.add_argument("--gui-port", type=int, default=0, help="0 disables the debug GUI")
 parser.add_argument("--keyboard", action="store_true", help="position the robot by keyboard instead of automatically")
 parser.add_argument("--no-bringup", action="store_true", help="skip the ] / 9 key sequence (already done)")
-parser.add_argument("--grasp-tolerance-m", type=float, default=0.08)
+parser.add_argument("--grasp-tolerance-m", type=float, default=0.03)
+parser.add_argument("--proxy-grasp", action="store_true",
+                    help="ASSUME the grasp succeeds (no contact check) to exercise the rest of the cycle")
 parser.add_argument("--log", default="logs/events.jsonl")
 args = parser.parse_args()
 
@@ -55,6 +58,9 @@ vision = VisionService(feed, MockPoseEstimator(truth=feed.target_pose, position_
                                                dropout_probability=0.1, outlier_probability=0.03, seed=0))
 operator = KeyboardOperator() if args.keyboard else AutoPositioner(target_xy_yaw=(0.0, 0.0, 0.0))
 fsm = TaskFsm(vision, motion, operator, feed, TaskFsmConfig(base_height=0.74))
+if args.proxy_grasp:
+    fsm.grasp = ProxyGraspMonitor(fsm)
+    print("WARNING: --proxy-grasp assumes every grasp succeeds; grasp physics is NOT being validated")
 runner = TaskRunner(fsm, link, operator)
 
 Path(args.log).parent.mkdir(parents=True, exist_ok=True)
