@@ -216,7 +216,9 @@ class ControllerSession:
         rows = authored[int(round(grasp.start_s * fps)):int(round(grasp.end_s * fps)) + 1]
         adaptive = RetargetedGraspPlanner(self.simulation.robot, rows, fps, self.target["position"],
                                           self.target["quaternion_xyzw"],
-                                          max_object_shift_m=float(stages.get("max_object_shift_m", 0.25)))
+                                          max_object_shift_m=float(stages.get("max_object_shift_m", 0.25)),
+                                          sample_period_s=float(stages.get("adaptive_sample_period_s", 0.2)),
+                                          closed_loop=bool(stages.get("closed_loop_tcp", False)))
         self.planners = {"fixed": TimedPlanner("fixed", fixed), "adaptive": TimedPlanner("adaptive", adaptive)}
         library = MotionLibrary(entries, self._planner())
         yaw = float(root.as_euler("xyz")[2])

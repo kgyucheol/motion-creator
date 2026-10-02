@@ -421,3 +421,23 @@ def test_tcp_trace_records_planned_and_actual_paths_and_clearances(tmp_path):
         assert session.snapshot()["task"]                                    # the trace does not disturb the snapshot
     finally:
         session.close()
+
+
+@needs_assets
+def test_stage_mapping_configures_the_adaptive_planners_sampling_and_closed_loop(tmp_path):
+    simulation = DecoupledSimulation(Robot(), project_with_crate(), autostart=False)
+    bundle = write_small_bundle(tmp_path / "bundle", float(simulation.data.qpos[2]))
+    plain = ControllerSession(simulation, bundle, STAGES, {"adaptive_grasp": True}, autostart=False)
+    try:
+        inner = plain.planners["adaptive"].inner
+        assert inner.closed_loop is False and np.diff(inner.sample_times)[0] == pytest.approx(0.2)
+    finally:
+        plain.close()
+    simulation = DecoupledSimulation(Robot(), project_with_crate(), autostart=False)
+    tuned = ControllerSession(simulation, bundle, {**STAGES, "adaptive_sample_period_s": 0.05, "closed_loop_tcp": True},
+                              {"adaptive_grasp": True}, autostart=False)
+    try:
+        inner = tuned.planners["adaptive"].inner
+        assert inner.closed_loop is True and np.diff(inner.sample_times)[0] == pytest.approx(0.05)
+    finally:
+        tuned.close()
