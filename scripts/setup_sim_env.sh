@@ -29,7 +29,7 @@ pip install -q --upgrade pip wheel setuptools
 pip install -q "numpy==1.26.4" "scipy==1.15.3"
 pip install -q torch --index-url https://download.pytorch.org/whl/cpu     # lower-body policy runs on ONNX/CPU
 pip install -q mujoco "pin==2.7.0" onnxruntime gymnasium loguru termcolor pygame glfw msgpack msgpack-numpy \
-  pyzmq tyro pyyaml sshkeyboard "opencv-python-headless==4.11.0.86" "rerun-sdk==0.21.0" pytest "numpy==1.26.4"
+  pyzmq tyro pyyaml sshkeyboard lark "opencv-python-headless==4.11.0.86" "rerun-sdk==0.21.0" pytest "numpy==1.26.4"
 
 # 4. Unitree SDK: use the copy vendored by GR00T (it adds OdoState_, absent from upstream unitree_sdk2_python).
 CYCLONEDDS_HOME="$CYCLONEDDS_HOME" pip install -q "cyclonedds==0.10.2"
@@ -41,7 +41,9 @@ echo "$GR00T_DIR" > "$(python -c 'import sysconfig;print(sysconfig.get_paths()["
 # 6. This project.
 pip install -q --no-deps -e "$PROJECT_DIR"
 
+set +u   # ROS setup.bash reads unset variables
 . /opt/ros/humble/setup.bash
+set -u
 CYCLONEDDS_HOME="$CYCLONEDDS_HOME" python - <<'PY'
 import importlib
 for m in ("decoupled_wbc.control.main.teleop.run_sim_loop", "decoupled_wbc.control.main.teleop.run_g1_control_loop",
