@@ -114,10 +114,10 @@ def test_truth_message_roundtrip_and_depth_quantisation(tmp_path):
     pytest.importorskip("msgpack"); pytest.importorskip("msgpack_numpy")
     _, data, ex = setup(tmp_path)
     rgb = np.random.default_rng(0).integers(0, 255, (48, 64, 3), dtype=np.uint8)
-    depth = np.full((48, 64), 0.8765, np.float32); depth[0, 0] = np.nan; depth[0, 1] = np.inf
+    depth = np.full((48, 64), 0.8768, np.float32); depth[0, 0] = np.nan; depth[0, 1] = np.inf; depth[1, 0] = 0.8764
     payload = pack_message(12.5, rgb, depth, ex.camera["K"], ex.camera_pose_in_base(data), ex.truth(data))
     message = unpack_message(payload)
     assert message["stamp"] == 12.5 and np.array_equal(message["rgb"], rgb)
-    assert message["depth_mm"].dtype == np.uint16 and message["depth_mm"][5, 5] == 877 and message["depth_mm"][0, :2].tolist() == [0, 0]
+    assert message["depth_mm"].dtype == np.uint16 and message["depth_mm"][5, 5] == 877 and message["depth_mm"][1, 0] == 876 and message["depth_mm"][0, :2].tolist() == [0, 0]
     assert message["truth"]["target"] == "can" and np.allclose(message["truth"]["objects"]["can"]["position"], [0.5, 0, 0], atol=1e-9)
     assert message["T_base_cam"].shape == (4, 4)

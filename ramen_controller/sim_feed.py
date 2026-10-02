@@ -127,7 +127,7 @@ def pack_message(stamp: float, rgb: np.ndarray, depth_m: np.ndarray, K, T_base_c
     """Depth is stored as uint16 millimetres (depth_scale 0.001), like a real D435."""
     import msgpack
     import msgpack_numpy
-    depth_mm = np.clip(np.nan_to_num(depth_m, nan=0.0, posinf=0.0) * 1000.0, 0, 65535).astype(np.uint16)
+    depth_mm = np.rint(np.clip(np.nan_to_num(depth_m, nan=0.0, posinf=0.0) * 1000.0, 0, 65535)).astype(np.uint16)
     return msgpack.packb({"v": 1, "stamp": float(stamp), "rgb": np.ascontiguousarray(rgb, np.uint8),
                           "depth_mm": depth_mm, "K": np.asarray(K, float), "T_base_cam": np.asarray(T_base_cam, float),
                           "truth": truth}, default=msgpack_numpy.encode)
