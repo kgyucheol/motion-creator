@@ -6,7 +6,7 @@ import pytest
 
 mujoco = pytest.importorskip("mujoco")
 from ramen_controller.contracts import JOINT_NAMES                     # noqa: E402
-from ramen_controller.scene import CAMERA_NAME, CameraSpec, build_scene  # noqa: E402
+from motioncreator.sim_scene import CAMERA_NAME, CameraSpec, build_scene  # noqa: E402
 
 ASSETS = Path(__file__).resolve().parents[1] / "assets" / "g1_tools"
 pytestmark = pytest.mark.skipif(not (ASSETS / "g1_tools.xml").exists(), reason="robot assets not exported")

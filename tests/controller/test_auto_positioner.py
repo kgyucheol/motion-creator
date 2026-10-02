@@ -3,7 +3,7 @@ from scipy.spatial.transform import Rotation
 
 from ramen_controller.auto_positioner import AutoPositioner
 from ramen_controller.contracts import RobotState
-from ramen_controller.wbc_adapter import bringup_sim
+from ramen_controller.adapters.decoupled_wbc import bringup_sim
 
 
 def state(x, y, yaw=0.0, t=0.0):

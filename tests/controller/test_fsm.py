@@ -154,7 +154,7 @@ def test_transition_time_scales_with_the_pose_gap(harness):
     h.run(0.02)                                              # first step: INITIALIZE starts, arms were at 0.0
     near = h.fsm._playback                                   # READY segment holds 0.0: no gap, no blend
     assert near.blend_s == 0.0
-    from tests.conftest import make_segment
+    from controller_support import make_segment
     h.fsm._arms = np.zeros(14)
     h.fsm._play(make_segment(MotionKind.GRASP, arm_value=0.5), 0.0)
     assert np.isclose(h.fsm._playback.blend_s, 0.5)          # 0.5 rad at 1 rad/s

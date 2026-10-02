@@ -1,4 +1,4 @@
-"""Run the task FSM against a running sim stack (python -m ramen_controller.sim_stack ...).
+"""Run the task FSM against a running sim stack (python -m ramen_controller.sim.stack ...).
 
     python scripts/run_sim2sim.py --motions configs/sim_motions.json [--cycles 1] [--gui-port 8765] [--keyboard]
 
@@ -22,11 +22,11 @@ from ramen_controller.fsm import TaskFsm, TaskFsmConfig
 from ramen_controller.motion_bundle import load_segment, root_pose_at
 from ramen_controller.motion_library import FixedGraspPlanner, MotionLibrary, load_entries
 from ramen_controller.operator import KeyboardOperator
-from ramen_controller.proxy_grasp import ProxyGraspMonitor
+from ramen_controller.sim.proxy_grasp import ProxyGraspMonitor
 from ramen_controller.runner import TaskRunner
-from ramen_controller.sim_feed import SimFeed
+from ramen_controller.sim.feed import SimFeed
 from ramen_controller.vision import MockPoseEstimator, VisionService
-from ramen_controller.wbc_adapter import RosWbcLink, bringup_sim
+from ramen_controller.adapters.decoupled_wbc import RosWbcLink, bringup_sim
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--motions", default="configs/sim_motions.json")

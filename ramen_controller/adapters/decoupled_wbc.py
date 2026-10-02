@@ -15,7 +15,7 @@ from typing import Mapping, Sequence
 
 import numpy as np
 
-from .contracts import ARMS_SLICE, JOINT_NAMES, WAIST_SLICE, RobotState, WbcCommand
+from ..contracts import ARMS_SLICE, JOINT_NAMES, WAIST_SLICE, RobotState, WbcCommand
 
 CONTROL_GOAL_TOPIC = "ControlPolicy/upper_body_pose"
 STATE_TOPIC = "G1Env/env_state_act"

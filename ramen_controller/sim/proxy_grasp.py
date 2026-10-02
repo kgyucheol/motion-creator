@@ -6,7 +6,7 @@ use SimFeed.held (contact-based) or a real sensor to judge that.
 """
 from __future__ import annotations
 
-from .fsm import TaskFsm, TaskState
+from ..fsm import TaskFsm, TaskState
 
 
 class ProxyGraspMonitor:

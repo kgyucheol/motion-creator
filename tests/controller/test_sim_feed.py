@@ -5,7 +5,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 mujoco = pytest.importorskip("mujoco")
-from ramen_controller.sim_feed import TruthExtractor, pack_message, unpack_message  # noqa: E402
+from ramen_controller.sim.feed import TruthExtractor, pack_message, unpack_message  # noqa: E402
 
 XML = """
 <mujoco>

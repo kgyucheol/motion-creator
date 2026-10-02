@@ -1,24 +1,12 @@
-import json
-
 import numpy as np
 import pytest
 
+from controller_support import write_bundle
 from ramen_controller.contracts import JOINT_NAMES, MotionKind, ObjectPose
-from ramen_controller.motion_bundle import BUNDLE_FORMAT, MotionBundleError, load_segment
+from ramen_controller.motion_bundle import MotionBundleError, load_segment
 from ramen_controller.pose_average import PoseAveragingConfig, PoseAveragingError, average_poses
 
 
-def write_bundle(folder, frames=31, fps=30, **overrides):
-    qpos = np.zeros((frames, 36))
-    qpos[:, 3] = 1.0
-    qpos[:, 7 + 15:7 + 29] = np.linspace(0, 1, frames)[:, None]       # arms ramp 0 -> 1
-    qpos[:, 7 + 12:7 + 15] = [0.1, 0.0, 0.2]                         # waist yaw, roll, pitch
-    metadata = {"format": BUNDLE_FORMAT, "joint_names": list(JOINT_NAMES), "fps": fps, "samples": frames}
-    metadata.update(overrides)
-    folder.mkdir(parents=True, exist_ok=True)
-    (folder / "metadata.json").write_text(json.dumps(metadata))
-    np.savetxt(folder / "motion.csv", qpos, delimiter=",")
-    return folder
 
 
 def test_segment_maps_arms_and_waist(tmp_path):

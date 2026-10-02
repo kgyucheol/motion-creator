@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from ramen_controller.contracts import JOINT_NAMES, WbcCommand
-from ramen_controller.wbc_adapter import UpperBodyLayout, build_goal, parse_state
+from ramen_controller.adapters.decoupled_wbc import UpperBodyLayout, build_goal, parse_state
 
 WAIST = JOINT_NAMES[12:15]
 ARMS = JOINT_NAMES[15:29]

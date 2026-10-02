@@ -9,8 +9,8 @@ import time
 
 import numpy as np
 
-from ramen_controller.sim_feed import SimFeed
-from ramen_controller.wbc_adapter import RosWbcLink
+from ramen_controller.sim.feed import SimFeed
+from ramen_controller.adapters.decoupled_wbc import RosWbcLink
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--save-frame")

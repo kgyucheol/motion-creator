@@ -10,7 +10,7 @@ import pytest
 from ramen_controller.debug_gui import DebugServer, draw_pose, png_bytes, project
 from ramen_controller.contracts import ObjectPose
 from ramen_controller.vision import CameraFrame
-from tests.test_runner import Clock, make
+from controller_support import Clock, make
 
 K = np.array([[100., 0, 64], [0, 100, 48], [0, 0, 1]])
 

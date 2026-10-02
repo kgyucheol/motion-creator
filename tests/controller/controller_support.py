@@ -1,5 +1,6 @@
+import json
+
 import numpy as np
-import pytest
 
 from ramen_controller.contracts import MotionKind, MotionSegment, ObjectPose, RobotState
 from ramen_controller.fsm import GraspPlanError, TaskFsm, TaskFsmConfig
@@ -94,6 +95,68 @@ class Harness:
         return [event.state for event in self.fsm.events if event.kind.value == "transition"]
 
 
-@pytest.fixture
-def harness():
-    return Harness
+from ramen_controller.contracts import JOINT_NAMES  # noqa: E402
+from ramen_controller.motion_bundle import BUNDLE_FORMAT  # noqa: E402
+
+
+def write_bundle(folder, frames=31, fps=30, **overrides):
+    qpos = np.zeros((frames, 36))
+    qpos[:, 3] = 1.0
+    qpos[:, 7 + 15:7 + 29] = np.linspace(0, 1, frames)[:, None]       # arms ramp 0 -> 1
+    qpos[:, 7 + 12:7 + 15] = [0.1, 0.0, 0.2]                         # waist yaw, roll, pitch
+    metadata = {"format": BUNDLE_FORMAT, "joint_names": list(JOINT_NAMES), "fps": fps, "samples": frames}
+    metadata.update(overrides)
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "metadata.json").write_text(json.dumps(metadata))
+    np.savetxt(folder / "motion.csv", qpos, delimiter=",")
+    return folder
+
+
+from ramen_controller.operator import ScriptedOperator  # noqa: E402
+from ramen_controller.runner import TaskRunner  # noqa: E402
+
+
+class Clock:
+    def __init__(self):
+        self.now = 100.0
+
+    def __call__(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class ScriptedLink:
+    """Fresh state each call unless `silent`; remembers what was sent."""
+    def __init__(self, clock):
+        self.clock, self.silent, self.sent = clock, False, []
+        self.arms = np.zeros(14)
+
+    def read_state(self, stamp):
+        if self.silent:
+            return None
+        joints = np.zeros(29)
+        joints[15:29] = self.arms
+        return RobotState(stamp=stamp, joint_positions=joints, root_position=np.array([0, 0, .75]),
+                          root_quaternion_wxyz=np.array([1., 0, 0, 0]))
+
+    def send(self, command):
+        self.sent.append(command)
+        self.arms = command.arm_targets.copy()           # the robot tracks the command perfectly
+
+
+def Grasp():
+    from ramen_controller.sim.proxy_grasp import ProxyGraspMonitor
+    return ProxyGraspMonitor(None)
+
+
+def make(clock, **config):
+    op = ScriptedOperator()
+    op.confirmed = True
+    link = ScriptedLink(clock)
+    grasp = Grasp()
+    fsm = TaskFsm(vision=None, motion=FakeMotion(), operator=op, grasp=grasp,
+                  config=TaskFsmConfig(**{"blend_s": 0.2, "skip_manual_position": True, **config}))
+    grasp.fsm = fsm
+    return fsm, TaskRunner(fsm, link, op, clock=clock, rate_hz=50), link, op, grasp

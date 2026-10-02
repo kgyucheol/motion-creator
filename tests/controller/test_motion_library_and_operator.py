@@ -7,7 +7,7 @@ from ramen_controller.contracts import MotionKind, ObjectPose
 from ramen_controller.fsm import GraspPlanError
 from ramen_controller.motion_library import FixedGraspPlanner, MotionEntry, MotionLibrary, load_entries
 from ramen_controller.operator import KeyboardOperator, MAX_LINEAR
-from tests.test_motion_bundle_and_pose import write_bundle
+from controller_support import write_bundle
 
 
 def pose(x=0.5, frame="base"):

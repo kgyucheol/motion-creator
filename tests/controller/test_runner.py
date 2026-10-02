@@ -2,58 +2,10 @@ import json
 
 import numpy as np
 
-from ramen_controller.contracts import RobotState
-from ramen_controller.fsm import TaskFsm, TaskFsmConfig, TaskState
 from ramen_controller.operator import ScriptedOperator
 from ramen_controller.runner import TaskRunner
 from ramen_controller.vision import CameraFrame, MockPoseEstimator, VisionService
-from tests.conftest import FakeMotion, robot_state
-
-
-class Clock:
-    def __init__(self):
-        self.now = 100.0
-
-    def __call__(self):
-        return self.now
-
-    def sleep(self, seconds):
-        self.now += seconds
-
-
-class ScriptedLink:
-    """Fresh state each call unless `silent`; remembers what was sent."""
-    def __init__(self, clock):
-        self.clock, self.silent, self.sent = clock, False, []
-        self.arms = np.zeros(14)
-
-    def read_state(self, stamp):
-        if self.silent:
-            return None
-        joints = np.zeros(29)
-        joints[15:29] = self.arms
-        return RobotState(stamp=stamp, joint_positions=joints, root_position=np.array([0, 0, .75]),
-                          root_quaternion_wxyz=np.array([1., 0, 0, 0]))
-
-    def send(self, command):
-        self.sent.append(command)
-        self.arms = command.arm_targets.copy()           # the robot tracks the command perfectly
-
-
-def Grasp():
-    from ramen_controller.proxy_grasp import ProxyGraspMonitor
-    return ProxyGraspMonitor(None)
-
-
-def make(clock, **config):
-    op = ScriptedOperator()
-    op.confirmed = True
-    link = ScriptedLink(clock)
-    grasp = Grasp()
-    fsm = TaskFsm(vision=None, motion=FakeMotion(), operator=op, grasp=grasp,
-                  config=TaskFsmConfig(**{"blend_s": 0.2, "skip_manual_position": True, **config}))
-    grasp.fsm = fsm
-    return fsm, TaskRunner(fsm, link, op, clock=clock, rate_hz=50), link, op, grasp
+from controller_support import Clock, FakeMotion, ScriptedLink, make, robot_state
 
 
 def test_pauses_the_task_clock_and_sends_nothing_while_state_is_missing():

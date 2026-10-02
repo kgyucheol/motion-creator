@@ -16,8 +16,8 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-from .contracts import ObjectPose
-from .vision import BASE_FRAME, CameraFrame
+from ..contracts import ObjectPose
+from ..vision import BASE_FRAME, CameraFrame
 
 DEFAULT_PORT = 5570
 _MJ_TO_CV = np.diag([1.0, -1.0, -1.0])        # MuJoCo camera: x right, y up, z back  ->  OpenCV: x right, y down, z forward

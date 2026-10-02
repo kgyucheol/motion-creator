@@ -2,7 +2,7 @@
 
 `install()` swaps `base_sim.DefaultEnv` for `RamenEnv`. The environment renders the head camera (RGB + depth)
 in the simulator thread, where its GL context lives, and publishes it with the ground truth on a ZMQ PUB
-socket (see sim_feed). Imports decoupled_wbc/rclpy, so it only loads in the sim environment.
+socket (see feed.py). Imports decoupled_wbc/rclpy, so it only loads in the sim environment.
 """
 from __future__ import annotations
 
@@ -17,8 +17,7 @@ import zmq
 
 from decoupled_wbc.control.envs.g1.sim import base_sim
 
-from .scene import CAMERA_NAME
-from .sim_feed import DEFAULT_PORT, TruthExtractor, pack_message
+from .feed import DEFAULT_PORT, TruthExtractor, pack_message
 
 
 class RamenEnv(base_sim.DefaultEnv):
@@ -34,7 +33,7 @@ class RamenEnv(base_sim.DefaultEnv):
         self._camera = camera
         # Upstream starts with a stiff virtual elastic band holding the pelvis at world (0, 0, 1) until a person
         # presses "9" (after "]" activates the lower-body policy). Hang the robot over its own start position
-        # instead; the FSM-side bring-up sends the same two keys (see wbc_adapter.RosWbcLink.press_key).
+        # instead; the FSM-side bring-up sends the same two keys (see adapters.decoupled_wbc.RosWbcLink.press_key).
         start = json.loads(sidecar.read_text(encoding="utf-8"))["robot_start_xy_yaw"]
         self._last_log = -1.0
         if getattr(self, "elastic_band", None) is not None:
@@ -82,12 +81,13 @@ class RamenEnv(base_sim.DefaultEnv):
         if not self.renderers:
             super().init_renderers()
         caches = super().update_render_caches()
-        renderer = self.renderers[CAMERA_NAME]
+        name = self._camera["name"]
+        renderer = self.renderers[name]
         renderer.enable_depth_rendering()
-        renderer.update_scene(self.mj_data, camera=CAMERA_NAME)
+        renderer.update_scene(self.mj_data, camera=name)
         depth = renderer.render().copy()
         renderer.disable_depth_rendering()
-        payload = pack_message(time.monotonic(), caches[CAMERA_NAME + "_image"], depth, self._camera["K"],
+        payload = pack_message(time.monotonic(), caches[name + "_image"], depth, self._camera["K"],
                                self._extractor.camera_pose_in_base(self.mj_data), self._extractor.truth(self.mj_data))
         try:
             self._socket.send(payload, flags=zmq.NOBLOCK)
