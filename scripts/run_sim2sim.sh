@@ -14,4 +14,4 @@ setsid python -m ramen_controller.sim_stack --scene-dir build/scene > logs/stack
 STACK=$!
 trap 'kill -TERM -$STACK 2>/dev/null; sleep 2; kill -KILL -$STACK 2>/dev/null' EXIT
 sleep 20
-python scripts/run_sim2sim.py "$@"
+python -u scripts/run_sim2sim.py "$@"
