@@ -52,6 +52,9 @@ def _validated_stages(stages: dict) -> dict:
             raise ValueError(f"stage {name!r} ends before it starts")
     if not stages.get("target_object"):
         raise ValueError("target_object (the scene object to pick) is required")
+    start = stages.get("robot_start_xy_yaw")
+    if start is not None and (not isinstance(start, (list, tuple)) or len(start) != 3):
+        raise ValueError("robot_start_xy_yaw must be [x, y, yaw]")
     return stages
 
 
@@ -146,6 +149,8 @@ class ControllerSession:
         self.target = names[self.stages["target_object"]]
         self._build()
         simulation.set_control_mode("external")
+        start = self.stages.get("robot_start_xy_yaw", [-1.0, 0.0, 0.0])
+        simulation.set_start_pose(*start)
         self._next_tick = 0.0
         self._fall_reported = False
         self.thread = threading.Thread(target=self._loop, name="task-controller", daemon=True)
@@ -260,19 +265,29 @@ class ControllerSession:
         return snapshot
 
 
+MAX_SESSIONS = 2     # each session runs a 200 Hz simulation thread; a forgotten one would starve the others
+
+
 class ControllerSessions:
     def __init__(self):
-        self.robot: Robot | None = None
+        self.robots: dict[tuple, Robot] = {}
         self.sessions: dict[str, ControllerSession] = {}
         self.lock = threading.Lock()
+
+    def _robot_for(self, project: dict) -> Robot:
+        """The robot a project was authored with: its mounted tool pair if it records one, else the server default."""
+        tools = tuple(project["mounted_tools"]) if project.get("mounted_tools") else None
+        key = ("g1-tools", tools) if tools else ("default", None)
+        with self.lock:
+            if key not in self.robots:
+                self.robots[key] = Robot("g1-tools", tools) if tools else Robot()
+            return self.robots[key]
 
     def create(self, project: dict, bundle_dir: Path, stages: dict, options: dict | None = None) -> tuple[str, ControllerSession]:
         if not verify_assets()["available"]:
             raise ValueError("Decoupled WBC assets are not installed")
-        with self.lock:
-            if self.robot is None:
-                self.robot = Robot()
-            robot = self.robot
+        robot = self._robot_for(project)
+        self._evict_oldest(MAX_SESSIONS - 1)
         simulation = DecoupledSimulation(robot, project)
         try:
             session = ControllerSession(simulation, bundle_dir, stages, options)
@@ -283,6 +298,13 @@ class ControllerSessions:
         with self.lock:
             self.sessions[identifier] = session
         return identifier, session
+
+    def _evict_oldest(self, keep: int) -> None:
+        """Close the oldest sessions until at most `keep` remain (dicts keep creation order)."""
+        with self.lock:
+            stale = [self.sessions.pop(key) for key in list(self.sessions)[:max(0, len(self.sessions) - keep)]]
+        for session in stale:
+            session.close()
 
     def get(self, identifier: str) -> ControllerSession:
         with self.lock:

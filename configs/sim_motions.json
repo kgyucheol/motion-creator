@@ -26,5 +26,10 @@
     "start_s": 37.2,
     "end_s": 42.2
   },
-  "authored_root_at_s": 22.6
+  "authored_root_at_s": 22.6,
+  "robot_start_xy_yaw": [
+    -1.0,
+    0.0,
+    0.0
+  ]
 }

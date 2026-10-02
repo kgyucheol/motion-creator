@@ -45,6 +45,24 @@ scripts/                  setup_sim_env.sh activate_sim.sh run_sim2sim.sh/.py bu
 (RGB 전용 카메라에 깊이 백엔드를 붙이면 명확한 오류로 멈춘다). 백엔드 예외는 "검출 없음"으로 처리된다.
 `MockPoseEstimator`는 sim 정답에 노이즈·누락·이상치를 얹는다. FoundationPose 계열은 RGB-D가 필요하다.
 
+## MotionCreator 화면에서 실행하기 (`/controller`)
+
+편집기 우상단 **Task Controller** 버튼 → `/controller` 페이지. 편집기의 인프로세스 MuJoCo 시뮬(하체 정책 + 팔 PD)을 같은 FSM이 외부에서
+구동한다(`DecoupledSimulation`의 `external` 모드: 팔 14·허리 3·이동 속도·높이를 매 제어 틱 입력). ROS/DDS는 필요 없다.
+
+1. `./run.sh --model g1-tools`로 편집기를 띄운다(프로젝트에 기록된 툴 쌍으로 로봇과 sim 모델이 자동 선택된다).
+2. 모션을 번들로 저장한다(`motions/<이름>_<id>/`에 `project.json`, `metadata.json`, `motion.csv`가 있어야 한다).
+3. `/controller`에서 **저장 프로젝트**를 고르고, **집을 물체**와 단계별 구간(준비·파지·이송·배치·복귀, 번들 시간 s)을 확인한다.
+   기본값은 `configs/sim_motions.json`이고, 번들 폴더에 `task_stages.json`(같은 형식)을 두면 그것을 읽는다.
+4. **작업 준비**(세션 생성, 약 20 s) → **Start**. 로봇은 박스 1 m 뒤(`robot_start_xy_yaw`)에서 시작해 팔을 올리고 저작 위치까지 걸어간다.
+5. 화면: 3D 장면(로봇·물체·헤드캠), 작업 상태(FSM 단계, 사이클, 인식 pose, 파지 접촉력), 이벤트(전환 사유), HUD.
+   **파지 가정(proxy)**: 파지 모션이 끝나면 잡힌 것으로 가정한다. **목표 가림**: 비전이 목표를 못 보는 상황을 시험한다.
+   **작업자 확인**: 정지(`RECOVERY`) 원인을 확인한 뒤 준비 자세부터 다시 시작한다(낙상 후에는 Reset이 먼저).
+6. 세션은 최대 2개까지 유지되고 더 만들면 가장 오래된 것이 닫힌다. 페이지를 닫으면 세션도 정리된다.
+
+구성: `controller_session.py`(FSM ↔ sim 연결, 비전 목업, 접촉 기반 파지 판정) + `controller_api.py`(`/api/controller/*`) + `frontend/app/controller-page.tsx`.
+실기와의 차이: 이 sim은 편집기의 인프로세스 시뮬이므로 실기와 같은 ROS/DDS 제어 경로가 아니다. 그 경로(실기 어댑터 포함)는 아래 sim2sim 스택이 검증한다.
+
 ## sim2sim
 
 한 번: `scripts/setup_sim_env.sh` (decoupled_wbc + ROS 2 humble + Unitree SDK + MuJoCo/EGL venv). 번들을 `data/bundle_a`에 복사한다.
@@ -67,4 +85,5 @@ scripts/run_sim2sim.sh data/bundle_a --cycles 3 --gui-port 8765   # scene 생성
 - **파지 물리는 실패한다**(프록시 없이): 고정 파지(`FixedGraspPlanner`)는 저작된 한 자세만 재생하는데 보행 후 로봇이 밀리고 서는 높이가
   0.747 m(저작 0.79 m)라 ~8 cm 빗나간다. 포즈에 적응하는 파지 플래너가 필요하다. 사이클을 반복하면 위치 오차가 누적된다.
 - 합치기 전 sim 모델은 기본 툴 쌍(주걱+받침)으로 고정돼 있어 번들의 `mounted_tools`(주걱+주걱)와 달랐다. 합친 뒤에는 번들을 따른다.
+- 편집기 UI(`/controller`)에서도 같은 결과: 프록시 파지로 1사이클 완료(작업 시간 약 33 s), 접촉 판정 모드는 `grasp not confirmed`(접촉력 0/0 N). 파지 실패는 sim2sim 스택 고유의 문제가 아니다.
 - 비전: 목업만. 실제 백엔드, 실기 어댑터, 실제 grip 센서 판정은 미구현. 실제 로봇과 연결해 본 적 없음.

@@ -76,10 +76,13 @@ def _numbers(values) -> str:
     return " ".join(str(float(value)) for value in values)
 
 
-def build_environment_model(project: dict) -> mujoco.MjModel:
-    """Load the WBC MJCF and add fully dynamic authored scene objects."""
-    tool_model = os.environ.get('MOTIONCREATOR_MODEL') == 'g1-tools'
-    root = Robot().xml_root() if tool_model else ET.parse(ASSET_ROOT / "g1_gear_wbc.xml").getroot()
+def build_environment_model(project: dict, robot: Robot | None = None) -> mujoco.MjModel:
+    """Load the WBC MJCF and add fully dynamic authored scene objects.
+
+    `robot` selects the model and tools; by default they follow the server's environment (MOTIONCREATOR_MODEL).
+    """
+    tool_model = (robot.model_id if robot is not None else os.environ.get('MOTIONCREATOR_MODEL')) == 'g1-tools'
+    root = (robot or Robot()).xml_root() if tool_model else ET.parse(ASSET_ROOT / "g1_gear_wbc.xml").getroot()
     if not tool_model:
         root.find("compiler").set("meshdir", str(ASSET_ROOT / "meshes"))
     objects = project_scene_objects(project)
@@ -354,7 +357,7 @@ class DecoupledSimulation:
         self.duration = float(self.reference["time"][-1])
         self.scene_objects = copy.deepcopy(project_scene_objects(project))
         self.grasp_control = prepare_grasp_control(robot, project, self.parameters)
-        self.model = build_environment_model(project)
+        self.model = build_environment_model(project, robot)
         self.model.opt.timestep = self.parameters["simulation_dt"]
         self.data = mujoco.MjData(self.model)
         self.object_bodies = {item["id"]: self.model.body(f"wbc_object_{index}").id
@@ -382,6 +385,7 @@ class DecoupledSimulation:
         self.policy = LowerBodyPolicy(self.parameters)
         self.command = CommandState(height=self.parameters["initial_height"])
         self.control_mode = "auto"
+        self.start_xy_yaw = (0.0, 0.0, 0.0)          # where reset() places the robot, relative to the authored origin
         self.external = self._neutral_external()
         self.grasp_force_enabled = bool(self.parameters["grasp_force_control"]["enabled"])
         self.lock = threading.RLock()
@@ -461,6 +465,9 @@ class DecoupledSimulation:
             # Start from the authored upper-body pose so the real hand meshes do
             # not sweep through nearby objects while the lower-body policy settles.
             self.data.qpos[22:36] = self._reference_at(0.)[22:36]
+            x, y, yaw = self.start_xy_yaw
+            self.data.qpos[0:2] += (x, y)
+            self.data.qpos[3:7] = (np.cos(yaw / 2), 0., 0., np.sin(yaw / 2))
             mujoco.mj_forward(self.model, self.data)
             self.policy.reset()
             self.command = CommandState(height=self.parameters["initial_height"])
@@ -478,6 +485,13 @@ class DecoupledSimulation:
             self.recording.clear()
             self._last_record_step = -1
             self._changed()
+
+    def set_start_pose(self, x: float, y: float, yaw: float) -> None:
+        """Where the robot starts after reset(). Objects keep their authored world positions, so a start pose away
+        from the origin lets the robot raise its arms in free space and walk to the authored spot."""
+        with self.lock:
+            self.start_xy_yaw = (float(x), float(y), float(yaw))
+        self.reset()
 
     def play(self) -> None:
         with self.lock:

@@ -74,3 +74,32 @@ def test_bringup_sends_policy_activation_before_band_release_with_a_wait_between
     log = []
     bringup_sim(lambda k: log.append(("key", k)), lambda s: log.append(("wait", s)), settle_s=2.5)
     assert log == [("key", "]"), ("wait", 2.5), ("key", "9")]
+
+
+def test_standing_sway_around_the_tolerance_edge_does_not_restart_the_hold_timer():
+    p = AutoPositioner(target_xy_yaw=(0, 0, 0), position_tolerance_m=0.03, hold_s=1.0)
+    t = 0.0
+    p.observe(state(0.02, 0.0, t=t))                              # inside: the hold timer starts
+    for step in range(1, 40):                                     # sways 2..4 cm for ~2 s, never beyond 1.7 x tolerance
+        t = step * 0.05
+        p.observe(state(0.02 if step % 2 else 0.04, 0.0, t=t))
+        assert not p.nav().any(), "must hold still while swaying inside the band"
+    assert p.position_confirmed()
+
+
+def test_a_real_excursion_beyond_the_hysteresis_band_still_restarts_the_timer():
+    p = AutoPositioner(target_xy_yaw=(0, 0, 0), position_tolerance_m=0.03, hold_s=1.0)
+    p.observe(state(0.02, 0.0, t=0.0))
+    p.observe(state(0.20, 0.0, t=0.5))                            # pushed far out: walk again
+    assert p.nav()[0] < 0                                         # walks back toward the target
+    p.observe(state(0.02, 0.0, t=0.6))
+    p.observe(state(0.02, 0.0, t=1.4))
+    assert not p.position_confirmed()                             # only 0.8 s since it came back
+    p.observe(state(0.02, 0.0, t=1.7))
+    assert p.position_confirmed()
+
+
+def test_a_start_inside_the_band_but_outside_the_tolerance_still_walks_in():
+    p = AutoPositioner(target_xy_yaw=(0, 0, 0), position_tolerance_m=0.03)
+    p.observe(state(0.04, 0.0, t=0.0))                            # never inside before: the band must not apply yet
+    assert p.nav()[0] < 0 and not p.position_confirmed()

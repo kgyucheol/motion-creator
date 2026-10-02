@@ -13,7 +13,7 @@ from ramen_controller.contracts import JOINT_NAMES
 
 needs_assets = pytest.mark.skipif(not verify_assets()["available"], reason="decoupled-WBC assets are not installed")
 
-STAGES = {"target_object": "Crate", "authored_root_at_s": 0.0,
+STAGES = {"target_object": "Crate", "authored_root_at_s": 0.0, "robot_start_xy_yaw": [-0.6, 0.0, 0.0],
           "ready": {"start_s": 0.0, "end_s": 0.0}, "grasp": {"start_s": 0.0, "end_s": 0.5},
           "transfer": {"start_s": 0.5, "end_s": 1.0}, "place": {"start_s": 1.0, "end_s": 1.5},
           "return": {"start_s": 1.5, "end_s": 2.0}, "grasp_tolerance_m": 0.08}
@@ -134,6 +134,39 @@ def test_a_fall_stops_the_simulation_and_is_reported_to_the_fsm_once(tmp_path):
 
 
 @needs_assets
+def test_robot_starts_away_from_the_authored_spot_and_walks_in(tmp_path):
+    session = make_session(tmp_path, proxy_grasp=True)
+    try:
+        assert session.simulation.data.qpos[0] == pytest.approx(session.simulation.model.qpos0[0] - 0.6)
+        session.start()
+        assert run(session, 30, until=lambda s: s.fsm.state.value == "OBSERVE")          # arrived and confirmed its position
+        assert abs(session.simulation.data.qpos[0]) < 0.12                                # walked to the authored origin
+        session.reset()
+        assert session.simulation.data.qpos[0] == pytest.approx(session.simulation.model.qpos0[0] - 0.6)
+    finally:
+        session.close()
+
+
+@needs_assets
+def test_start_pose_applies_position_and_yaw_on_every_reset():
+    simulation = DecoupledSimulation(Robot(), project_with_crate(), autostart=False)
+    try:
+        origin = simulation.data.qpos[:2].copy()
+        simulation.set_start_pose(-1.0, 0.25, np.pi / 2)
+        np.testing.assert_allclose(simulation.data.qpos[:2], origin + (-1.0, 0.25))
+        np.testing.assert_allclose(simulation.data.qpos[3:7], [np.cos(np.pi / 4), 0, 0, np.sin(np.pi / 4)], atol=1e-9)
+        simulation.reset()
+        np.testing.assert_allclose(simulation.data.qpos[:2], origin + (-1.0, 0.25))
+    finally:
+        simulation.close()
+
+
+def test_start_pose_in_the_stage_mapping_must_be_x_y_yaw():
+    with pytest.raises(ValueError, match="robot_start_xy_yaw"):
+        _validated_stages({**STAGES, "robot_start_xy_yaw": [1.0, 2.0]})
+
+
+@needs_assets
 def test_reset_rebuilds_the_controller_and_stops_the_robot(tmp_path):
     session = make_session(tmp_path, proxy_grasp=True)
     try:
@@ -183,3 +216,63 @@ def test_bundle_folder_rejects_unsafe_or_incomplete_paths(tmp_path, monkeypatch)
                          ("project.json", "bundle must be"), ("legacy/project.json", "not a saved bundle")):
         with pytest.raises(ValueError, match=message):
             controller_api.bundle_folder(bad)
+
+
+def test_robot_follows_the_projects_mounted_tools():
+    from motioncreator.controller_session import ControllerSessions
+    sessions = ControllerSessions()
+    tooled = sessions._robot_for({"mounted_tools": ["scoop", "scoop"]})
+    assert tooled.model_id == "g1-tools" and tooled.tools == ("scoop", "scoop")
+    assert sessions._robot_for({"mounted_tools": ["scoop", "scoop"]}) is tooled          # built once per tool pair
+    other = sessions._robot_for({"mounted_tools": ["scoop", "end_support"]})
+    assert other is not tooled and other.tools == ("scoop", "end_support")
+    assert sessions._robot_for({}).tools == sessions._robot_for({"mounted_tools": None}).tools
+
+
+@needs_assets
+def test_simulation_model_uses_the_given_robots_tools_not_the_servers_environment(monkeypatch):
+    from motioncreator.decoupled_wbc import build_environment_model
+    monkeypatch.delenv("MOTIONCREATOR_MODEL", raising=False)                              # the server default would be the stock hands
+    project = project_with_crate()
+    stock = build_environment_model(project)
+    tooled = build_environment_model(project, Robot("g1-tools", ("scoop", "scoop")))
+    names = lambda model: {model.body(i).name for i in range(model.nbody)}
+    assert "right_scoop_link" not in names(stock) and "right_scoop_link" in names(tooled)
+    assert tooled.nu == 29 and tooled.nq == stock.nq
+
+
+def test_old_sessions_are_closed_when_too_many_accumulate():
+    from motioncreator.controller_session import ControllerSessions
+
+    class Fake:
+        def __init__(self): self.closed = False
+        def close(self): self.closed = True
+
+    sessions = ControllerSessions()
+    fakes = [Fake() for _ in range(4)]
+    sessions.sessions = {f"s{i}": fake for i, fake in enumerate(fakes)}
+    sessions._evict_oldest(1)
+    assert [f.closed for f in fakes] == [True, True, True, False] and list(sessions.sessions) == ["s3"]
+    sessions._evict_oldest(1)
+    assert list(sessions.sessions) == ["s3"]                           # nothing more to evict
+
+
+def test_create_keeps_at_most_max_sessions_by_closing_the_oldest(monkeypatch):
+    from motioncreator import controller_session as module
+
+    class FakeSimulation:
+        def __init__(self, robot, project): self.closed = False
+        def close(self): self.closed = True
+
+    class FakeSession:
+        def __init__(self, simulation, bundle, stages, options=None): self.simulation, self.closed = simulation, False
+        def close(self): self.closed = True
+
+    monkeypatch.setattr(module, "verify_assets", lambda: {"available": True})
+    monkeypatch.setattr(module, "DecoupledSimulation", FakeSimulation)
+    monkeypatch.setattr(module, "ControllerSession", FakeSession)
+    sessions = module.ControllerSessions()
+    monkeypatch.setattr(sessions, "_robot_for", lambda project: object())
+    made = [sessions.create({}, None, {})[1] for _ in range(module.MAX_SESSIONS + 1)]
+    assert len(sessions.sessions) == module.MAX_SESSIONS
+    assert made[0].closed and not made[-1].closed

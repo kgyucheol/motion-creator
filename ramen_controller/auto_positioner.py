@@ -19,6 +19,8 @@ class AutoPositioner:
     position_tolerance_m: float = 0.03
     yaw_tolerance_rad: float = 0.05
     hold_s: float = 1.0                       # must stay inside the tolerance this long to confirm
+    exit_band: float = 1.7                    # once holding, only leaving tolerance * exit_band restarts the timer
+                                              # (a standing robot sways; without this it chatters at the edge)
     kp_linear: float = 0.8
     kp_yaw: float = 1.0
     max_linear: float = 0.3
@@ -40,7 +42,9 @@ class AutoPositioner:
         distance = float(np.linalg.norm(error_world))
 
         inside = distance <= self.position_tolerance_m and abs(yaw_error) <= self.yaw_tolerance_rad
-        if inside:
+        holding = (self._inside_since is not None and distance <= self.position_tolerance_m * self.exit_band
+                   and abs(yaw_error) <= self.yaw_tolerance_rad * self.exit_band)
+        if inside or holding:
             self._inside_since = state.stamp if self._inside_since is None else self._inside_since
             self._confirmed = self._confirmed or state.stamp - self._inside_since >= self.hold_s
             self._nav = np.zeros(3)
