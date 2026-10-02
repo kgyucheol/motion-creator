@@ -129,8 +129,11 @@ def build_scene(assets_dir, environment_json, out_dir, camera: CameraSpec = Came
     ET.indent(root)
     scene_path = out_dir / "scene.xml"
     scene_path.write_text(ET.tostring(root, encoding="unicode"), encoding="utf-8")
+    handles_path = assets_dir / "tcp_handles.json"
+    handles = json.loads(handles_path.read_text(encoding="utf-8")) if handles_path.exists() else {}
+    tool_bodies = {side: handles[f"{side}_hand"]["link"] for side in ("left", "right") if f"{side}_hand" in handles}
     (out_dir / "scene_objects.json").write_text(json.dumps(
         {"camera": {"name": CAMERA_NAME, "width": camera.width, "height": camera.height,
                     "fovy_deg": camera.fovy_deg, "K": camera.intrinsics().tolist(), "body": camera.body},
-         "objects": sidecar}, indent=1, ensure_ascii=False), encoding="utf-8")
+         "tool_bodies": tool_bodies, "objects": sidecar}, indent=1, ensure_ascii=False), encoding="utf-8")
     return scene_path

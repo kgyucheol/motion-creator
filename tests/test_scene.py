@@ -97,3 +97,12 @@ def test_robot_starts_at_the_requested_pose_and_yaw(tmp_path):
     assert np.allclose(data.qpos[3:7], [np.cos(np.pi / 4), 0, 0, np.sin(np.pi / 4)])
     default = load(build_scene(ASSETS, environment(tmp_path, []), tmp_path / "default"))
     assert np.allclose(mujoco.MjData(default).qpos[:2], [-1.0, 0.0])
+
+
+def test_sidecar_lists_the_tool_bodies_for_grip_detection(tmp_path):
+    build_scene(ASSETS, environment(tmp_path, []), tmp_path / "out")
+    sidecar = json.loads((tmp_path / "out" / "scene_objects.json").read_text())
+    assert set(sidecar["tool_bodies"]) == {"left", "right"}
+    model = load(tmp_path / "out" / "scene.xml")
+    for link in sidecar["tool_bodies"].values():
+        assert model.body(link).id > 0                                  # the named bodies exist in the compiled model
