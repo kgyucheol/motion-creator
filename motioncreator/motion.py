@@ -446,13 +446,17 @@ def new_project(robot, name=''):
                            'pins': list(FEET), 'angle_pins': []}]}
 
 
-def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: int = 30):
-    """Create an editable project from a Kimodo NPZ or 36-column G1 CSV."""
+def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: int = 30, source: str = 'actions'):
+    """Create an editable project from a Kimodo NPZ, 36-column G1 CSV or LeRobot episode JSON."""
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
     suffix = Path(filename).suffix.lower()
     try:
-        if suffix == '.csv':
+        if suffix == '.json':
+            from .lerobot_format import lerobot_episode_to_qpos
+            qpos, fps = lerobot_episode_to_qpos(robot, content, source)
+            fps = max(1, min(120, round(fps)))
+        elif suffix == '.csv':
             qpos = np.loadtxt(io.BytesIO(content), delimiter=',')
             qpos = np.atleast_2d(qpos)
         elif suffix == '.npz':
@@ -466,7 +470,7 @@ def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: 
                 else:
                     raise ValueError('NPZ must contain Kimodo G1 arrays or a qpos array')
         else:
-            raise ValueError('Only .npz and .csv motion files are supported')
+            raise ValueError('Only .npz, .csv and LeRobot .json motion files are supported')
     except (EOFError, OSError, TypeError, zipfile.BadZipFile) as exc:
         raise ValueError(f'Could not read {suffix.upper()[1:]} motion file') from exc
 

@@ -329,15 +329,16 @@ def validate(payload: ProjectInput):
 
 
 @app.post('/api/import-motion')
-async def import_motion(request: Request, filename: str, fps: int = Query(30, ge=1, le=120)):
-    if Path(filename).name != filename or Path(filename).suffix.lower() not in ('.npz', '.csv'):
-        raise HTTPException(status_code=422, detail='Only .npz and .csv motion files are supported')
+async def import_motion(request: Request, filename: str, fps: int = Query(30, ge=1, le=120),
+                        source: str = Query('actions', pattern='^(actions|states)$')):
+    if Path(filename).name != filename or Path(filename).suffix.lower() not in ('.npz', '.csv', '.json'):
+        raise HTTPException(status_code=422, detail='Only .npz, .csv and LeRobot .json motion files are supported')
     content = await request.body()
     if not content:
         raise HTTPException(status_code=422, detail='Motion file is empty')
     if len(content) > 100 * 1024 * 1024:
         raise HTTPException(status_code=413, detail='Motion file must be 100 MB or smaller')
-    return checked(lambda: project_from_motion_bytes(robot, content, filename, fps))
+    return checked(lambda: project_from_motion_bytes(robot, content, filename, fps, source))
 
 
 @app.post('/api/scene-assets/import')

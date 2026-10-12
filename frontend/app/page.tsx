@@ -1053,12 +1053,19 @@ export default function Editor() {
   }
   async function openFile(source: File) {
     const extension = source.name.slice(source.name.lastIndexOf('.')).toLowerCase();
+    let importName = source.name;
     if (extension === '.json') {
-      await loadProject(JSON.parse(await source.text()));
-      setMessage(`${source.name} 프로젝트를 불러왔습니다.`);
-      return;
+      const parsed = JSON.parse(await source.text()) as { info?: unknown; data?: unknown; text?: { goal?: unknown } };
+      if (!(Array.isArray(parsed.data) && parsed.info)) {
+        await loadProject(parsed as unknown as Project);
+        setMessage(`${source.name} 프로젝트를 불러왔습니다.`);
+        return;
+      }
+      // LeRobot 에피소드는 항상 data.json이므로 작업 목표를 프로젝트 이름으로 쓴다.
+      const goal = typeof parsed.text?.goal === 'string' ? parsed.text.goal.trim().replace(/[\\/]/g, '_') : '';
+      if (goal) importName = `${goal}.json`;
     }
-    const response = await fetch(`/api/import-motion?filename=${encodeURIComponent(source.name)}&fps=${fps}`, {
+    const response = await fetch(`/api/import-motion?filename=${encodeURIComponent(importName)}&fps=${fps}`, {
       method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: source,
     });
     if (!response.ok) {
