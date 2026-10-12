@@ -133,6 +133,18 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
     const baseAngle = Math.atan2(forward.z, forward.x);
     const baseFlip = normal.x * -forward.z + normal.z * forward.x < 0;
     const faceTurn = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+    const placeOnTarget = (waypoint: { tcp: number[] }) => {
+      const dx = waypoint.tcp[0] - path.source!.center[0], dz = waypoint.tcp[1] - path.source!.center[1];
+      return sourceFar && sourceUp
+        ? [target.position[0] + (dx * sourceFar[0] + dz * sourceFar[1]) * targetFar[0]
+            + (dx * sourceUp[0] + dz * sourceUp[1]) * targetUp[0],
+          target.position[2] + (dx * sourceFar[0] + dz * sourceFar[1]) * targetFar[1]
+            + (dx * sourceUp[0] + dz * sourceUp[1]) * targetUp[1]]
+        : [target.position[0] + dx, target.position[2] + dz];
+    };
+    // The drawing is relative to its first point: move the whole path so that point lands on the editor's grasp point.
+    const [firstX, firstZ] = placeOnTarget(waypoints[0]);
+    const shift = [grasp[side][0] - firstX, grasp[side][2] - firstZ];
     const points: ToolPathPoint[] = [{ time: 0, position: grasp[side], quaternion_xyzw: grasp.orientation[side],
       label: '파지점', anchor: true }];
     const keyPoints: ToolPathPoint[] = [];
@@ -153,13 +165,8 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
       const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -(angle - baseAngle));
       const rotation = yaw.multiply(base.clone());
       if (path.flip !== baseFlip) rotation.multiply(faceTurn);
-      const dx = waypoint.tcp[0] - path.source.center[0], dz = waypoint.tcp[1] - path.source.center[1];
-      const position = sourceFar && sourceUp
-        ? [target.position[0] + (dx * sourceFar[0] + dz * sourceFar[1]) * targetFar[0]
-            + (dx * sourceUp[0] + dz * sourceUp[1]) * targetUp[0], grasp[side][1],
-          target.position[2] + (dx * sourceFar[0] + dz * sourceFar[1]) * targetFar[1]
-            + (dx * sourceUp[0] + dz * sourceUp[1]) * targetUp[1]]
-        : [target.position[0] + dx, grasp[side][1], target.position[2] + dz];
+      const [x, z] = placeOnTarget(waypoint);
+      const position = [x + shift[0], grasp[side][1], z + shift[1]];
       const time = Number(elapsed.toFixed(6));
       const point = { time, position, quaternion_xyzw: rotation.toArray(),
         label: anchor ? `그린 점 ${controlIndex + 1}` : waypoint.label, anchor };
