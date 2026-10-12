@@ -26,3 +26,13 @@ test('time maps to a sample inside the selected clip', () => {
   assert.equal(clipSampleAtTime(frames, 1, 12), 10);
   assert.equal(clipSampleAtTime(frames, 0, 0), 1);
 });
+
+test('merging undoes a split', async () => {
+  const { mergeMotionClips } = await import('../lib/keyframes.ts');
+  const original = clip(11, 10);
+  const { keyframes } = splitMotionClip([original], 0, 4);
+  const merged = mergeMotionClips(keyframes, 0).keyframes;
+  assert.equal(merged.length, 1);
+  assert.deepEqual(merged[0].samples, original.samples);
+  assert.ok(Math.abs(merged[0].duration - 10) < 1e-9);
+});

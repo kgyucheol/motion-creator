@@ -172,3 +172,14 @@ export function splitMotionClip(keyframes: Keyframe[], index: number, sample: nu
   }));
   return { keyframes: [...keyframes.slice(0, index), ...halves, ...keyframes.slice(index + 1)], index };
 }
+
+/** Merge clip `index` with the next clip. A shared boundary sample (as left by splitMotionClip) is kept only once. */
+export function mergeMotionClips(keyframes: Keyframe[], index: number) {
+  const first = keyframes[index], second = keyframes[index + 1];
+  if (!first?.samples || !second?.samples) throw new Error('합칠 다음 클립이 없습니다.');
+  const shared = first.samples.at(-1)!.length === second.samples[0].length
+    && first.samples.at(-1)!.every((value, i) => value === second.samples![0][i]);
+  const merged: Keyframe = { ...first, duration: first.duration + second.duration, pins: [],
+    samples: [...first.samples, ...(shared ? second.samples.slice(1) : second.samples)] };
+  return { keyframes: [...keyframes.slice(0, index), merged, ...keyframes.slice(index + 2)], index };
+}
