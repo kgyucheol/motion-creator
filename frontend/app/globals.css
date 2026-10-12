@@ -58,3 +58,5 @@
 .task-hud{top:auto;bottom:18px}.task-stages{table-layout:fixed}.task-stages th:first-child,.task-stages td:first-child{width:40px;white-space:nowrap}
 .task-stepper li button{all:unset;cursor:pointer}.task-stepper li:has(button):hover{border-color:#8be6c3}.task-stepper li.skipped{text-decoration:line-through;opacity:.55}.task-stepper li.skipped button{text-decoration:line-through}.task-hint{margin:-4px 0 10px;font-size:10px;color:#6f8597}
 .tcp-table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}.tcp-table th{padding:3px 4px;text-align:left;color:#8da3b5;font-weight:500}.tcp-table td{padding:3px 4px;color:#c8dadf;font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.tcp-table td:first-child,.tcp-table th:first-child{width:34px}.tcp-table .bad{color:#ff8f80}.tcp-table .touch{color:#8be6c3;font-weight:600}.tcp-card p{font-size:10px;color:#6f8597;margin:6px 0 0}
+
+.transport-selects{display:flex;gap:6px;align-items:center}.transport-selects label{flex:1;min-width:0}.transport-selects select{width:100%}
