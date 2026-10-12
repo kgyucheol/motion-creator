@@ -5,7 +5,6 @@ import { candidateRamenGraspPoints, DEFAULT_RAMEN_GRASP_COEFFICIENTS,
 
 const DRAWINGS_KEY = 'motioncreator-cylinder-lab-v2';
 const SETTINGS_KEY = 'motioncreator-cylinder-lab-tool-settings-v1';
-const GRASPS_KEY = 'motioncreator-cylinder-lab-tool-grasps-v1';
 export type HandSide = 'left' | 'right';
 export type LabPathSource = { center: number[]; radius: number; planeY: number; far?: number[]; up?: number[]; boxAligned?: boolean };
 export type LabToolPath = { side: HandSide; toolId: string; projectName: string; points: DrawnPoint[]; flip: boolean;
@@ -44,13 +43,6 @@ function parseMap(storage: Pick<Storage, 'getItem'>, key: string) {
 function finiteVector(value: unknown, length: number): value is number[] {
   return Array.isArray(value) && value.length === length && value.every(v => typeof v === 'number' && Number.isFinite(v));
 }
-function coefficients(value: unknown, fallback: GraspPointCoefficients) {
-  const item = objectMap(value);
-  return (['lateral', 'clearance', 'height', 'roll', 'pitch', 'yaw'] as const).every(field =>
-    typeof item[field] === 'number' && Number.isFinite(item[field]) &&
-    (field !== 'lateral' && field !== 'clearance' || (item[field] as number) >= 0))
-    ? item as GraspPointCoefficients : fallback;
-}
 function stepping(value: unknown): DrawnStepping {
   const item = objectMap(value);
   const keys = ['stepM', 'stepDeg', 'speedMS', 'turnDegS', 'minStepS'] as const;
@@ -58,13 +50,13 @@ function stepping(value: unknown): DrawnStepping {
     ? item as DrawnStepping : DEFAULT_STEPPING;
 }
 
-/** Read the two mounted tools' drawings for this exact cylinder ID. An absent drawing leaves that hand idle. */
+/** Read the two mounted tools' drawings for this exact cylinder ID. An absent drawing leaves that hand idle.
+ * Grasp coefficients always come from the editor's shared values, never from per-tool Lab copies. */
 export function readLabToolPaths(targetId: string, mounted: [string, string], editorCoefficients: RamenGraspCoefficients,
   storage: Pick<Storage, 'getItem'> = localStorage): Partial<Record<HandSide, LabToolPath>> {
   const saved = parseMap(storage, DRAWINGS_KEY);
   const drawings = objectMap(saved.drawings);
   const sections = parseMap(storage, SETTINGS_KEY);
-  const grasps = parseMap(storage, GRASPS_KEY);
   const preferredProject = typeof saved.project === 'string' ? saved.project : '';
   const templates = objectMap(saved.pathTemplates), overrides = objectMap(saved.pathOverrides);
   const toolPaths = objectMap(saved.toolPaths);
@@ -101,7 +93,7 @@ export function readLabToolPaths(targetId: string, mounted: [string, string], ed
         ? { center: source.center, radius: source.radius, planeY: source.planeY,
           ...(finiteVector(source.far, 2) && finiteVector(source.up, 2) ? { far: source.far, up: source.up,
             boxAligned: source.boxAligned === true } : {}) } : null,
-      stepping: stepping(savedStepping), coefficients: coefficients(grasps[toolId], editorCoefficients[side]),
+      stepping: stepping(savedStepping), coefficients: editorCoefficients[side],
     };
   }
   return result;
