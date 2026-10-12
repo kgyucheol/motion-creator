@@ -75,6 +75,8 @@ export type Keyframe = {
   pins: string[];
   angle_pins?: string[];
   samples?: number[][];
+  /** Clip only: seconds to travel from the previous pose into this clip's first sample (automatic when unset). */
+  transition?: number;
   grasp?: TwoHandGrasp;
   interaction?: ToolInteraction;
   generated_transition?: boolean;
@@ -182,4 +184,29 @@ export function mergeMotionClips(keyframes: Keyframe[], index: number) {
   const merged: Keyframe = { ...first, duration: first.duration + second.duration, pins: [],
     samples: [...first.samples, ...(shared ? second.samples.slice(1) : second.samples)] };
   return { keyframes: [...keyframes.slice(0, index), merged, ...keyframes.slice(index + 2)], index };
+}
+
+/**
+ * Replace clip `index` with `count` editable pose keyframes taken at evenly spaced samples (first and last included).
+ * Travel times add up to the clip's play time, so an unedited result takes as long as the clip did. The first pose
+ * continues from the previous item: a shared boundary needs only the minimum time, otherwise the usual smooth time.
+ */
+export function convertClipToPoses(keyframes: Keyframe[], index: number, count: number, pins: string[]) {
+  const clip = keyframes[index];
+  const samples = clip?.samples;
+  if (!samples) throw new Error('가져온 모션 클립만 키프레임으로 변환할 수 있습니다.');
+  if (!Number.isInteger(count) || count < 2 || count > samples.length)
+    throw new Error(`키프레임 수는 2~${samples.length} 사이여야 합니다.`);
+  if (keyframes.length - 1 + count > 100) throw new Error('키프레임은 최대 100개입니다.');
+  const picks = Array.from({ length: count }, (_, i) => Math.round(i * (samples.length - 1) / (count - 1)));
+  const previous = keyframes[index - 1];
+  const previousEnd = previous ? (previous.samples ? previous.samples.at(-1)! : previous.qpos) : undefined;
+  const joined = !!previousEnd && previousEnd.every((value, i) => value === samples[0][i]);
+  const travel = Math.min(60, Math.max(.1, clip.duration / (count - 1)));
+  const poses: Keyframe[] = picks.map((pick, i) => ({
+    name: i === 0 ? `${clip.name} 시작` : i === count - 1 ? `${clip.name} 끝` : `${clip.name} ${i + 1}`,
+    duration: i > 0 ? travel : !previousEnd || joined ? .1 : clip.transition ?? smoothTransitionDuration({ qpos: previousEnd } as Keyframe, { qpos: samples[0] } as Keyframe),
+    qpos: [...samples[pick]], pins: [...pins], angle_pins: [],
+  }));
+  return { keyframes: [...keyframes.slice(0, index), ...poses, ...keyframes.slice(index + 1)], index };
 }

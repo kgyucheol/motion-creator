@@ -36,3 +36,21 @@ test('merging undoes a split', async () => {
   assert.deepEqual(merged[0].samples, original.samples);
   assert.ok(Math.abs(merged[0].duration - 10) < 1e-9);
 });
+
+test('converting a clip yields poses whose travel time matches the clip', async () => {
+  const { convertClipToPoses } = await import('../lib/keyframes.ts');
+  const { keyframes } = convertClipToPoses([clip(11, 10)], 0, 3, ['left_foot']);
+  assert.equal(keyframes.length, 3);
+  assert.deepEqual(keyframes.map(frame => frame.qpos[0]), [0, 5, 10]);
+  assert.ok(keyframes.every(frame => !frame.samples && frame.pins[0] === 'left_foot'));
+  assert.ok(Math.abs(keyframes[1].duration + keyframes[2].duration - 10) < 1e-9);
+});
+
+test('a converted clip after a split neighbour keeps the minimum entry time', async () => {
+  const { convertClipToPoses } = await import('../lib/keyframes.ts');
+  const { keyframes } = splitMotionClip([clip(11, 10)], 0, 4);
+  const converted = convertClipToPoses(keyframes, 1, 2, []).keyframes;
+  assert.equal(converted.length, 3);
+  assert.equal(converted[1].duration, .1);
+  assert.deepEqual(converted[1].qpos, [4]);
+});

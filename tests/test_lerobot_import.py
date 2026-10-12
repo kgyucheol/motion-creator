@@ -70,9 +70,43 @@ def test_split_clips_play_like_the_original(robot):
     assert np.all(np.diff(b['time']) > 0)
 
 
-def test_clips_cannot_mix_with_pose_keyframes(robot):
+def test_clips_mix_with_pose_keyframes_but_stay_unpinned(robot):
     from motioncreator.motion import new_project, validate_project
     split = split_project(robot, 4)
     split['keyframes'].append(new_project(robot)['keyframes'][0])
+    validate_project(robot, split)
+    split['keyframes'][0]['pins'] = ['left_foot']
     with pytest.raises(ValueError):
         validate_project(robot, split)
+
+
+def clip_pose_project(robot):
+    """clip A | pose (edited) | clip B"""
+    from motioncreator.motion import FEET
+    project = split_project(robot, 4)
+    a, b = project['keyframes']
+    edited = {'name': 'edit', 'duration': 1., 'qpos': list(b['qpos']), 'pins': list(FEET), 'angle_pins': []}
+    edited['qpos'][7 + 7 + 15] += 0.4   # left shoulder pitch (qpos index 7 + joint 15)
+    project['keyframes'] = [a, edited, b]
+    return project
+
+
+def test_clip_pose_clip_blends_into_the_next_clip(robot):
+    from motioncreator.motion import compile_motion, validate_project
+    project = clip_pose_project(robot)
+    validate_project(robot, project)
+    motion = compile_motion(robot, project, 30)
+    times, q = np.asarray(motion['time']), np.asarray(motion['qpos'])
+    assert np.all(np.diff(times) > 0)
+    assert np.allclose(q[-1], project['keyframes'][2]['samples'][-1])
+    assert len(motion['keyframe_times']) == 3 and motion['keyframe_times'] == sorted(motion['keyframe_times'])
+    # the edited pose is actually visited on the way
+    assert np.abs(q[:, 7 + 15 + 7] - project['keyframes'][2]['qpos'][7 + 15 + 7]).max() > 0.3
+
+
+def test_pose_then_clip_uses_the_clip_transition_time(robot):
+    from motioncreator.motion import compile_motion
+    project = clip_pose_project(robot)
+    short = compile_motion(robot, {**project, 'keyframes': [*project['keyframes'][:2], {**project['keyframes'][2], 'transition': 0.5}]}, 30)
+    long = compile_motion(robot, {**project, 'keyframes': [*project['keyframes'][:2], {**project['keyframes'][2], 'transition': 2.0}]}, 30)
+    assert abs((long['time'][-1] - short['time'][-1]) - 1.5) < 2 / 30

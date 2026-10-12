@@ -409,7 +409,7 @@ def preview(payload: ProjectInput):
     def run():
         motion = compile_motion(robot, payload.project, min(payload.fps, 30))
         return {'time': motion['time'].tolist(), 'states': [robot.state(q) for q in motion['qpos']],
-                'max_pin_error_mm': motion['max_pin_error_mm']}
+                'max_pin_error_mm': motion['max_pin_error_mm'], 'keyframe_times': motion.get('keyframe_times')}
     return checked(run)
 
 
@@ -445,7 +445,7 @@ async def preview_stream(websocket: WebSocket):
     def compile_preview():
         try:
             motion = compile_motion(active_robot, project, fps, on_segment=emit)
-            packet = {'type': 'done', 'max_pin_error_mm': float(motion['max_pin_error_mm'])}
+            packet = {'type': 'done', 'max_pin_error_mm': float(motion['max_pin_error_mm']), 'keyframe_times': motion.get('keyframe_times')}
         except InterruptedError:
             return
         except Exception as exc:

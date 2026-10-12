@@ -171,8 +171,6 @@ def validate_project(robot: Robot, project):
     frames = project.get('keyframes', [])
     if not 1 <= len(frames) <= MAX_KEYFRAMES:
         raise ValueError(f'A project needs 1–{MAX_KEYFRAMES} keyframes')
-    if any(frame.get('samples') is not None for frame in frames) and not all(frame.get('samples') is not None for frame in frames):
-        raise ValueError('Imported motion clips cannot be mixed with pose keyframes')
     total = 0.
     for frame in frames:
         if not isinstance(frame.get('name'), str):
@@ -197,6 +195,14 @@ def validate_project(robot: Robot, project):
             if frame.get('angle_pins'):
                 raise ValueError('Motion clips cannot use angle pins until they are split into keyframes')
         total += duration
+        transition = frame.get('transition')
+        if transition is not None:
+            if frame.get('samples') is None:
+                raise ValueError('Only motion clips take a transition time')
+            transition = float(transition)
+            if not np.isfinite(transition) or not .1 <= transition <= 60:
+                raise ValueError('Clip transition times must be 0.1–60 seconds')
+            total += transition
         if any(k not in HANDLES for k in frame.get('pins', [])):
             raise ValueError('Unknown pinned handle')
         if any(k not in ANGLE_LOCKABLE for k in frame.get('angle_pins', [])):
@@ -528,21 +534,91 @@ def compile_motion_clip(robot: Robot, frame, fps):
     return motion_result(robot, qpos, times, contacts, fps)
 
 
-def compile_motion_clips(robot: Robot, frames, fps):
-    """Play split clips back to back. Neighbouring clips share a boundary sample, so the repeated frame is dropped."""
-    qpos, times = None, None
-    for frame in frames:
-        part = compile_motion_clip(robot, frame, fps)
-        part_q, part_t = np.asarray(part['qpos']), np.asarray(part['time'])
-        if qpos is None:
-            qpos, times = part_q, part_t
+def smooth_transition_duration(qa, qb):
+    """Conservative editing speed for travelling between two poses; mirrors the editor's smoothTransitionDuration."""
+    qa, qb = np.asarray(qa, dtype=float), np.asarray(qb, dtype=float)
+    root_distance = float(np.linalg.norm(qb[:3] - qa[:3]))
+    root_dot = min(1., abs(float(np.dot(qa[3:7], qb[3:7]))))
+    root_angle = 2 * np.arccos(root_dot)
+    joint = float(np.abs(qb[7:] - qa[7:]).max()) if len(qa) > 7 else 0.
+    seconds = max(.8, 1.875 * root_distance / .35, 1.875 * root_angle / .8, 1.875 * joint / 1.)
+    return min(60., np.ceil(seconds * 10 - 1e-9) / 10)
+
+
+def _compile_with_clips(robot: Robot, project, fps, on_segment=None):
+    """Compile a project whose keyframes mix motion clips and pose keyframes.
+
+    Clips play their samples. Pose keyframes travel from wherever the previous item ended, and a clip that
+    does not start where its predecessor ended is entered through a generated pose-to-pose transition
+    (`transition` seconds, or an automatic duration). Neighbouring clips from a split share a boundary
+    sample, so the repeated frame is dropped.
+    """
+    frames = project['keyframes']
+    qpos, times, contacts, pin_errors, marks = [], [], [], [], []
+    now = 0.
+
+    def run_poses(run, skip_first):
+        """Append a pose-only compile of `run`; with skip_first its first frame repeats the previous end."""
+        nonlocal now
+        wrapped = None
+        if on_segment is not None:
+            offset, dropped = now, [not skip_first]
+
+            def wrapped(ts, qs):
+                if not dropped[0]:
+                    dropped[0] = True
+                    return
+                on_segment([offset + t for t in ts], qs)
+        sub = _compile_motion(robot, {**project, 'keyframes': run}, fps, wrapped)
+        first = 1 if skip_first else 0
+        qpos.extend(sub['qpos'][first:])
+        times.extend(now + np.asarray(sub['time'][first:]))
+        contacts.extend(sub['contacts'][first:])
+        pin_errors.extend([sub['max_pin_error_mm']])
+        start = now
+        now = start + float(sub['time'][-1])
+        return sub, start
+
+    index = 0
+    while index < len(frames):
+        frame = frames[index]
+        end = qpos[-1] if qpos else None
+        if frame.get('samples') is None:
+            stop = index
+            while stop < len(frames) and frames[stop].get('samples') is None:
+                stop += 1
+            run = [dict(item) for item in frames[index:stop]]
+            if end is not None:
+                run.insert(0, {'name': '_start', 'qpos': np.asarray(end).tolist(), 'duration': 1., 'pins': [], 'angle_pins': []})
+            sub, start = run_poses(run, end is not None)
+            arrivals = sub['keyframe_times'][1:] if end is not None else sub['keyframe_times']
+            marks.extend(start + t for t in arrivals)
+            index = stop
             continue
-        if np.dot(qpos[-1, 3:7], part_q[0, 3:7]) < 0:
-            part_q = part_q.copy()
-            part_q[:, 3:7] *= -1
-        qpos = np.concatenate([qpos, part_q[1:]])
-        times = np.concatenate([times, times[-1] + part_t[1:]])
-    return motion_result(robot, qpos, times, np.zeros((len(qpos), len(FEET)), dtype=bool), fps)
+        source = np.stack([robot.validate_q(sample) for sample in frame['samples']])
+        for k in range(1, len(source)):
+            if np.dot(source[k - 1, 3:7], source[k, 3:7]) < 0:
+                source[k, 3:7] *= -1
+        if end is not None:
+            if np.dot(end[3:7], source[0, 3:7]) < 0:
+                source[:, 3:7] *= -1
+            if not np.allclose(end, source[0], atol=1e-6, rtol=0):
+                transition = frame.get('transition')
+                run = [{'name': '_start', 'qpos': np.asarray(end).tolist(), 'duration': 1., 'pins': [], 'angle_pins': []},
+                       {'name': '_enter', 'qpos': source[0].tolist(), 'pins': [], 'angle_pins': [],
+                        'duration': float(transition) if transition is not None else smooth_transition_duration(end, source[0])}]
+                run_poses(run, True)
+        marks.append(now)
+        part = compile_motion_clip(robot, {**frame, 'samples': source.tolist(), 'qpos': source[0].tolist()}, fps)
+        first = 0 if end is None else 1
+        qpos.extend(part['qpos'][first:])
+        times.extend(now + np.asarray(part['time'][first:]))
+        contacts.extend(np.zeros((len(part['time']) - first, len(FEET)), dtype=bool))
+        if on_segment is not None:
+            on_segment((now + np.asarray(part['time'][first:])).tolist(), part['qpos'][first:])
+        now += float(part['time'][-1])
+        index += 1
+    return {**motion_result(robot, qpos, times, contacts, fps, pin_errors), 'keyframe_times': marks}
 
 
 _COMPILE_CACHE = OrderedDict()
@@ -758,11 +834,8 @@ def _compile_motion(robot: Robot, project, fps, on_segment=None):
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
     frames = project['keyframes']
-    if frames[0].get('samples') is not None:
-        result = compile_motion_clips(robot, frames, fps)
-        if on_segment is not None:
-            on_segment(result['time'].tolist(), result['qpos'])
-        return result
+    if any(frame.get('samples') is not None for frame in frames):
+        return _compile_with_clips(robot, project, fps, on_segment)
     poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
     if on_segment is not None:
         on_segment([0.], poses)
@@ -778,6 +851,7 @@ def _compile_motion(robot: Robot, project, fps, on_segment=None):
         endpoints.append((qa, qb))
         previous = qb
     elapsed = 0.
+    keyframe_times = [0.]
     for segment_poses, segment_pin_errors, segment_contact, duration in _compile_segments(robot, frames, endpoints, fps):
         for i, q in enumerate(segment_poses, start=1):
             poses.append(q)
@@ -787,7 +861,8 @@ def _compile_motion(robot: Robot, project, fps, on_segment=None):
         if on_segment is not None:
             on_segment([elapsed + i / fps for i in range(1, len(segment_poses) + 1)], segment_poses)
         elapsed += duration
-    return motion_result(robot, poses, times, contacts, fps, pin_errors)
+        keyframe_times.append(elapsed)
+    return {**motion_result(robot, poses, times, contacts, fps, pin_errors), 'keyframe_times': keyframe_times}
 
 
 def _existing_project_folder(root_folder, project_id):
