@@ -6,7 +6,7 @@ import { candidateRamenGraspPoints, DEFAULT_RAMEN_GRASP_COEFFICIENTS,
 const DRAWINGS_KEY = 'motioncreator-cylinder-lab-v2';
 const SETTINGS_KEY = 'motioncreator-cylinder-lab-tool-settings-v1';
 export type HandSide = 'left' | 'right';
-export type LabPathSource = { center: number[]; radius: number; planeY: number; far?: number[]; up?: number[]; boxAligned?: boolean };
+export type LabPathSource = { center: number[]; radius: number; planeY: number; far?: number[]; up?: number[]; boxAligned?: boolean; grasp?: number[] };
 export type LabToolPath = { side: HandSide; toolId: string; projectName: string; points: DrawnPoint[]; flip: boolean;
   source: LabPathSource | null; stepping: DrawnStepping; coefficients: GraspPointCoefficients };
 export type ToolPose = { position: number[]; quaternion_xyzw: number[] };
@@ -92,7 +92,8 @@ export function readLabToolPaths(targetId: string, mounted: [string, string], ed
         typeof source.planeY === 'number' && Number.isFinite(source.planeY)
         ? { center: source.center, radius: source.radius, planeY: source.planeY,
           ...(finiteVector(source.far, 2) && finiteVector(source.up, 2) ? { far: source.far, up: source.up,
-            boxAligned: source.boxAligned === true } : {}) } : null,
+            boxAligned: source.boxAligned === true } : {}),
+          ...(finiteVector(source.grasp, 2) ? { grasp: source.grasp } : {}) } : null,
       stepping: stepping(savedStepping), coefficients: editorCoefficients[side],
     };
   }
@@ -142,8 +143,9 @@ export function buildLabPathPreview(target: SceneObject, robotPosition: number[]
             + (dx * sourceUp[0] + dz * sourceUp[1]) * targetUp[1]]
         : [target.position[0] + dx, target.position[2] + dz];
     };
-    // The drawing is relative to its first point: move the whole path so that point lands on the editor's grasp point.
-    const [firstX, firstZ] = placeOnTarget(waypoints[0]);
+    // The drawing is relative to the grasp point it was drawn against (the first point for older drawings):
+    // move the whole path so that reference lands on the editor's grasp point.
+    const [firstX, firstZ] = placeOnTarget({ tcp: path.source.grasp ?? waypoints[0].tcp });
     const shift = [grasp[side][0] - firstX, grasp[side][2] - firstZ];
     const points: ToolPathPoint[] = [{ time: 0, position: grasp[side], quaternion_xyzw: grasp.orientation[side],
       label: '파지점', anchor: true }];

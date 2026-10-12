@@ -21,11 +21,11 @@ type Stored = { project?: string; mode?: string; params?: Record<string, number>
   selectedTool?: string;
   legacyDrawingTool?: string;
   drawings?: Record<string, { points: DrawnPoint[]; flip: boolean; source?: { center: number[]; radius: number; planeY: number;
-    far?: number[]; up?: number[]; boxAligned?: boolean } }>;
+    far?: number[]; up?: number[]; boxAligned?: boolean; grasp?: number[] } }>;
   pathTemplates?: Record<string, string>;
   pathOverrides?: Record<string, boolean>;
   toolPaths?: Record<string, { points: DrawnPoint[]; flip: boolean; source: { center: number[]; radius: number;
-    planeY: number; far: number[]; up: number[]; boxAligned: boolean }; origin?: { project: string; target: string } }>;
+    planeY: number; far: number[]; up: number[]; boxAligned: boolean; grasp?: number[] }; origin?: { project: string; target: string } }>;
   physics?: { material?: string; softMm?: number; scope?: string; shape?: string; force?: number; tracking?: number;
     muCylinder?: number; muBlade?: number; muWall?: number; rolling?: number; mass?: string } };
 const $ = <T = HTMLElement>(id: string) => document.getElementById(id) as unknown as T;
@@ -184,13 +184,18 @@ function restoreSections() {
   for (const id of ['material', 'soft-scope']) input(id).dispatchEvent(new Event('change'));
   if (Object.keys(defaults).length) renderParams({ ...defaults, ...saved.auto } as Record<string, number>);
 }
+/** The grasp point the path was drawn against; the editor re-anchors the whole path from it. */
+function referenceGrasp() {
+  const grasp = currentGrasp();
+  return grasp ? { grasp: [grasp.x, grasp.z] } : {};
+}
 function saveDrawing() {
   if (!scene) return;
   const saved = stored();
   const drawings = saved.drawings ?? {};
   drawings[drawKey()] = { points, flip: input('flip').value === '1', source: {
     center: [...scene.target.center], radius: scene.target.radius, planeY: scene.plane_y ?? 0,
-    far: [...scene.frame.far], up: [...scene.frame.up], boxAligned: !!scene.box,
+    far: [...scene.frame.far], up: [...scene.frame.up], boxAligned: !!scene.box, ...referenceGrasp(),
   } };
   if (usingSharedPath) {
     remember({ drawings, pathOverrides: { ...saved.pathOverrides, [drawKey()]: true } });
@@ -252,7 +257,8 @@ function sharePath() {
   delete overrides[drawKey()];
   remember({ toolPaths: { ...saved.toolPaths, [activeToolId]: { points: structuredClone(points),
     flip: input('flip').value === '1', source: { center: [...scene.target.center], radius: scene.target.radius,
-      planeY: scene.plane_y ?? 0, far: [...scene.frame.far], up: [...scene.frame.up], boxAligned: !!scene.box },
+      planeY: scene.plane_y ?? 0, far: [...scene.frame.far], up: [...scene.frame.up], boxAligned: !!scene.box,
+      ...referenceGrasp() },
     origin: { project: projectName, target: scene.circles.find(circle => circle.id === scene!.target_id)?.name ?? scene.target_id } } },
     pathOverrides: overrides });
   usingSharedPath = true;
