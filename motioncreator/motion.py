@@ -171,8 +171,8 @@ def validate_project(robot: Robot, project):
     frames = project.get('keyframes', [])
     if not 1 <= len(frames) <= MAX_KEYFRAMES:
         raise ValueError(f'A project needs 1–{MAX_KEYFRAMES} keyframes')
-    if any(frame.get('samples') is not None for frame in frames) and not (len(frames) == 1 and frames[0].get('samples') is not None):
-        raise ValueError('An imported motion clip must be the project\'s only keyframe')
+    if any(frame.get('samples') is not None for frame in frames) and not all(frame.get('samples') is not None for frame in frames):
+        raise ValueError('Imported motion clips cannot be mixed with pose keyframes')
     total = 0.
     for frame in frames:
         if not isinstance(frame.get('name'), str):
@@ -528,6 +528,23 @@ def compile_motion_clip(robot: Robot, frame, fps):
     return motion_result(robot, qpos, times, contacts, fps)
 
 
+def compile_motion_clips(robot: Robot, frames, fps):
+    """Play split clips back to back. Neighbouring clips share a boundary sample, so the repeated frame is dropped."""
+    qpos, times = None, None
+    for frame in frames:
+        part = compile_motion_clip(robot, frame, fps)
+        part_q, part_t = np.asarray(part['qpos']), np.asarray(part['time'])
+        if qpos is None:
+            qpos, times = part_q, part_t
+            continue
+        if np.dot(qpos[-1, 3:7], part_q[0, 3:7]) < 0:
+            part_q = part_q.copy()
+            part_q[:, 3:7] *= -1
+        qpos = np.concatenate([qpos, part_q[1:]])
+        times = np.concatenate([times, times[-1] + part_t[1:]])
+    return motion_result(robot, qpos, times, np.zeros((len(qpos), len(FEET)), dtype=bool), fps)
+
+
 _COMPILE_CACHE = OrderedDict()
 _COMPILE_CACHE_SIZE = 8
 # Frames whose joint-space blend already meets every IK goal this closely keep the blend as is.
@@ -741,8 +758,8 @@ def _compile_motion(robot: Robot, project, fps, on_segment=None):
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
     frames = project['keyframes']
-    if len(frames) == 1 and frames[0].get('samples') is not None:
-        result = compile_motion_clip(robot, frames[0], fps)
+    if frames[0].get('samples') is not None:
+        result = compile_motion_clips(robot, frames, fps)
         if on_segment is not None:
             on_segment(result['time'].tolist(), result['qpos'])
         return result
@@ -900,7 +917,7 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
                                'minimum_sole_height_mm': min(floor), 'max_joint_speed_rad_s': float(np.abs(motion['qvel'][:, 6:]).max()),
                                'self_collision_checked': False, 'dynamic_balance_checked': False},
                 'interpolation': ('imported clip resampled with piecewise-linear position/joints and root SLERP'
-                                  if project['keyframes'][0].get('samples') is not None else
+                                  if any(frame.get('samples') is not None for frame in project['keyframes']) else
                                   'quintic easing, shortest-path root SLERP, orientation-aware IK for shared pins; finite-difference velocities'),
                 'environment_file': 'environment.json', 'environment_sha256': environment_sha256,
                 'fps': fps, 'samples': len(motion['time'])}

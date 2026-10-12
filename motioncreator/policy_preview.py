@@ -67,6 +67,8 @@ def project_from_keyframe(project, start_frame_index=0):
 
 def preview_duration(project):
     frames = project['keyframes']
+    if frames[0].get('samples') is not None:
+        return sum(float(frame['duration']) for frame in frames)
     return float(frames[0]['duration']) if len(frames) == 1 else sum(float(frame['duration']) for frame in frames[1:])
 
 

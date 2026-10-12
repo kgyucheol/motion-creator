@@ -46,3 +46,33 @@ def test_robot_studio_sample(robot):
         pytest.skip('robot-studio sample missing')
     project = project_from_motion_bytes(robot, path.read_bytes(), 'data.json', 30)
     assert len(project['keyframes'][0]['samples']) == 564
+
+
+def split_project(robot, at):
+    project = project_from_motion_bytes(robot, episode(frames=11), 'x.json', 30)
+    clip = project['keyframes'][0]
+    samples, duration = clip['samples'], clip['duration']
+    halves = [samples[:at + 1], samples[at:]]
+    times = [duration * at / 10, duration * (10 - at) / 10]
+    project['keyframes'] = [{**clip, 'name': f'p{i}', 'duration': times[i], 'qpos': half[0], 'samples': half}
+                            for i, half in enumerate(halves)]
+    return project
+
+
+def test_split_clips_play_like_the_original(robot):
+    from motioncreator.motion import compile_motion, validate_project
+    whole = project_from_motion_bytes(robot, episode(frames=11), 'x.json', 30)
+    split = split_project(robot, 4)
+    validate_project(robot, split)
+    a, b = compile_motion(robot, whole, 30), compile_motion(robot, split, 30)
+    assert abs(a['time'][-1] - b['time'][-1]) < 1 / 30 + 1e-9
+    assert np.allclose(a['qpos'][-1], b['qpos'][-1])
+    assert np.all(np.diff(b['time']) > 0)
+
+
+def test_clips_cannot_mix_with_pose_keyframes(robot):
+    from motioncreator.motion import new_project, validate_project
+    split = split_project(robot, 4)
+    split['keyframes'].append(new_project(robot)['keyframes'][0])
+    with pytest.raises(ValueError):
+        validate_project(robot, split)

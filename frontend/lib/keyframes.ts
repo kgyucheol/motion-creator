@@ -141,3 +141,34 @@ export function insertSmoothTransitionFrames(keyframes: Keyframe[], firstIndex: 
   });
   return result;
 }
+
+/** Index of the source sample under `time` (project seconds) inside clip `index`, kept splittable (1..n-2). */
+export function clipSampleAtTime(keyframes: Keyframe[], index: number, time: number) {
+  const clip = keyframes[index];
+  const count = clip?.samples?.length ?? 0;
+  if (count < 3) return null;
+  const offset = keyframes.slice(0, index).reduce((sum, frame) => sum + frame.duration, 0);
+  const progress = Math.max(0, Math.min(1, (time - offset) / clip.duration));
+  return Math.max(1, Math.min(count - 2, Math.round(progress * (count - 1))));
+}
+
+/**
+ * Split an imported motion clip into two clips at `sample`. Both clips keep the shared boundary sample so playback
+ * is unchanged, and the clip's play time is divided in proportion to the source intervals each part covers.
+ */
+export function splitMotionClip(keyframes: Keyframe[], index: number, sample: number) {
+  const clip = keyframes[index];
+  const samples = clip?.samples;
+  if (!samples) throw new Error('가져온 모션 클립만 분할할 수 있습니다.');
+  if (!Number.isInteger(sample) || sample < 1 || sample > samples.length - 2)
+    throw new Error(`분할 프레임은 1~${samples.length - 2} 사이여야 합니다.`);
+  if (keyframes.length >= 100) throw new Error('키프레임은 최대 100개입니다.');
+  const intervals = samples.length - 1;
+  const parts = [samples.slice(0, sample + 1), samples.slice(sample)];
+  const durations = [clip.duration * sample / intervals, clip.duration * (intervals - sample) / intervals];
+  if (durations.some(value => value < 1 / 120)) throw new Error('분할한 구간의 재생 시간이 너무 짧습니다.');
+  const halves: Keyframe[] = parts.map((part, side) => ({
+    name: `${clip.name} ${side + 1}`, duration: durations[side], qpos: [...part[0]], pins: [], samples: part,
+  }));
+  return { keyframes: [...keyframes.slice(0, index), ...halves, ...keyframes.slice(index + 1)], index };
+}
