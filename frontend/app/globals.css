@@ -62,7 +62,17 @@
 .transport-selects{display:flex;gap:6px;align-items:center}.transport-selects label{flex:1;min-width:0}.transport-selects select{width:100%}
 .transport select{color-scheme:dark;background:#101820}.transport select option{background:#101820;color:#dde8f1}
 
-.clip-tools{display:flex;flex-direction:column;gap:12px}.clip-tools .tool-block .inspector-label{margin:0 0 5px}
-.clip-tools .tool-row{display:flex;align-items:center;gap:8px}.clip-tools .tool-row input{width:64px;flex:none;text-align:center}
-.clip-tools .tool-row button{margin-left:auto;flex:none}.clip-tools .tool-unit{font-size:11px;color:#73889b;white-space:nowrap}
-.clip-tools .wide{margin:0}.right-panel .hint b{color:#a8dcc6;font-weight:600}
+
+.editor{grid-template-rows:65px minmax(440px,1fr) 225px 30px}
+@media(min-width:851px){.editor{grid-template-rows:65px minmax(440px,1fr) 250px 30px;min-height:795px}}
+.keyframe-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-top:10px;min-height:34px}
+.keyframe-toolbar .tool-group{display:flex;align-items:center;gap:6px;padding:3px 8px;border:1px solid #2b3846;border-radius:6px;background:#121b24}
+.keyframe-toolbar .tool-label{font-size:11px;font-weight:650;color:#9fb3c4;letter-spacing:.5px}
+.keyframe-toolbar .tool-chip{font-size:11px;padding:3px 7px;border-radius:4px;background:#263a33;border:1px solid #3b5446;color:#98baa9;white-space:nowrap}
+.keyframe-toolbar .tool-chip.clip{background:#2c3550;border-color:#47557f;color:#a9b9ee}
+.keyframe-toolbar .tool-name{width:150px;font-size:12px;padding:4px 7px;background:#101820}
+.keyframe-toolbar label{display:flex;align-items:center;gap:5px;font-size:11px;color:#8ea3b5;white-space:nowrap}
+.keyframe-toolbar input[type=number]{width:56px;font-size:11px;padding:4px;text-align:center}
+.keyframe-toolbar button{min-height:26px;padding:3px 9px;font-size:11px;gap:5px}
+.keyframe-toolbar button[title="이전으로 이동"],.keyframe-toolbar button[title="다음으로 이동"],.keyframe-toolbar button[title="키프레임 삭제"]{padding:3px 6px;border:0;background:transparent}
+.keyframe-toolbar .tool-unit{font-size:11px;color:#73889b}.keyframe-toolbar .tool-hint{font-size:11px;color:#6d8294}
