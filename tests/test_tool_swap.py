@@ -45,7 +45,8 @@ def test_parse_tools_rejects_unknown_ids():
 
 
 @pytest.mark.parametrize('tools', [('nse_scoop', 'nse_spatula'), ('nse_spatula', 'nse_scoop'), ('scoop', 'scoop'),
-                                   ('end_support', 'scoop'), ('nse_scoop', 'end_support')])
+                                   ('end_support', 'scoop'), ('nse_scoop', 'end_support'),
+                                   ('rubber_hand', 'rubber_hand'), ('rubber_hand', 'nse_spatula')])
 def test_any_tool_pair_keeps_the_joint_layout_and_supports_ik(tools):
     stock = Robot('g1-tools', DEFAULT_TOOLS)
     robot = Robot('g1-tools', tools)
@@ -118,3 +119,11 @@ def test_tool_endpoints_swap_the_robot_and_refuse_bad_requests(monkeypatch):
     assert os.environ['MOTIONCREATOR_TOOLS'] == 'nse_scoop:nse_spatula'
     monkeypatch.setattr(server, 'robot', Robot('g1'))
     assert client.post('/api/tools', json={'left': 'scoop', 'right': 'scoop'}).status_code == 409
+
+
+def test_rubber_hand_tool_matches_the_stock_g1_hand():
+    base, hands = Robot('g1'), Robot('g1-tools', ('rubber_hand', 'rubber_hand'))
+    for side in ('left', 'right'):
+        np.testing.assert_allclose(hands.point(hands.data(hands.home), f'{side}_hand')[0],
+                                   base.point(base.data(base.home), f'{side}_hand')[0], atol=2e-5)
+    assert hands.model.nq == base.model.nq

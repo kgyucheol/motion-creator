@@ -12,6 +12,7 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 URDF = ROOT / 'assets/g1_scoop_endsupport/g1_29dof_rev_1_0_scoop_endsupport.urdf'
 NSE_ROOT = ROOT / 'assets/tools'
+G1_MESHES = ROOT / 'assets/g1/meshes'
 GENERATED_ROOT = NSE_ROOT / '.generated'
 FLANGE_X = .0415  # wrist flange / hand frame, same attach point as the stock hand
 # (left, right) tools of the editor model; the original URDF carries the scoop on the right wrist
@@ -21,6 +22,8 @@ DEFAULT_TOOLS = ('scoop', 'end_support')
 TOOLS = {
     'scoop': {'label': '주걱 (기본)', 'native': 'right', 'kind': 'legacy'},
     'end_support': {'label': '받침 (기본)', 'native': 'left', 'kind': 'legacy'},
+    # The stock G1 hand (rubber hand), authored for the left wrist and swapped for the real right mesh on the right.
+    'rubber_hand': {'label': 'G1 기본 손 (rubber hand)', 'native': 'left', 'kind': 'rubber'},
     'nse_scoop': {'label': 'NSE 주걱', 'native': 'left', 'kind': 'nse', 'urdf': 'nse_left_scoop.urdf'},
     'nse_spatula': {'label': 'NSE 스패출러', 'native': 'right', 'kind': 'nse', 'urdf': 'nse_right_spatula.urdf'},
 }
@@ -114,6 +117,19 @@ def _tool_template(tool, source):
     """Return (links, joints, mount_joint_name, tcp_link, tcp_xyz, mesh_files) authored for the tool's native hand."""
     spec = TOOLS[tool]
     native = spec['native']
+    if spec['kind'] == 'rubber':
+        # Mass and centre come from the stock model: its wrist-yaw body carries the rubber hand, 0.1700 kg more than
+        # the bare URDF wrist link. The inertia diagonal is a box estimate for a hand of that size.
+        link = ET.fromstring(
+            f'<link name="{native}_rubber_hand"><inertial><origin xyz="0.0536 -0.003 0.0022" rpy="0 0 0"/><mass value="0.17"/>'
+            '<inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0004" iyz="0" izz="0.0004"/></inertial>'
+            '<visual><origin xyz="0 0 0" rpy="0 0 0"/><geometry><mesh filename="meshes/left_rubber_hand.STL"/></geometry>'
+            '<material name="rubber_grey"><color rgba="0.7 0.7 0.7 1"/></material></visual>'
+            '<collision><origin xyz="0 0 0" rpy="0 0 0"/><geometry><mesh filename="meshes/left_rubber_hand.STL"/></geometry></collision></link>')
+        mount = ET.fromstring(
+            f'<joint name="{native}_rubber_hand_joint" type="fixed"><parent link="{native}_wrist_yaw_link"/>'
+            f'<child link="{native}_rubber_hand"/><origin xyz="{FLANGE_X} 0.003 0" rpy="0 0 0"/></joint>')
+        return [link], [mount], f'{native}_rubber_hand_joint', f'{native}_rubber_hand', [.055 - FLANGE_X, -.003, 0]
     if spec['kind'] == 'legacy':
         prefix = f'{native}_{tool}'
         links = [copy.deepcopy(link) for link in source.findall('link') if link.get('name') in (f'{prefix}_link', f'{prefix}_tcp')]
@@ -168,9 +184,13 @@ def _custom_tool_source(tools):
                 parent.set('link', f'{side}_wrist_yaw_link')
         for number, mesh in enumerate(m for link in links for m in link.iter('mesh')):
             name = Path(mesh.get('filename')).name
+            if TOOLS[tool]['kind'] == 'rubber' and mirrored:  # use the stock mesh of this hand instead of mirroring the other
+                name = name.replace(native, side)
+                mesh.set('scale', '1 1 1')
             origin = Path(mesh.get('filename').replace('package://nse_gripper/', ''))
             target = f'{tool}_{side}_{"col_" if "collision" in origin.parts else ""}{name}'
-            sourcefile = URDF.parent / 'meshes' / name if TOOLS[tool]['kind'] == 'legacy' else NSE_ROOT / origin
+            kind = TOOLS[tool]['kind']
+            sourcefile = G1_MESHES / name if kind == 'rubber' else URDF.parent / 'meshes' / name if kind == 'legacy' else NSE_ROOT / origin
             link = meshdir / target
             if not link.exists():
                 link.symlink_to(sourcefile)
