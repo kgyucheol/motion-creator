@@ -10,7 +10,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, convertClipToPoses, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
+import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, autoSplitClip, clipSampleAtTime, convertClipToPoses, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
 import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, withLabLateralOffsets, type LabLateralOffsets, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
 import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } from '../lib/lab-grasp-group';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
@@ -1575,6 +1575,16 @@ export default function Editor() {
       setMessage(`클립을 키프레임 ${convertCount}개로 변환했습니다. 손이나 관절을 수정한 뒤 "선택 프레임에 반영"을 누르세요. 양발은 고정되어 있습니다.`);
     });
   }
+  const [autoParts, setAutoParts] = useState(6);
+  function autoSplitActiveClip() {
+    if (!project) return;
+    try {
+      const result = autoSplitClip(project.keyframes, frameIndex, autoParts);
+      checkpoint();
+      setProject({ ...project, keyframes: result.keyframes }); setFrameIndex(result.index); setTransitionSelection([]); invalidate();
+      setMessage(`동작 변화를 기준으로 클립을 ${result.points.length + 1}개로 나눴습니다. 원본 동작과 총 재생 시간은 그대로이며, 분할·합치기로 다듬을 수 있습니다.`);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+  }
   function splitActiveClip() {
     if (!project) return;
     try {
@@ -1871,6 +1881,10 @@ export default function Editor() {
             <span className="tool-unit">/ {Math.max(0, activeClipLength - 2)}</span>
             <button disabled={disabled || activeClipLength < 3} onClick={splitActiveClip} title="선택한 클립을 이 프레임에서 둘로 나눕니다. 기본값은 클립의 가운데이며, 슬라이더를 이 클립 안에 두거나 숫자를 바꿔 원하는 위치에서 자를 수 있습니다."><Scissors size={14}/> 분할</button>
             <button disabled={disabled || frameIndex >= project!.keyframes.length - 1 || !project!.keyframes[frameIndex + 1]?.samples} onClick={mergeActiveClip} title="선택한 클립을 바로 다음 클립과 하나로 합칩니다.">다음과 합치기</button></div>
+          <div className="tool-group"><span className="tool-label">자동 분할</span>
+            <NumericInput aria-label="자동 분할 최대 구간 수" min={2} max={20} step="1" disabled={disabled || activeClipLength < 5} value={autoParts} onChange={e => setAutoParts(Math.max(2, Math.min(20, Math.round(+e.target.value) || 2)))}/>
+            <span className="tool-unit">개 이하</span>
+            <button disabled={disabled || activeClipLength < 5} onClick={autoSplitActiveClip} title="멈춤 구간과 방향이 바뀌는 지점을 찾아 클립을 최대 이 개수로 나눕니다. 결과가 마음에 들지 않으면 되돌리기로 취소하세요.">자동 분할</button></div>
           <div className="tool-group"><span className="tool-label">변환</span>
             <NumericInput aria-label="변환할 키프레임 수" min={2} max={Math.max(2, activeClipLength)} step="1" disabled={disabled} value={convertCount} onChange={e => setConvertCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
             <span className="tool-unit">개</span>
