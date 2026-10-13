@@ -102,3 +102,13 @@ test('start times follow arrival semantics', async () => {
   const { keyframes } = splitMotionClip([clip(11, 10)], 0, 4);
   assert.deepEqual(keyframeStartTimes(keyframes), [0, 4]);
 });
+
+test('a pose added after a clip starts from the clip end and keeps the following time', async () => {
+  const { insertPoseAfterClip, outgoingSeconds } = await import('../lib/keyframes.ts');
+  const frames = [...splitMotionClip([clip(11, 10)], 0, 4).keyframes, pose(7, 3)];
+  const result = insertPoseAfterClip(frames, 1, ['left_foot']);
+  assert.equal(result.keyframes.length, 4);
+  assert.deepEqual(result.keyframes[2].qpos, [10]);
+  assert.equal(outgoingSeconds(result.keyframes, 1).seconds, .1);
+  assert.equal(outgoingSeconds(result.keyframes, 2).seconds, 3);
+});

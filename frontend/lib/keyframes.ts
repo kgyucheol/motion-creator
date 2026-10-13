@@ -314,3 +314,15 @@ export function keyframeStartTimes(keyframes: Keyframe[], fps = 30) {
   });
   return starts;
 }
+
+/**
+ * Insert an editable pose right after clip `index`, starting from the clip's last sample. It takes the minimum time to
+ * leave the clip, and the clip's old time to whatever followed is now the pose's time to it.
+ */
+export function insertPoseAfterClip(keyframes: Keyframe[], index: number, pins: string[]) {
+  const clip = keyframes[index];
+  if (!clip?.samples) throw new Error('클립 뒤에만 이 방식으로 자세를 추가할 수 있습니다.');
+  if (keyframes.length >= 100) throw new Error('키프레임은 최대 100개입니다.');
+  const pose: Keyframe = { name: `${clip.name} 이후 자세`, duration: .1, qpos: [...clip.samples[clip.samples.length - 1]], pins: [...pins], angle_pins: [] };
+  return { keyframes: [...keyframes.slice(0, index + 1), pose, ...keyframes.slice(index + 1)], index: index + 1 };
+}

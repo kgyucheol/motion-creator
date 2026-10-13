@@ -10,7 +10,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeKeepingTimes, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, convertClipToPoses, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
+import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, convertClipToPoses, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
 import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, withLabLateralOffsets, type LabLateralOffsets, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
 import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } from '../lib/lab-grasp-group';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
@@ -1163,6 +1163,20 @@ export default function Editor() {
   }
   function addFrame() {
     if (!project || !state || !project.keyframes[frameIndex]) return;
+    if (project.keyframes[frameIndex].samples) {
+      let added;
+      try { added = insertPoseAfterClip(project.keyframes, frameIndex, feet); }
+      catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); return; }
+      const pose = added.keyframes[added.index];
+      void run(async () => {
+        const restored = await api<PoseState>('pose', { qpos: pose.qpos });
+        checkpoint();
+        setProject({ ...project, keyframes: added.keyframes }); setFrameIndex(added.index); setTransitionSelection([]);
+        applyState(restored); setPins([...pose.pins]); setAnglePins([]); setPoseDirty(false); setInfo(null); invalidate();
+        setMessage('클립 뒤에 편집용 자세를 추가했습니다. 손이나 관절을 수정한 뒤 "선택 프레임에 반영"을 누르세요.');
+      });
+      return;
+    }
     const duplicated = duplicateKeyframeKeepingTimes(project.keyframes, frameIndex);
     const source = project.keyframes[frameIndex];
     const finish = (restored?: PoseState) => {
@@ -1836,7 +1850,7 @@ export default function Editor() {
       </details>
     </aside>
     <section className="timeline">
-      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{clipTotal ? `${clipTotal} clip · ${(project?.keyframes.length ?? 0) - clipTotal} poses` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div>{stage && project?.keyframes[stage.index] && <span className="stage-now" role="status"><b>{String(stage.index + 1).padStart(2, '0')} / {String(project.keyframes.length).padStart(2, '0')}</b> {project.keyframes[stage.index].name}<small>{project.keyframes[stage.index].samples ? '클립' : '포즈'} · {playing ? '재생 중' : '일시정지'} · 전체 {Math.round(stage.overall * 100)}%</small><i><u style={{ width: `${stage.overall * 100}%` }}/></i></span>}<div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<small className="transition-hint">{transitionSelection.length === 2 ? `${Math.min(...transitionSelection) + 1}–${Math.max(...transitionSelection) + 1}번 선택` : transitionSelection.length === 1 ? '두 번째 프레임 선택' : '프레임 2개 선택'}</small><button disabled={disabled || transitionSelection.length !== 2 || poseDirty || transitionHasClip} onClick={createSmoothTransition} title="두 키프레임 사이에 편집 가능한 중간 자세를 생성합니다. 파지·도구 상호작용이 포함된 구간과 장애물 회피는 아직 지원하지 않습니다.">중간 키프레임 생성</button><button disabled={disabled || !activeFrame || activeIsClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || activeIsClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
+      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{clipTotal ? `${clipTotal} clip · ${(project?.keyframes.length ?? 0) - clipTotal} poses` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div>{stage && project?.keyframes[stage.index] && <span className="stage-now" role="status"><b>{String(stage.index + 1).padStart(2, '0')} / {String(project.keyframes.length).padStart(2, '0')}</b> {project.keyframes[stage.index].name}<small>{project.keyframes[stage.index].samples ? '클립' : '포즈'} · {playing ? '재생 중' : '일시정지'} · 전체 {Math.round(stage.overall * 100)}%</small><i><u style={{ width: `${stage.overall * 100}%` }}/></i></span>}<div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<small className="transition-hint">{transitionSelection.length === 2 ? `${Math.min(...transitionSelection) + 1}–${Math.max(...transitionSelection) + 1}번 선택` : transitionSelection.length === 1 ? '두 번째 프레임 선택' : '프레임 2개 선택'}</small><button disabled={disabled || transitionSelection.length !== 2 || poseDirty || transitionHasClip} onClick={createSmoothTransition} title="두 키프레임 사이에 편집 가능한 중간 자세를 생성합니다. 파지·도구 상호작용이 포함된 구간과 장애물 회피는 아직 지원하지 않습니다.">중간 키프레임 생성</button><button disabled={disabled || !activeFrame || activeIsClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled} className="primary" onClick={addFrame} title={activeIsClip ? "선택한 클립 바로 뒤에, 클립의 마지막 자세에서 시작하는 편집용 자세를 추가합니다." : "선택한 키프레임을 복제해 바로 다음에 추가합니다."}><Plus size={14}/>자세 추가</button></div></div>
       <div className="keyframe-toolbar">{activeFrame ? <>
         <div className="tool-group"><span className={`tool-chip ${activeIsClip ? 'clip' : ''}`}>{frameIndex + 1}번 · {activeIsClip ? `클립 ${activeClipLength}프레임` : '포즈'}</span>
           <input aria-label="키프레임 이름" className="tool-name" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/></div>
