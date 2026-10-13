@@ -76,3 +76,12 @@
 .keyframe-toolbar button{min-height:26px;padding:3px 9px;font-size:11px;gap:5px}
 .keyframe-toolbar button[title="이전으로 이동"],.keyframe-toolbar button[title="다음으로 이동"],.keyframe-toolbar button[title="키프레임 삭제"]{padding:3px 6px;border:0;background:transparent}
 .keyframe-toolbar .tool-unit{font-size:11px;color:#73889b}.keyframe-toolbar .tool-hint{font-size:11px;color:#6d8294}
+
+.frame-card>*{position:relative}
+.frame-card .stage-fill{position:absolute;left:0;top:0;bottom:0;background:#f1bc6526;border-radius:4px 0 0 4px;box-shadow:inset -2px 0 0 #f1bc65;pointer-events:none;transition:width .12s linear}
+.frame-card.stage-done{background:#192b27;border-color:#2f5246}
+.frame-card.stage-done .frame-number{color:#5fae91}.frame-card.stage-done .frame-number::after{content:' ✓'}
+.timeline-header{flex-wrap:wrap}
+.timeline-title+.stage-now{display:flex;align-items:center;gap:8px;margin-right:auto;margin-left:14px;font-size:12px;color:#ffd58a;min-width:0;white-space:nowrap}
+.stage-now b{font-weight:650;font-variant-numeric:tabular-nums}.stage-now small{color:#b79a62;font-size:11px}
+.stage-now i{display:block;width:90px;height:5px;border-radius:3px;background:#3a3020;overflow:hidden}.stage-now u{display:block;height:100%;background:#f1bc65;text-decoration:none}

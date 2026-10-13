@@ -771,19 +771,25 @@ export default function Editor() {
   useEffect(() => {
     scene.current?.setLabPathPreview(labPathPreview?.targetId === selectedObjectId ? labPathPreview : null);
   }, [labPathPreview, selectedObjectId]);
-  const playbackFrame = useMemo(() => {
-    if (!preview || !project || !playing) return null;
-    // Keyframe start times follow compile_motion: each frame's duration is its travel time from the previous one.
+  // 현재 재생(또는 탐색) 위치가 속한 키프레임·클립과 그 구간의 진행률. 정지·탐색 중에도 위치를 보여 준다.
+  const stage = useMemo(() => {
+    if (!preview || !project || !(playing || sample > 0)) return null;
     // 클립이 섞인 프로젝트는 서버가 계산한 시각을 쓴다. 스트리밍 계산이 끝나기 전에는 표시하지 않는다.
     if (project.keyframes.some(frame => frame.samples) && !preview.keyframe_times) return null;
+    // 포즈 키프레임의 시작 시각은 compile_motion 규칙을 따른다: 각 프레임의 duration은 이전 프레임에서의 이동 시간이다.
     const starts = preview.keyframe_times ?? project.keyframes.reduce<number[]>((times, frame, i) =>
       [...times, i === 0 ? 0 : times[i - 1] + Math.max(1, Math.round(frame.duration * 30)) / 30], []);
-    const offset = starts[Math.min(preview.summary?.start_frame_index ?? 0, starts.length - 1)] ?? 0;
-    const time = (preview.time[Math.min(sample, preview.time.length - 1)] ?? 0) + offset + 1e-6;
+    const offset = preview.keyframe_times ? 0 : starts[Math.min(preview.summary?.start_frame_index ?? 0, starts.length - 1)] ?? 0;
+    const clock = preview.time[Math.min(sample, preview.time.length - 1)] ?? 0;
+    const time = clock + offset + 1e-6;
     let index = 0;
     while (index + 1 < starts.length && starts[index + 1] <= time) index++;
-    return index;
+    const next = starts[index + 1];
+    const progress = next === undefined ? 1 : Math.max(0, Math.min(1, (time - starts[index]) / Math.max(1e-6, next - starts[index])));
+    const total = preview.summary?.reference_seconds ?? preview.time[preview.time.length - 1] ?? 0;
+    return { index, progress, overall: total > 0 ? Math.max(0, Math.min(1, clock / total)) : 0 };
   }, [preview, project, playing, sample]);
+  const playbackFrame = stage?.index ?? null;
   useEffect(() => {
     if (playbackFrame !== null) document.querySelector(`.frame-track .frame-card[data-frame-index="${playbackFrame}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [playbackFrame]);
@@ -1825,7 +1831,7 @@ export default function Editor() {
       </details>
     </aside>
     <section className="timeline">
-      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{clipTotal ? `${clipTotal} clip · ${(project?.keyframes.length ?? 0) - clipTotal} poses` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div><div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<small className="transition-hint">{transitionSelection.length === 2 ? `${Math.min(...transitionSelection) + 1}–${Math.max(...transitionSelection) + 1}번 선택` : transitionSelection.length === 1 ? '두 번째 프레임 선택' : '프레임 2개 선택'}</small><button disabled={disabled || transitionSelection.length !== 2 || poseDirty || transitionHasClip} onClick={createSmoothTransition} title="두 키프레임 사이에 편집 가능한 중간 자세를 생성합니다. 파지·도구 상호작용이 포함된 구간과 장애물 회피는 아직 지원하지 않습니다.">중간 키프레임 생성</button><button disabled={disabled || !activeFrame || activeIsClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || activeIsClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
+      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{clipTotal ? `${clipTotal} clip · ${(project?.keyframes.length ?? 0) - clipTotal} poses` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div>{stage && project?.keyframes[stage.index] && <span className="stage-now" role="status"><b>{String(stage.index + 1).padStart(2, '0')} / {String(project.keyframes.length).padStart(2, '0')}</b> {project.keyframes[stage.index].name}<small>{project.keyframes[stage.index].samples ? '클립' : '포즈'} · {playing ? '재생 중' : '일시정지'} · 전체 {Math.round(stage.overall * 100)}%</small><i><u style={{ width: `${stage.overall * 100}%` }}/></i></span>}<div className="timeline-actions">{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<small className="transition-hint">{transitionSelection.length === 2 ? `${Math.min(...transitionSelection) + 1}–${Math.max(...transitionSelection) + 1}번 선택` : transitionSelection.length === 1 ? '두 번째 프레임 선택' : '프레임 2개 선택'}</small><button disabled={disabled || transitionSelection.length !== 2 || poseDirty || transitionHasClip} onClick={createSmoothTransition} title="두 키프레임 사이에 편집 가능한 중간 자세를 생성합니다. 파지·도구 상호작용이 포함된 구간과 장애물 회피는 아직 지원하지 않습니다.">중간 키프레임 생성</button><button disabled={disabled || !activeFrame || activeIsClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled || activeIsClip} className="primary" onClick={addFrame}><Plus size={14}/>자세 추가</button></div></div>
       <div className="keyframe-toolbar">{activeFrame ? <>
         <div className="tool-group"><span className={`tool-chip ${activeIsClip ? 'clip' : ''}`}>{frameIndex + 1}번 · {activeIsClip ? `클립 ${activeClipLength}프레임` : '포즈'}</span>
           <input aria-label="키프레임 이름" className="tool-name" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/></div>
@@ -1863,7 +1869,7 @@ export default function Editor() {
           const collapsed = !!group && collapsedLabGroups.includes(group.id);
           return <Fragment key={i}>
             {group?.start === i && <button className="lab-frame-header" disabled={disabled} onClick={() => setCollapsedLabGroups(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])} title="파지법 구간 접기/펼치기">파지법 {group.frames.length}개 {collapsed ? '▸' : '▾'}</button>}
-            {(!collapsed || group?.start === i) && <button disabled={disabled} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}><span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.lab_grasp ? '파지법 · ' : ''}{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
+            {(!collapsed || group?.start === i) && <button disabled={disabled} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${stage && i < stage.index ? 'stage-done' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}>{stage?.index === i && <i className="stage-fill" style={{ width: `${stage.progress * 100}%` }}/>}<span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.lab_grasp ? '파지법 · ' : ''}{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
           </Fragment>;
         })}</div>
       </div>
