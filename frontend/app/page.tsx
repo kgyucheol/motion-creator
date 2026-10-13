@@ -16,6 +16,8 @@ import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } 
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
+const SCENE_FORMAT = 'motioncreator.scene.v1';
+type SceneFile = { format: typeof SCENE_FORMAT; scene_objects: SceneObject[]; scene_groups?: SceneObjectGroup[] };
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; mounted_tools?: [string, string] | null; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; lab_lateral_offsets?: Record<string, LabLateralOffsets>; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
@@ -1048,8 +1050,10 @@ export default function Editor() {
     setAnglePins(values => values.includes(key) ? values.filter(value => value !== key) : [...values, key]);
     invalidate(); setPoseDirty(true);
   }
-  async function loadProject(next: Project) {
+  async function loadProject(next: Project, keepScene = false) {
     setLabPathPreview(null);
+    // 모션만 새로 가져올 때는 지금 작업 중인 맵(씬 오브젝트·그룹)을 그대로 이어 쓴다.
+    if (keepScene) next = { ...next, scene_objects: structuredClone(objects), scene_groups: structuredClone(objectGroups) };
     if (next.mounted_tools && (modelId !== 'g1-tools' || !tools
       || next.mounted_tools.some((tool, index) => tool !== tools[index]))) {
       if (modelId !== 'g1-tools') await api('model', { model_id: 'g1-tools' });
@@ -1077,6 +1081,7 @@ export default function Editor() {
     let importName = source.name;
     if (extension === '.json') {
       const parsed = JSON.parse(await source.text()) as { info?: unknown; data?: unknown; text?: { goal?: unknown } };
+      if ((parsed as { format?: unknown }).format === SCENE_FORMAT) { loadSceneFile(parsed as unknown as SceneFile, source.name); return; }
       if (!(Array.isArray(parsed.data) && parsed.info)) {
         await loadProject(parsed as unknown as Project);
         setMessage(`${source.name} 프로젝트를 불러왔습니다.`);
@@ -1093,8 +1098,27 @@ export default function Editor() {
       const failure = await response.json().catch(() => ({})) as { detail?: unknown };
       throw new Error(typeof failure.detail === 'string' ? failure.detail : `파일 불러오기 실패 (${response.status})`);
     }
-    await loadProject(await response.json() as Project);
-    setMessage(`${source.name}의 모션 프레임을 ${fps} FPS 키프레임으로 불러왔습니다.`);
+    await loadProject(await response.json() as Project, true);
+    setMessage(`${source.name}의 모션 프레임을 ${fps} FPS 키프레임으로 불러왔습니다. 맵(씬 오브젝트)은 그대로 유지했습니다.`);
+  }
+  function saveSceneFile() {
+    const scene: SceneFile = { format: SCENE_FORMAT, scene_objects: objects.filter(object => !object.ghost), scene_groups: objectGroups };
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([JSON.stringify(scene, null, 2)], { type: 'application/json' }));
+    link.download = `${(project?.display_name || project?.name || 'map').replace(/[\\/]/g, '_')}.scene.json`;
+    link.click(); URL.revokeObjectURL(link.href);
+    setMessage(`맵 ${scene.scene_objects.length}개 오브젝트를 별도 파일로 저장했습니다. 모션·로봇 정보는 들어 있지 않습니다.`);
+  }
+  function loadSceneFile(scene: SceneFile, name: string) {
+    if (!project || !Array.isArray(scene.scene_objects)) throw new Error('맵 파일 형식이 올바르지 않습니다.');
+    const nextObjects = objectsFromProject({ scene_objects: scene.scene_objects });
+    const nextGroups = Array.isArray(scene.scene_groups) ? structuredClone(scene.scene_groups) : [];
+    checkpoint();
+    setObjects(nextObjects); current.current.objects = nextObjects; selectObject(null);
+    setObjectGroups(nextGroups); current.current.objectGroups = nextGroups; setSelectedObjectGroupId(null);
+    const nextProject = { ...project, scene_objects: nextObjects, scene_groups: nextGroups };
+    setProject(nextProject); current.current.project = nextProject; changeGraspPickMode(null); invalidate();
+    setMessage(`${name} 맵을 불러왔습니다. 키프레임과 로봇 정보는 그대로입니다.`);
   }
   function editFrame(index: number, patch: Partial<Keyframe>) {
     setProject(p => p ? { ...p, keyframes: p.keyframes.map((f, i) => {
@@ -1649,7 +1673,7 @@ export default function Editor() {
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><select aria-label="로봇 모델" title="이 서버의 모델을 변경합니다. 현재 모션은 모델별로 자동 보관됩니다." disabled={disabled} value={modelId} onChange={event => void switchModel(event.target.value)}><option value="g1">G1 · 기본 손</option><option value="g1-tools">G1 그리퍼 · 툴 교환</option></select>{modelId === 'g1-tools' && tools && (['left', 'right'] as const).map((side, index) => <select key={side} className="tool-select" aria-label={side === 'left' ? '왼손 툴' : '오른손 툴'} title={`${side === 'left' ? '왼손' : '오른손'}에 끼울 툴을 고릅니다. 현재 모션은 유지되고 서버가 모델을 다시 만듭니다.`} disabled={disabled} value={tools[index]} onChange={event => void switchTool(side, event.target.value)}>{toolOptions.map(option => <option key={option.id} value={option.id}>{side === 'left' ? '왼 ' : '오른 '}{option.label}</option>)}</select>)}</div>
       <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="이름을 바꾸고 Enter를 누르면 저장된 파일 이름도 바뀝니다(기존 파일 유지). 비우면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onFocus={e => { nameOnFocus.current = project.name; e.currentTarget.select(); }} onBlur={() => void renameSavedProject()} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setProject({ ...project, name: nameOnFocus.current, name_mode: nameOnFocus.current.trim() ? 'manual' : 'auto' }); e.currentTarget.blur(); } }} onChange={e => setProject({ ...project, name: e.target.value, name_mode: e.target.value.trim() ? 'manual' : 'auto' })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
-      <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button className="wbc-link" onClick={() => location.assign('/controller')}>Task Controller</button><button className="wbc-link" onClick={() => location.assign('/cylinder-lab.html')}>Cylinder Lab</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button></div>}</div></div>
+      <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button className="wbc-link" onClick={() => location.assign('/controller')}>Task Controller</button><button className="wbc-link" onClick={() => location.assign('/cylinder-lab.html')}>Cylinder Lab</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button><button role="menuitem" onClick={() => { setSaveMenuOpen(false); saveSceneFile(); }}><Boxes size={15}/><span><b>맵만 저장</b><small>씬 오브젝트·그룹만 별도 파일로</small></span></button></div>}</div></div>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
       <input ref={assetFile} type="file" accept=".blend,.glb" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => importSceneAsset(source)); e.target.value = ''; }}/>
     </header>
