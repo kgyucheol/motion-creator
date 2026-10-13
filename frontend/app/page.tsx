@@ -10,7 +10,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, convertClipToPoses, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
+import { duplicateKeyframeKeepingTimes, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, convertClipToPoses, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
 import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, withLabLateralOffsets, type LabLateralOffsets, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
 import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } from '../lib/lab-grasp-group';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
@@ -26,6 +26,13 @@ type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: bool
 type GroupPreset = { id: string; name: string; members: string[] };
 type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; objectGroups: SceneObjectGroup[]; keyframes: Keyframe[]; frameIndex: number; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
+const formatClock = (seconds: number) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(1).padStart(4, '0')}`;
+function cardOutgoingText(keyframes: Keyframe[], index: number) {
+  const out = outgoingSeconds(keyframes, index);
+  if (out.kind === 'none') return '마지막 카드';
+  if (out.kind === 'joined') return '다음 클립과 이어짐';
+  return `다음까지 ${out.seconds === undefined ? '자동' : `${out.seconds.toFixed(1)}s`}`;
+}
 const GRASP_GHOST_ID = '__grasp_keyframe_ghost__';
 const GRASP_COEFFICIENTS_STORAGE_KEY = 'motioncreator-editor-ramen-grasp-v1';
 const labLateralKey = (targetId: string, mounted: [string, string]) => `${targetId}|${mounted.join('|')}`;
@@ -772,13 +779,11 @@ export default function Editor() {
     scene.current?.setLabPathPreview(labPathPreview?.targetId === selectedObjectId ? labPathPreview : null);
   }, [labPathPreview, selectedObjectId]);
   // 현재 재생(또는 탐색) 위치가 속한 키프레임·클립과 그 구간의 진행률. 정지·탐색 중에도 위치를 보여 준다.
+  // 카드에 표시하는 시작 시각. 서버가 계산한 값이 있으면 그것을, 없으면 같은 규칙으로 로컬에서 계산한다.
+  const cardStarts = useMemo(() => project ? keyframeStartTimes(project.keyframes) : [], [project]);
   const stage = useMemo(() => {
     if (!preview || !project || !(playing || sample > 0)) return null;
-    // 클립이 섞인 프로젝트는 서버가 계산한 시각을 쓴다. 스트리밍 계산이 끝나기 전에는 표시하지 않는다.
-    if (project.keyframes.some(frame => frame.samples) && !preview.keyframe_times) return null;
-    // 포즈 키프레임의 시작 시각은 compile_motion 규칙을 따른다: 각 프레임의 duration은 이전 프레임에서의 이동 시간이다.
-    const starts = preview.keyframe_times ?? project.keyframes.reduce<number[]>((times, frame, i) =>
-      [...times, i === 0 ? 0 : times[i - 1] + Math.max(1, Math.round(frame.duration * 30)) / 30], []);
+    const starts = preview.keyframe_times ?? cardStarts;
     const offset = preview.keyframe_times ? 0 : starts[Math.min(preview.summary?.start_frame_index ?? 0, starts.length - 1)] ?? 0;
     const clock = preview.time[Math.min(sample, preview.time.length - 1)] ?? 0;
     const time = clock + offset + 1e-6;
@@ -788,7 +793,7 @@ export default function Editor() {
     const progress = next === undefined ? 1 : Math.max(0, Math.min(1, (time - starts[index]) / Math.max(1e-6, next - starts[index])));
     const total = preview.summary?.reference_seconds ?? preview.time[preview.time.length - 1] ?? 0;
     return { index, progress, overall: total > 0 ? Math.max(0, Math.min(1, clock / total)) : 0 };
-  }, [preview, project, playing, sample]);
+  }, [preview, project, cardStarts, playing, sample]);
   const playbackFrame = stage?.index ?? null;
   useEffect(() => {
     if (playbackFrame !== null) document.querySelector(`.frame-track .frame-card[data-frame-index="${playbackFrame}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -1158,7 +1163,7 @@ export default function Editor() {
   }
   function addFrame() {
     if (!project || !state || !project.keyframes[frameIndex]) return;
-    const duplicated = duplicateKeyframeAfter(project.keyframes, frameIndex);
+    const duplicated = duplicateKeyframeKeepingTimes(project.keyframes, frameIndex);
     const source = project.keyframes[frameIndex];
     const finish = (restored?: PoseState) => {
       setProject({ ...project, keyframes: duplicated.keyframes }); setFrameIndex(duplicated.index); setTransitionSelection([]);
@@ -1835,8 +1840,17 @@ export default function Editor() {
       <div className="keyframe-toolbar">{activeFrame ? <>
         <div className="tool-group"><span className={`tool-chip ${activeIsClip ? 'clip' : ''}`}>{frameIndex + 1}번 · {activeIsClip ? `클립 ${activeClipLength}프레임` : '포즈'}</span>
           <input aria-label="키프레임 이름" className="tool-name" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/></div>
-        <div className="tool-group"><label>{activeIsClip ? '재생 시간' : '이동 시간'} <NumericInput aria-label="키프레임 이동 시간" min={activeIsClip ? 1/120 : .1} max={activeIsClip ? 600 : 60} step=".01" disabled={disabled || (!activeIsClip && frameIndex === 0)} value={activeFrame.duration} onChange={e => { const minimum = activeIsClip ? 1/120 : .1; const maximum = activeIsClip ? 600 : 60; editFrame(frameIndex, { duration: Math.max(minimum, Math.min(maximum, +e.target.value || minimum)) }); }}/>s</label>
-          <button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex-1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex-1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex-1); setTransitionSelection([]); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { const frames = [...project!.keyframes]; [frames[frameIndex+1], frames[frameIndex]] = [frames[frameIndex], frames[frameIndex+1]]; setProject({ ...project!, keyframes: frames }); setFrameIndex(frameIndex+1); setTransitionSelection([]); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: project!.keyframes.filter((_, i) => i !== frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); setTransitionSelection([]); invalidate(); }}><Trash2 size={14}/></button></div>
+        {activeIsClip && <div className="tool-group"><label title="클립 안의 원본 동작을 재생하는 시간입니다.">재생 시간 <NumericInput aria-label="클립 재생 시간" min={1/120} max={600} step=".01" disabled={disabled} value={activeFrame.duration} onChange={e => editFrame(frameIndex, { duration: Math.max(1/120, Math.min(600, +e.target.value || 1/120)) })}/>s</label></div>}
+        <div className="tool-group"><label title="이 카드의 자세에서 다음 카드의 자세까지 이동하는 시간입니다. 다음이 클립이면 비워 두어 자동 계산할 수 있습니다.">다음 카드까지 {(() => {
+          const out = outgoingSeconds(project!.keyframes, frameIndex);
+          if (out.kind === 'none') return <input className="tool-readonly" aria-label="다음 카드까지 시간" disabled value="—" readOnly title="마지막 카드는 다음 카드가 없습니다."/>;
+          if (out.kind === 'joined') return <input className="tool-readonly" aria-label="다음 카드까지 시간" disabled value="이어짐" readOnly title="다음 클립이 이 클립의 끝에서 바로 이어지므로 이동 시간이 필요 없습니다."/>;
+          if (out.kind === 'clip') return <input type="number" aria-label="다음 카드까지 시간" min=".1" max="60" step=".1" placeholder="자동" disabled={disabled} value={out.seconds ?? ''}
+            onChange={e => editFrame(frameIndex + 1, { transition: e.target.value === '' ? undefined : Math.max(.1, Math.min(60, +e.target.value || .1)) })}/>;
+          return <NumericInput aria-label="다음 카드까지 시간" min={.1} max={60} step=".1" disabled={disabled} value={out.seconds} onChange={e => editFrame(frameIndex + 1, { duration: Math.max(.1, Math.min(60, +e.target.value || .1)) })}/>;
+        })()}{outgoingSeconds(project!.keyframes, frameIndex).kind === 'pose' || outgoingSeconds(project!.keyframes, frameIndex).kind === 'clip' ? 's' : ''}</label></div>
+        <div className="tool-group">
+          <button title="이전으로 이동" disabled={disabled || frameIndex === 0} onClick={() => { setProject({ ...project!, keyframes: moveKeyframe(project!.keyframes, frameIndex, -1) }); setFrameIndex(frameIndex-1); setTransitionSelection([]); invalidate(); }}><ChevronLeft size={14}/></button><button title="다음으로 이동" disabled={disabled || frameIndex === project!.keyframes.length-1} onClick={() => { setProject({ ...project!, keyframes: moveKeyframe(project!.keyframes, frameIndex, 1) }); setFrameIndex(frameIndex+1); setTransitionSelection([]); invalidate(); }}><ChevronRight size={14}/></button><button title="키프레임 삭제" disabled={disabled || project!.keyframes.length < 2} onClick={() => { setProject({ ...project!, keyframes: removeKeyframe(project!.keyframes, frameIndex) }); setFrameIndex(Math.max(0, frameIndex-1)); setTransitionSelection([]); invalidate(); }}><Trash2 size={14}/></button></div>
         {activeIsClip ? <>
           <div className="tool-group"><span className="tool-label">분할</span>
             <NumericInput aria-label="클립 분할 프레임" min={1} max={Math.max(1, activeClipLength - 2)} step="1" disabled={disabled || activeClipLength < 3} value={splitSample} onChange={e => setSplitSample(Math.round(+e.target.value) || 1)}/>
@@ -1847,8 +1861,6 @@ export default function Editor() {
             <NumericInput aria-label="변환할 키프레임 수" min={2} max={Math.max(2, activeClipLength)} step="1" disabled={disabled} value={convertCount} onChange={e => setConvertCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
             <span className="tool-unit">개</span>
             <button className="primary" disabled={disabled || activeClipLength < 2} onClick={convertActiveClip} title="이 클립을 편집 가능한 포즈 키프레임으로 바꿉니다(시작·끝 포함 균등 간격, 양발 고정). 앞뒤 클립과는 자동으로 이어집니다.">키프레임으로 변환</button></div>
-          {frameIndex > 0 && <div className="tool-group"><label title="앞 자세에서 이 클립의 첫 자세로 이동하는 시간입니다. 비우면 자동 계산합니다.">진입 시간 <input type="number" aria-label="클립 진입 시간" min=".1" max="60" step=".1" placeholder="자동" disabled={disabled} value={activeFrame.transition ?? ''}
-            onChange={e => editFrame(frameIndex, { transition: e.target.value === '' ? undefined : Math.max(.1, Math.min(60, +e.target.value || .1)) })}/>s</label></div>}
         </> : <span className="tool-hint">클립을 선택하면 분할 · 합치기 · 키프레임 변환 도구가 여기에 나타납니다.</span>}
       </> : <span className="tool-hint">키프레임을 선택하세요.</span>}</div>
       <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled || objectPhysicsEnabled ? `${controllerLabel} 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(streamTime ?? preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><div className="transport-selects"><label><select aria-label="재생 속도" title="재생 속도 (화면 재생에만 적용)" value={playbackSpeed} onChange={e => setPlaybackSpeed(+e.target.value)}>{[0.25, 0.5, 1, 1.5, 2, 4].map(v => <option key={v} value={v}>{v}×</option>)}</select></label><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label></div>
@@ -1869,7 +1881,7 @@ export default function Editor() {
           const collapsed = !!group && collapsedLabGroups.includes(group.id);
           return <Fragment key={i}>
             {group?.start === i && <button className="lab-frame-header" disabled={disabled} onClick={() => setCollapsedLabGroups(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])} title="파지법 구간 접기/펼치기">파지법 {group.frames.length}개 {collapsed ? '▸' : '▾'}</button>}
-            {(!collapsed || group?.start === i) && <button disabled={disabled} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${stage && i < stage.index ? 'stage-done' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}>{stage?.index === i && <i className="stage-fill" style={{ width: `${stage.progress * 100}%` }}/>}<span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small>{f.lab_grasp ? '파지법 · ' : ''}{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.samples.length} 프레임 클립 · ${f.duration.toFixed(2)}s` : i === 0 ? '시작 자세' : `${f.duration.toFixed(1)}s 이동`} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
+            {(!collapsed || group?.start === i) && <button disabled={disabled} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${stage && i < stage.index ? 'stage-done' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}>{stage?.index === i && <i className="stage-fill" style={{ width: `${stage.progress * 100}%` }}/>}<span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small><span>{f.lab_grasp ? '파지법 · ' : ''}{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `클립 ${f.samples.length}프레임 · ${f.duration.toFixed(1)}s` : '포즈'} · <b className="card-start">{formatClock((preview?.keyframe_times ?? cardStarts)[i] ?? 0)}</b></span><span>{cardOutgoingText(project.keyframes, i)} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</span></small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
           </Fragment>;
         })}</div>
       </div>

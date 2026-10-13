@@ -219,3 +219,98 @@ export function convertClipToPoses(keyframes: Keyframe[], index: number, count: 
   }));
   return { keyframes: [...keyframes.slice(0, index), ...poses, ...keyframes.slice(index + 1)], index };
 }
+
+/*
+ * Timing model shown in the editor: a card's time is the travel time from THIS card to the NEXT one.
+ * The project file keeps the older "arrival" form (a pose's `duration`, or a clip's `transition`, is the time to
+ * reach that item from its predecessor), so saved projects need no conversion: card i simply shows and edits the
+ * arrival time stored on item i + 1. A clip's own `duration` is its playback length and is not a travel time.
+ */
+const endPose = (frame: Keyframe) => frame.samples ? frame.samples[frame.samples.length - 1] : frame.qpos;
+const startPose = (frame: Keyframe) => frame.samples ? frame.samples[0] : frame.qpos;
+const samePose = (a: number[], b: number[]) => a.length === b.length && a.every((value, i) => Math.abs(value - b[i]) <= 1e-6);
+
+export type Outgoing = { kind: 'none' | 'joined' | 'pose' | 'clip'; seconds?: number };
+
+/** What card `index` shows as "time to the next card". */
+export function outgoingSeconds(keyframes: Keyframe[], index: number): Outgoing {
+  const frame = keyframes[index], next = keyframes[index + 1];
+  if (!frame || !next) return { kind: 'none' };
+  if (next.samples) return frame && samePose(endPose(frame), startPose(next)) ? { kind: 'joined' } : { kind: 'clip', seconds: next.transition };
+  return { kind: 'pose', seconds: next.duration };
+}
+
+/** Set card `index`'s time to the next card; `undefined` restores the automatic time for a clip entry. */
+export function setOutgoingSeconds(keyframes: Keyframe[], index: number, seconds?: number) {
+  const next = keyframes[index + 1];
+  if (!next) return keyframes;
+  const value = seconds === undefined ? undefined : Math.min(60, Math.max(.1, seconds));
+  return keyframes.map((frame, i) => {
+    if (i !== index + 1) return frame;
+    if (frame.samples) { const copy = { ...frame }; if (value === undefined) delete copy.transition; else copy.transition = value; return copy; }
+    return value === undefined ? frame : { ...frame, duration: value };
+  });
+}
+
+/** Each card's own time to its next card, as an array parallel to `keyframes` (the last card has none). */
+function takeOutgoing(keyframes: Keyframe[]) {
+  return keyframes.map((_, i) => { const out = outgoingSeconds(keyframes, i); return out.kind === 'pose' || out.kind === 'clip' ? out.seconds : undefined; });
+}
+
+/** Re-apply per-card outgoing times to a new card order; a missing value keeps the item's current arrival time. */
+function applyOutgoing(keyframes: Keyframe[], outgoing: (number | undefined)[]) {
+  return keyframes.map((frame, i) => {
+    if (i === 0) return frame;
+    const seconds = outgoing[i - 1];
+    if (frame.samples) { const copy = { ...frame }; if (seconds === undefined) delete copy.transition; else copy.transition = seconds; return copy; }
+    return seconds === undefined ? frame : { ...frame, duration: seconds };
+  });
+}
+
+/** Swap card `index` with its neighbour (delta ±1). Each card keeps its own time to its next card. */
+export function moveKeyframe(keyframes: Keyframe[], index: number, delta: -1 | 1) {
+  const target = index + delta;
+  if (index < 0 || target < 0 || target >= keyframes.length) return keyframes;
+  const out = takeOutgoing(keyframes);
+  const frames = [...keyframes], times = [...out];
+  [frames[index], frames[target]] = [frames[target], frames[index]];
+  [times[index], times[target]] = [times[target], times[index]];
+  return applyOutgoing(frames, times);
+}
+
+/** Remove card `index`; the previous card keeps its own time to whatever now follows it. */
+export function removeKeyframe(keyframes: Keyframe[], index: number) {
+  const out = takeOutgoing(keyframes);
+  return applyOutgoing(keyframes.filter((_, i) => i !== index), out.filter((_, i) => i !== index));
+}
+
+/** Duplicate a pose after `index`; the copy repeats that card's time to its next card. */
+export function duplicateKeyframeKeepingTimes(keyframes: Keyframe[], index: number) {
+  const result = duplicateKeyframeAfter(keyframes, index);
+  if (result.keyframes === keyframes) return result;
+  const out = takeOutgoing(keyframes);
+  const times = [...out.slice(0, index + 1), out[index], ...out.slice(index + 1)];
+  return { ...result, keyframes: applyOutgoing(result.keyframes, times) };
+}
+
+const quantize = (seconds: number, fps: number) => Math.max(1, Math.round(seconds * fps)) / fps;
+
+/** Start (arrival) second of every card, mirroring the server's compile so it can be shown before any preview runs. */
+export function keyframeStartTimes(keyframes: Keyframe[], fps = 30) {
+  const starts: number[] = [];
+  let now = 0;
+  let end: number[] | undefined;
+  keyframes.forEach((frame, index) => {
+    if (frame.samples) {
+      if (end && !samePose(end, frame.samples[0]))
+        now += quantize(frame.transition ?? smoothTransitionDuration({ qpos: end } as Keyframe, { qpos: frame.samples[0] } as Keyframe), fps);
+      starts.push(now);
+      if (frame.samples.length > 1) now += quantize(frame.duration, fps);
+    } else {
+      if (index > 0) now += quantize(frame.duration, fps);
+      starts.push(now);
+    }
+    end = endPose(frame);
+  });
+  return starts;
+}

@@ -64,3 +64,41 @@ test('the default cut is the middle of the clip', () => {
   const { keyframes } = splitMotionClip([clip(11, 10)], 0, middleSample(11));
   assert.equal(keyframes[0].duration, 5);
 });
+
+const pose = (q, duration) => ({ name: `p${q}`, duration, pins: [], qpos: [q] });
+
+test('a card shows the time to the next card', async () => {
+  const { outgoingSeconds, setOutgoingSeconds } = await import('../lib/keyframes.ts');
+  const frames = [pose(0, 9), pose(1, 2), pose(2, 3)];
+  assert.deepEqual(outgoingSeconds(frames, 0), { kind: 'pose', seconds: 2 });
+  assert.deepEqual(outgoingSeconds(frames, 2), { kind: 'none' });
+  assert.equal(setOutgoingSeconds(frames, 1, 4)[2].duration, 4);
+  assert.equal(setOutgoingSeconds(frames, 2, 4), frames);
+});
+
+test('reordering and deleting keep each card\'s own time to its next card', async () => {
+  const { moveKeyframe, removeKeyframe, outgoingSeconds } = await import('../lib/keyframes.ts');
+  const frames = [pose(0, 9), pose(1, 2), pose(2, 3), pose(3, 5)];   // outgoing: A 2, B 3, C 5, D none
+  const moved = moveKeyframe(frames, 1, 1);                          // A C B D
+  assert.deepEqual(moved.map(f => f.qpos[0]), [0, 2, 1, 3]);
+  assert.deepEqual([0, 1, 2].map(i => outgoingSeconds(moved, i).seconds), [2, 5, 3]);
+  const removed = removeKeyframe(frames, 1);                         // A C D
+  assert.deepEqual([0, 1].map(i => outgoingSeconds(removed, i).seconds), [2, 5]);
+});
+
+test('clip entry times belong to the previous card and joined clips need none', async () => {
+  const { outgoingSeconds, setOutgoingSeconds } = await import('../lib/keyframes.ts');
+  const { keyframes } = splitMotionClip([clip(11, 10)], 0, 4);
+  assert.deepEqual(outgoingSeconds(keyframes, 0), { kind: 'joined' });
+  const frames = [pose(99, 1), keyframes[0]];
+  assert.deepEqual(outgoingSeconds(frames, 0), { kind: 'clip', seconds: undefined });
+  assert.equal(setOutgoingSeconds(frames, 0, 2.5)[1].transition, 2.5);
+});
+
+test('start times follow arrival semantics', async () => {
+  const { keyframeStartTimes } = await import('../lib/keyframes.ts');
+  const starts = keyframeStartTimes([pose(0, 1), pose(1, 2), pose(2, 3)]);
+  assert.deepEqual(starts.map(t => Math.round(t * 100) / 100), [0, 2, 5]);
+  const { keyframes } = splitMotionClip([clip(11, 10)], 0, 4);
+  assert.deepEqual(keyframeStartTimes(keyframes), [0, 4]);
+});
