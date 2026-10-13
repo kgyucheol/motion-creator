@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clipSampleAtTime, splitMotionClip } from '../lib/keyframes.ts';
+import { clipSampleAtTime, middleSample, splitMotionClip } from '../lib/keyframes.ts';
 
 const clip = (count, duration) => ({ name: 'clip', duration, pins: [], qpos: [0],
   samples: Array.from({ length: count }, (_, i) => [i]) });
@@ -25,6 +25,8 @@ test('time maps to a sample inside the selected clip', () => {
   assert.equal(clipSampleAtTime(frames, 0, 5), 5);
   assert.equal(clipSampleAtTime(frames, 1, 12), 10);
   assert.equal(clipSampleAtTime(frames, 0, 0), 1);
+  assert.equal(clipSampleAtTime(frames, 0, 12), null);
+  assert.equal(clipSampleAtTime(frames, 1, 11, 11), 1);
 });
 
 test('merging undoes a split', async () => {
@@ -53,4 +55,12 @@ test('a converted clip after a split neighbour keeps the minimum entry time', as
   assert.equal(converted.length, 3);
   assert.equal(converted[1].duration, .1);
   assert.deepEqual(converted[1].qpos, [4]);
+});
+
+test('the default cut is the middle of the clip', () => {
+  assert.equal(middleSample(11), 5);
+  assert.equal(middleSample(564), 281);
+  assert.equal(middleSample(3), 1);
+  const { keyframes } = splitMotionClip([clip(11, 10)], 0, middleSample(11));
+  assert.equal(keyframes[0].duration, 5);
 });

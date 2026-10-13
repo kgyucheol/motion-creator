@@ -144,13 +144,22 @@ export function insertSmoothTransitionFrames(keyframes: Keyframe[], firstIndex: 
   return result;
 }
 
-/** Index of the source sample under `time` (project seconds) inside clip `index`, kept splittable (1..n-2). */
-export function clipSampleAtTime(keyframes: Keyframe[], index: number, time: number) {
+/** Default cut: the middle sample of a clip (kept splittable, 1..n-2). */
+export function middleSample(count: number) {
+  return Math.max(1, Math.min(Math.max(1, count - 2), Math.floor((count - 1) / 2)));
+}
+
+/**
+ * Source sample under `time` (project seconds) inside clip `index`, or null when the time lies outside that clip.
+ * `start` is the clip's own start time when the compiled timeline knows it; otherwise it is summed from durations.
+ */
+export function clipSampleAtTime(keyframes: Keyframe[], index: number, time: number, start?: number) {
   const clip = keyframes[index];
   const count = clip?.samples?.length ?? 0;
   if (count < 3) return null;
-  const offset = keyframes.slice(0, index).reduce((sum, frame) => sum + frame.duration, 0);
-  const progress = Math.max(0, Math.min(1, (time - offset) / clip.duration));
+  const offset = start ?? keyframes.slice(0, index).reduce((sum, frame) => sum + frame.duration, 0);
+  const progress = (time - offset) / clip.duration;
+  if (progress < 0 || progress > 1) return null;
   return Math.max(1, Math.min(count - 2, Math.round(progress * (count - 1))));
 }
 

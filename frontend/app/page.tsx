@@ -10,7 +10,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, convertClipToPoses, mergeMotionClips, splitMotionClip } from '../lib/keyframes';
+import { duplicateKeyframeAfter, insertSmoothTransitionFrames, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, convertClipToPoses, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
 import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, withLabLateralOffsets, type LabLateralOffsets, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
 import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } from '../lib/lab-grasp-group';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
@@ -1519,12 +1519,13 @@ export default function Editor() {
   const jointDirty = !!state && jointDraft.some((v, i) => Math.abs(v - state.qpos[7+i]*180/Math.PI) > .001);
   const activeFrame = project?.keyframes[frameIndex];
   const [splitSample, setSplitSample] = useState(1);
-  // 슬라이더를 움직이면 현재 보고 있는 위치를 분할 프레임 기본값으로 따라간다.
+  // 기본 분할 위치는 클립의 가운데이고, 슬라이더가 이 클립 안에 있으면 그 위치를 따라간다.
+  const splitClipLength = project?.keyframes[frameIndex]?.samples?.length ?? 0;
   useEffect(() => {
-    if (!preview || !project || !project.keyframes[frameIndex]?.samples) return;
-    const value = clipSampleAtTime(project.keyframes, frameIndex, preview.time[sample] ?? 0);
-    if (value !== null) setSplitSample(value);
-  }, [preview, sample, frameIndex]); // eslint-disable-line react-hooks/exhaustive-deps -- follows the scrubber only
+    if (!project || splitClipLength < 3) return;
+    const scrubbed = preview ? clipSampleAtTime(project.keyframes, frameIndex, preview.time[sample] ?? 0, preview.keyframe_times?.[frameIndex]) : null;
+    setSplitSample(scrubbed ?? middleSample(splitClipLength));
+  }, [preview, sample, frameIndex, splitClipLength]); // eslint-disable-line react-hooks/exhaustive-deps -- project edits go through invalidate()
   function mergeActiveClip() {
     if (!project) return;
     try {
@@ -1834,7 +1835,7 @@ export default function Editor() {
           <div className="tool-group"><span className="tool-label">분할</span>
             <NumericInput aria-label="클립 분할 프레임" min={1} max={Math.max(1, activeClipLength - 2)} step="1" disabled={disabled || activeClipLength < 3} value={splitSample} onChange={e => setSplitSample(Math.round(+e.target.value) || 1)}/>
             <span className="tool-unit">/ {Math.max(0, activeClipLength - 2)}</span>
-            <button disabled={disabled || activeClipLength < 3} onClick={splitActiveClip} title="선택한 클립을 이 프레임에서 둘로 나눕니다. 슬라이더 위치가 기본값입니다."><Scissors size={14}/> 분할</button>
+            <button disabled={disabled || activeClipLength < 3} onClick={splitActiveClip} title="선택한 클립을 이 프레임에서 둘로 나눕니다. 기본값은 클립의 가운데이며, 슬라이더를 이 클립 안에 두거나 숫자를 바꿔 원하는 위치에서 자를 수 있습니다."><Scissors size={14}/> 분할</button>
             <button disabled={disabled || frameIndex >= project!.keyframes.length - 1 || !project!.keyframes[frameIndex + 1]?.samples} onClick={mergeActiveClip} title="선택한 클립을 바로 다음 클립과 하나로 합칩니다.">다음과 합치기</button></div>
           <div className="tool-group"><span className="tool-label">변환</span>
             <NumericInput aria-label="변환할 키프레임 수" min={2} max={Math.max(2, activeClipLength)} step="1" disabled={disabled} value={convertCount} onChange={e => setConvertCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
