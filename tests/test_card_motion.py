@@ -129,3 +129,18 @@ def test_joining_cards_uses_the_recording_not_the_retargeted_result(robot, proje
     moved = move_cube(copy.deepcopy(project), [.05, 0., 0.])
     clip = TestClient(app).post('/api/keyframes-to-clip', json={'project': moved, 'start': 1, 'end': 2, 'fps': 30}).json()
     assert np.allclose(clip['samples'][-1], project['keyframes'][2]['qpos'], atol=1e-6)      # the recorded end, not the moved one
+
+
+def test_the_right_hand_example_is_exactly_left_right_symmetric_and_stays_so_on_the_centre_line(robot):
+    from motioncreator.grasp_template import mirrored
+    mirror = json.loads((EXAMPLE.parent / 'pick_cards_right_mirrored.project.json').read_text())
+
+    def asymmetry(frames):
+        return max(np.degrees(np.abs(np.asarray(q)[7:] - mirrored(robot, np.asarray(q))[7:]).max())
+                   for frame in frames for q in (frame['samples'][::5] if frame.get('samples') else [frame['qpos']]))
+    assert asymmetry(mirror['keyframes']) < 1e-6
+    assert abs(mirror['scene_objects'][0]['position'][1]) < 1e-9                  # the object is on the body's centre line
+    moved = move_cube(copy.deepcopy(mirror), [.05, 0., .03])
+    resolved, reports = resolve_project_motions(robot, moved)
+    assert reports[2]['status'] in ('ok', 'approx')
+    assert asymmetry(resolved['keyframes']) < 1                                    # the retargeted motion is still symmetric
