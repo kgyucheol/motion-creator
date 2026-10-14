@@ -563,6 +563,21 @@ def _original_states(motion, active_robot=None):
             for before, after in zip(original, motion['qpos'])]
 
 
+class GraspTemplateInput(BaseModel):
+    object_position: list[float] = Field(min_length=3, max_length=3)
+    object_yaw_deg: float = 0.
+    carry_target: list[float] | None = Field(default=None, min_length=3, max_length=3)
+    fps: int = Field(30, ge=1, le=120)
+
+
+@app.post('/api/grasp-template/generate')
+def generate_grasp_template_motion(payload: GraspTemplateInput):
+    """The symmetric two-hand pick motion for an object on the body's centre line: one clip per phase plus a report each."""
+    from .grasp_template import generate_motion, load_template
+    return checked(lambda: dict(zip(('keyframes', 'reports'), generate_motion(
+        robot, load_template(), payload.object_position, payload.object_yaw_deg, payload.fps, payload.carry_target))))
+
+
 @app.post('/api/preview')
 def preview(payload: ProjectInput):
     def run():
