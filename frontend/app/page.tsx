@@ -824,7 +824,9 @@ export default function Editor() {
     let index = 0;
     while (index + 1 < starts.length && starts[index + 1] <= time) index++;
     const next = starts[index + 1];
-    const progress = next === undefined ? 1 : Math.max(0, Math.min(1, (time - starts[index]) / Math.max(1e-6, next - starts[index])));
+    // The fill is drawn one sample ahead: the last sample before the next card is one frame short of the boundary, which would leave the bar just under 100% when the highlight moves on.
+    const frame = preview.time.length > 1 ? preview.time[1] - preview.time[0] : 0;
+    const progress = next === undefined ? 1 : Math.max(0, Math.min(1, (time + frame - starts[index]) / Math.max(1e-6, next - starts[index])));
     const total = preview.summary?.reference_seconds ?? preview.time[preview.time.length - 1] ?? 0;
     return { index, progress, overall: total > 0 ? Math.max(0, Math.min(1, clock / total)) : 0 };
   }, [preview, project, cardStarts, playing, sample]);

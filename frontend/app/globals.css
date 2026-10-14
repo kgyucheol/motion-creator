@@ -78,7 +78,7 @@
 .keyframe-toolbar .tool-unit{font-size:11px;color:#73889b}.keyframe-toolbar .tool-hint{font-size:11px;color:#6d8294}
 
 .frame-card>*{position:relative}
-.frame-card .stage-fill{position:absolute;left:0;top:0;bottom:0;background:#f1bc6526;border-radius:4px 0 0 4px;box-shadow:inset -2px 0 0 #f1bc65;pointer-events:none;transition:width .12s linear}
+.frame-card .stage-fill{position:absolute;left:0;top:0;bottom:0;background:#f1bc6526;border-radius:4px 0 0 4px;box-shadow:inset -2px 0 0 #f1bc65;pointer-events:none}
 .frame-card.stage-done{background:#192b27;border-color:#2f5246}
 .frame-card.stage-done .frame-number{color:#5fae91}.frame-card.stage-done .frame-number::after{content:' ✓'}
 .timeline-header{flex-wrap:wrap}
