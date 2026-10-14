@@ -423,6 +423,115 @@ def dynamic_resolve(payload: DynamicResolveInput):
     return checked(run)
 
 
+# ---- robot replay (Unitree default policy, arms over rt/arm_sdk) -------------------------------------------------------------
+_replay = None
+
+
+def replay_session():
+    global _replay
+    if _replay is None:
+        from .replay.session import ReplaySession
+        _replay = ReplaySession(lambda: robot, read_only=os.environ.get('MOTIONCREATOR_REPLAY_READ_ONLY') == '1')
+        import atexit
+        atexit.register(_replay.shutdown)       # hand the arms back if the server is stopped mid-replay
+    return _replay
+
+
+def replay_checked(fn):
+    from .replay.backends import CommandError
+    try:
+        return fn()
+    except CommandError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (ValueError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+class ReplayConnectInput(BaseModel):
+    interface: str | None = None
+    mock: bool = False
+
+
+class ReplayPrepareInput(BaseModel):
+    project: dict
+    fps: int = Field(30, ge=1, le=60)
+
+
+class ReplayStartInput(BaseModel):
+    speed: float = 1.0
+    auto_return: bool = True
+    allow_fast: bool = False
+    confirm: bool = False
+
+
+@app.get('/api/replay/status')
+def replay_status():
+    return replay_checked(lambda: replay_session().status())
+
+
+@app.get('/api/replay/interfaces')
+def replay_interfaces():
+    return replay_session().interfaces()
+
+
+@app.post('/api/replay/connect')
+def replay_connect(payload: ReplayConnectInput):
+    def run():
+        replay_session().connect(payload.interface, payload.mock)
+        return replay_session().status()
+    return replay_checked(run)
+
+
+@app.post('/api/replay/disconnect')
+def replay_disconnect():
+    def run():
+        replay_session().disconnect()
+        return replay_session().status()
+    return replay_checked(run)
+
+
+@app.post('/api/replay/prepare')
+def replay_prepare(payload: ReplayPrepareInput):
+    return replay_checked(lambda: replay_session().prepare(payload.project, payload.fps))
+
+
+@app.post('/api/replay/start')
+def replay_start(payload: ReplayStartInput):
+    return replay_checked(lambda: replay_session().start(payload.speed, payload.auto_return, payload.allow_fast, payload.confirm))
+
+
+@app.post('/api/replay/pause')
+def replay_pause(on: bool = True):
+    return replay_checked(lambda: replay_session().pause(on))
+
+
+@app.post('/api/replay/stop')
+def replay_stop():
+    return replay_checked(lambda: replay_session().stop())
+
+
+@app.post('/api/replay/home')
+def replay_home():
+    return replay_checked(lambda: replay_session().home())
+
+
+@app.post('/api/replay/speed')
+def replay_speed(speed: float):
+    return replay_checked(lambda: replay_session().set_speed(speed))
+
+
+@app.post('/api/export-lerobot')
+def export_lerobot(payload: ProjectInput):
+    """The compiled motion as a LeRobot data.json (arms and waist) for robot-studio or unitree_lerobot."""
+    def run():
+        from .lerobot_format import qpos_to_lerobot_episode
+        from .replay.plan import resample
+        motion = compile_motion(robot, payload.project, payload.fps)
+        qpos = resample(motion['time'], motion['qpos'], payload.fps)
+        return qpos_to_lerobot_episode(qpos, payload.fps, payload.project.get('name', ''))
+    return checked(run)
+
+
 @app.post('/api/preview')
 def preview(payload: ProjectInput):
     def run():
@@ -746,7 +855,10 @@ def main():
     import uvicorn
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=8765)
+    parser.add_argument('--read-only', action='store_true', help='Never connect to a real robot for replay (the simulated robot still works)')
     args = parser.parse_args()
+    if args.read_only:
+        os.environ['MOTIONCREATOR_REPLAY_READ_ONLY'] = '1'
     if not 1 <= args.port <= 65535:
         parser.error('--port must be between 1 and 65535')
     address = f'http://127.0.0.1:{args.port}'

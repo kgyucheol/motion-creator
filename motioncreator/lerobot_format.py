@@ -43,3 +43,17 @@ def lerobot_episode_to_qpos(robot, content: bytes, source: str = 'actions'):
 
 def is_lerobot_episode(value) -> bool:
     return isinstance(value, dict) and isinstance(value.get('data'), list) and 'info' in value
+
+
+def qpos_to_lerobot_episode(qpos, fps: float, goal: str = '') -> dict:
+    """The inverse of lerobot_episode_to_qpos for the arms and waist: an episode robot-studio (or unitree_lerobot) can replay.
+
+    `states` repeats `actions`; robot-studio replays the arms from `actions` and takes waist moves from its own options.
+    """
+    qpos = np.asarray(qpos, dtype=float)
+    frames = []
+    for row in qpos:
+        group = {name: {'qpos': row[7 + start:7 + start + 7].tolist(), 'qvel': [], 'torque': []} for name, start in ARM_START.items()}
+        group['body'] = {'qpos': row[7 + WAIST_START:7 + WAIST_START + 3].tolist(), 'qvel': [], 'torque': []}
+        frames.append({'actions': group, 'states': json.loads(json.dumps(group))})
+    return {'info': {'image': {'fps': float(fps)}}, 'text': {'goal': goal}, 'data': frames}
