@@ -194,6 +194,11 @@ def validate_project(robot: Robot, project):
                 raise ValueError('Motion clips cannot use pins until they are split into keyframes')
             if frame.get('angle_pins'):
                 raise ValueError('Motion clips cannot use angle pins until they are split into keyframes')
+        if frame.get('path') is not None:
+            from .path_move import validate_path
+            if frame.get('samples') is not None:
+                raise ValueError('Only pose keyframes take a move path; a clip plays its own path')
+            validate_path(frame['path'])
         if frame.get('motion') is not None:
             from .card_motion import validate_motion
             validate_motion(frame['motion'])
@@ -763,6 +768,11 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
     duration = float(b['duration'])
     count = max(1, round(duration * fps))
     duration = count / fps
+    path_spec = b.get('path') if b.get('path') and b['path'].get('kind', 'joint') != 'joint' else None
+    hand_at = None
+    if path_spec:
+        from .path_move import hand_path
+        hand_at = hand_path(path_spec['kind'], pa, pb, path_spec.get('via_offset'))
     root_rotation = quat_matrix(qa[3:7])
     root_delta = Rotation.from_matrix(root_rotation.T @ quat_matrix(qb[3:7])).as_rotvec()
     angular_deltas = {k: Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec() for k in ROTATABLE}
@@ -800,7 +810,22 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
             q[3:7] *= -1
         if i == count:
             q = qb.copy()
-        if i != count and all(interaction_pair):
+        if hand_at is not None and i != count and not all(interaction_pair):
+            # MoveL / MoveC: the hands follow the Cartesian path at the same time scaling the joint blend used
+            goals = hand_at(s)
+            solved = segment_poses[-1] if segment_poses else qa
+            for posture_weight, evaluations in ((.35, 60), (.06, 120)):
+                # everything but the arms and waist stays where the joint blend puts it: only the hands leave it
+                solved, info = robot.solve(solved, q, pins=sorted({*FEET, 'pelvis'}), angle_pins=sorted({*angle_pins, 'pelvis'}), mode='free', resistance=0.,
+                                           selected_targets={hand: goal[0] for hand, goal in goals.items()},
+                                           orientation_targets={hand: goal[1] for hand, goal in goals.items()},
+                                           posture_reference=q, posture_weight=posture_weight, max_nfev=evaluations)
+                if info['converged'] and not info.get('rejected') and info['target_error_mm'] < 1.:
+                    break
+            q = q.copy()
+            q[7 + 12:7 + 29] = solved[7 + 12:7 + 29]
+            segment_pin_errors.append(info.get('pin_error_mm', 0.))
+        elif i != count and all(interaction_pair):
             from .interaction import interpolate_interaction
             interaction = interpolate_interaction(*interaction_pair, s)
             tcp_targets = interaction['tcp_targets']

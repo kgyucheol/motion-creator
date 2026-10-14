@@ -124,6 +124,8 @@ export type Keyframe = {
   /** Clip only: follow a moved scene object (the older window-based form, see DynamicGrasp). */
   dynamic?: DynamicGrasp;
   motion?: CardMotion;
+  /** Pose keyframes: how the hands travel from the previous card to this one (joint blend by default; straight line or arc). */
+  path?: { kind: 'joint' | 'linear' | 'circular'; via_offset?: number[] };
   grasp?: TwoHandGrasp;
   interaction?: ToolInteraction;
   generated_transition?: boolean;
