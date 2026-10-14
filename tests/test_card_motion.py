@@ -139,7 +139,7 @@ def test_the_right_hand_example_is_exactly_left_right_symmetric_and_stays_so_on_
         return max(np.degrees(np.abs(np.asarray(q)[7:] - mirrored(robot, np.asarray(q))[7:]).max())
                    for frame in frames for q in (frame['samples'][::5] if frame.get('samples') else [frame['qpos']]))
     assert asymmetry(mirror['keyframes']) < 1e-6
-    assert abs(mirror['scene_objects'][0]['position'][1]) < 1e-9                  # the object is on the body's centre line
+    assert abs(mirror['scene_objects'][0]['position'][1]) < 1e-4                  # on the body's centre line (the model is symmetric to ~10 µm)
     moved = move_cube(copy.deepcopy(mirror), [.05, 0., .03])
     resolved, reports = resolve_project_motions(robot, moved)
     assert reports[2]['status'] in ('ok', 'approx')
