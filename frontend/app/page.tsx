@@ -1295,6 +1295,15 @@ export default function Editor() {
   function selectTransitionFrame(index: number) {
     setTransitionSelection(previous => previous.length === 1 && previous[0] !== index
       ? [previous[0], index] : [index]);
+    // 재생 막대도 그 카드가 시작하는 시각으로 옮긴다. chooseFrame이 카드의 첫 자세를 불러오므로 둘이 같은 지점이 된다.
+    if (preview && !preview.physics) {
+      const start = (preview.keyframe_times ?? cardStarts)[index];
+      if (start !== undefined) {
+        const at = preview.time.findIndex(time => time >= start - 1e-6);
+        setPlaying(false);
+        setSample(at < 0 ? preview.time.length - 1 : at);
+      }
+    }
     void chooseFrame(index);
   }
   function createSmoothTransition() {
