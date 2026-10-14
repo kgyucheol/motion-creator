@@ -179,11 +179,12 @@ export class RobotScene {
       if (!this.headCameraMoving) this.saveEditorViewSettings();
     });
     let drag: { x: number; y: number; top: number; right: number } | null = null;
-    let resize: { x: number; width: number } | null = null;
+    let resize: { x: number; width: number; right: number } | null = null;
     this.headCameraOverlay.addEventListener('pointerdown', event => {
       if (!this.headCameraMoving) return;
       if ((event.target as HTMLElement).closest('.head-camera-resize')) {
-        resize = { x: event.clientX, width: this.headCameraRect(this.host.clientWidth, this.host.clientHeight).width };
+        const start = this.headCameraRect(this.host.clientWidth, this.host.clientHeight);
+        resize = { x: event.clientX, width: start.width, right: start.right };
         this.headCameraOverlay.setPointerCapture(event.pointerId);
         event.preventDefault();
         return;
@@ -196,8 +197,13 @@ export class RobotScene {
     });
     this.headCameraOverlay.addEventListener('pointermove', event => {
       if (resize) {
-        this.headCameraWidth = resize.width - (event.clientX - resize.x);
-        this.headCameraWidth = this.headCameraRect(this.host.clientWidth, this.host.clientHeight).width;
+        // 오른쪽 아래 핸들: 왼쪽 가장자리를 고정하고 오른쪽으로 늘어난 만큼 right 여백을 줄인다.
+        const grow = Math.min(event.clientX - resize.x, resize.right - 4);
+        this.headCameraWidth = resize.width + grow;
+        this.headCameraPosition = { top: this.headCameraPosition?.top ?? 52, right: resize.right - grow };
+        const rect = this.headCameraRect(this.host.clientWidth, this.host.clientHeight);
+        this.headCameraWidth = rect.width;
+        this.headCameraPosition = { top: rect.top, right: resize.right - (rect.width - resize.width) };
         this.dirty = true;
         return;
       }
