@@ -1731,9 +1731,12 @@ export default function Editor() {
     if (!project) return;
     try {
       const result = splitMotionClip(project.keyframes, frameIndex, splitSample);
+      // 작업 중이던 쪽에 포커스를 둔다: 재생 막대가 자른 위치보다 앞에 있었으면 앞 클립, 아니면 뒤 클립(남은 부분)
+      const at = scrubbedClipSample();
+      const focus = at !== null && at < splitSample ? result.index : result.index + 1;
       checkpoint();
-      setProject({ ...project, keyframes: result.keyframes }); setFrameIndex(result.index); setTransitionSelection([]); invalidate();
-      setMessage(`프레임 ${splitSample}에서 클립을 둘로 분할했습니다. 원본 동작과 총 재생 시간은 그대로입니다.`);
+      setProject({ ...project, keyframes: result.keyframes }); setFrameIndex(focus); setTransitionSelection([]); invalidate();
+      setMessage(`프레임 ${splitSample}에서 클립을 둘로 분할했습니다. 원본 동작과 총 재생 시간은 그대로입니다. ${focus === result.index ? '앞' : '뒤'} 클립을 선택했습니다.`);
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   }
   const selectedLabGroup = (() => {
