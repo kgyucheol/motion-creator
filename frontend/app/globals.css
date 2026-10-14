@@ -147,3 +147,8 @@ button.danger{border-color:#b04a4a;color:#ff9a9a}
 .dynamic-offset{display:inline-flex;align-items:center;gap:6px;padding:0 10px;border-left:1px solid #2b3846;border-right:1px solid #2b3846}
 .dynamic-offset label{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#9fb3c4}
 .dynamic-offset .numeric-input,.dynamic-offset input[type=number]{width:54px}
+
+/* After playback only the selected card keeps the strong highlight; the playhead is a thin amber underline */
+.frame-card.playhead{box-shadow:inset 0 -3px 0 #f1bc65}
+.frame-card.active.playing{box-shadow:0 0 0 2px #f1bc6566,inset 0 0 0 2px #72bea5}
+.frame-card.active{border-width:2px;padding:11px}
