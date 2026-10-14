@@ -175,15 +175,18 @@ def test_a_point_target_gets_advice_too(robot):
         assert reports[5]['caused_by'] == 5 and reports[5]['safe_fraction'] < 1
 
 
-def test_the_all_keyframe_example_has_no_clips_and_plays_as_long_as_the_original(robot):
-    path = EXAMPLE.parent / 'pick_all_keyframes.project.json'
-    project = json.loads(path.read_text())
+@pytest.mark.parametrize('name', ['pick_all_keyframes', 'pick_all_keyframes_smooth'])
+def test_the_all_keyframe_examples_have_no_clips_play_smoothly_and_keep_the_length(robot, name):
+    project = json.loads((EXAMPLE.parent / f'{name}.project.json').read_text())
     assert not any(frame.get('samples') for frame in project['keyframes'])
     assert len(project['keyframes']) > 8
+    assert any(frame.get('generated_transition') for frame in project['keyframes'])     # joined with continuous velocity, not stop and go
     motion = compile_motion(robot, project, 30)
     assert abs(motion['time'][-1] - sum(float(frame['duration']) for frame in project['keyframes'][1:])) < 1 / 30
+    joints = np.asarray(motion['qpos'])[:, 7:]
+    acceleration = np.linalg.norm(np.diff(np.diff(joints, axis=0) * 30, axis=0) * 30, axis=1)
+    assert np.percentile(acceleration, 99) < 45                      # stop-and-go keyframes gave 112; the saved clips 31
     modes = [(frame.get('motion') or {}).get('mode') for frame in project['keyframes']]
     assert 'cartesian' in modes and 'delta' in modes
-    moved = move_cube(copy.deepcopy(project), [.03, 0., .03])
-    resolved, reports = resolve_project_motions(robot, moved)
+    resolved, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), [.03, 0., .03]))
     assert not [report for report in reports.values() if report['status'] in ('limit', 'unreachable', 'too_far')]
