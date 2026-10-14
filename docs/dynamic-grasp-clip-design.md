@@ -1,6 +1,6 @@
 # 동적 파지 클립 · Unitree 기본 정책 리플레이 설계안
 
-상태: 설계(미구현). 베이스는 motioncreator, 실행 참고는 robot-studio(`dashboard/runner.py`)와 g1-live-studio(`g1live/arm_sdk_writer.py`).
+상태: 구현됨(아래 "구현 상태" 참고). 베이스는 motioncreator, 실행 참고는 robot-studio(`dashboard/runner.py`)와 g1-live-studio(`g1live/arm_sdk_writer.py`).
 
 ## 1. 목표와 범위
 
@@ -196,3 +196,15 @@ robot-studio는 Pinocchio IK 솔버의 `solve_tau`로 목표 자세마다 토크
 - **코드 중복**: 이식한 워커는 g1-live-studio와 갈라질 수 있다. 출처 커밋을 문서에 남기고, 장기적으로는 공용 패키지 분리가 필요하다.
 - **포트 충돌**: motioncreator와 robot-studio가 모두 기본 8765를 쓴다. A 경로를 쓰려면 한쪽 포트를 바꿔야 한다.
 - 손가락 개폐는 범위 밖이므로 잡는 동작에서 손가락이 필요한 데이터는 팔만 재현된다.
+
+## 12. 구현 상태
+
+구현됨
+- 동적 클립: `motioncreator/dynamic_clip.py`, 프로젝트 검증·컴파일 연동(`dynamic_reports`), `POST /api/dynamic-resolve`, 클립 도구 줄의 **동적 파지** 그룹, 분할·합치기·포즈 변환 규칙. 창 번호는 클립 밖(음수 등)도 허용해서 분할해도 가중치가 그대로 유지된다(4절의 "경계 연속" 보장).
+- 리플레이: `motioncreator/replay/` (g1-live-studio `arm_sdk_writer`·`dds_reader`·`replay` 이식 + robot-studio 절차), `/api/replay/*`, 화면의 **로봇 재생** 패널, 가상 로봇, `--read-only`, `POST /api/export-lerobot`(방법 A).
+- 중력 토크는 서버의 MuJoCo 역동역학으로 계산하고(8.5의 대안), 보내는 비율은 g1-live-studio처럼 기본 0.5로 시작한다.
+
+이번 버전에서 하지 않은 것
+- **허리 요(yaw) 전송**: 8.1에서 허리 요도 보낸다고 했지만 이번 구현은 팔 14축만 보낸다. 허리 요 변화는 재생 가능성 점검에서 "재생되지 않는다"고 알린다. 실제 로봇에서 허리 명령 경로를 확인한 뒤 추가한다.
+- **v2(클립 경계 재계산)**, 풀이 시간 측정 기반의 거친/촘촘한 간격 분리.
+- 실물 로봇 시험. 실제 로봇에서는 한 번도 실행하지 않았다. 가상 로봇과 단위 테스트로만 확인했다.

@@ -193,3 +193,9 @@ npm --prefix frontend run build
 - [Disney Robot Motion Diffusion Model](https://la.disneyresearch.com/publication/robot-motion-diffusion-model-motion-generation-for-robotic-characters/): 생성 모션과 로봇의 물리적 제어 가능성을 연결하는 연구입니다. 참조를 만드는 것과 실제 로봇에서 추종 가능한 모션으로 만드는 것의 차이를 다룹니다.
 
 이번 구현은 학습 모델이나 자연어 생성을 사용하지 않고, **사용자가 지정한 부위 목표 + IK + 키프레임**으로 모션을 작성합니다. 위 자료의 완성 UI나 학습 가중치를 가져온 구현은 아닙니다.
+
+
+## 동적 파지 클립 · 로봇 재생
+
+- **동적 파지**: 가져온 클립의 손이 장면의 오브젝트를 따라가게 합니다. 클립을 선택하고 도구 줄의 **동적 파지**에서 오브젝트를 고른 뒤 **기준 지정**을 누르면 그 위치가 시연 때의 물체 위치로 저장됩니다. 접근·파지·놓기·복귀 4개 프레임을 정하면, 이후 오브젝트를 옮길 때마다 파지 구간의 손 경로가 새 위치에 맞게 다시 계산되고 결과 칩이 도달·근사·도달 불가를 알려 줍니다. 자세한 내용은 [설계안](docs/dynamic-grasp-clip-design.md).
+- **로봇 재생**: 하단 재생 막대의 **로봇 재생**에서 Unitree 기본 정책(`rt/arm_sdk`, 팔 14축) 위에 재생합니다. 가상 로봇으로 먼저 확인하세요. 실제 로봇은 로봇 Python(`unitree_sdk2py`)을 `MOTIONCREATOR_ROBOT_PYTHON`으로, CycloneDDS를 `CYCLONEDDS_HOME`으로 지정해야 하며, 연결만으로는 명령이 나가지 않고 점검 통과와 확인 체크를 거쳐야 시작됩니다. `./run.sh --read-only`는 실제 로봇 연결을 막습니다. 실제 로봇에서는 아직 시험하지 않았습니다.
