@@ -194,6 +194,11 @@ def validate_project(robot: Robot, project):
                 raise ValueError('Motion clips cannot use pins until they are split into keyframes')
             if frame.get('angle_pins'):
                 raise ValueError('Motion clips cannot use angle pins until they are split into keyframes')
+        if frame.get('dynamic') is not None:
+            if frame.get('samples') is None:
+                raise ValueError('Only motion clips take a dynamic grasp binding')
+            from .dynamic_clip import validate_dynamic
+            validate_dynamic(frame['dynamic'], len(frame['samples']))
         total += duration
         transition = frame.get('transition')
         if transition is not None:
@@ -833,9 +838,14 @@ def _compile_motion(robot: Robot, project, fps, on_segment=None):
     project = project_with_consistent_interactions(robot, project)
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
+    from .dynamic_clip import resolve_project_dynamics
+    project, dynamic_reports = resolve_project_dynamics(robot, project)
     frames = project['keyframes']
     if any(frame.get('samples') is not None for frame in frames):
-        return _compile_with_clips(robot, project, fps, on_segment)
+        result = _compile_with_clips(robot, project, fps, on_segment)
+        if dynamic_reports:
+            result['dynamic_reports'] = [{'index': index, **report} for index, report in dynamic_reports.items()]
+        return result
     poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
     if on_segment is not None:
         on_segment([0.], poses)
