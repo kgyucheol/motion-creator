@@ -101,7 +101,6 @@
 .dynamic-chip.approx{border-color:#a9892f;color:#f0d36b}
 .dynamic-chip.unreachable,.dynamic-chip.too_far,.dynamic-chip.missing_object{border-color:#b04a4a;color:#ff9a9a}
 
-.replay-open{margin-left:6px}
 .replay-backdrop{position:fixed;inset:0;background:rgba(5,9,13,.72);z-index:60;display:flex;align-items:center;justify-content:center;padding:16px}
 .replay-panel{width:min(720px,100%);max-height:calc(100vh - 32px);overflow:auto;background:#101923;border:1px solid #2b3846;border-radius:10px;padding:14px 18px;color:#d5e0ea}
 .replay-panel header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
@@ -122,3 +121,25 @@
 .replay-bar i{display:block;height:100%;background:#4fa3e0}
 .replay-bar.stopped i{background:#a9892f}
 button.danger{border-color:#b04a4a;color:#ff9a9a}
+
+/* 키프레임 패널: 도구 줄이 몇 줄이 되든 아래 재생 막대·카드와 겹치지 않도록 패널 높이를 내용에 맞춘다 */
+.editor{grid-template-rows:65px minmax(300px,1fr) auto 30px}
+@media(min-width:851px){.editor{grid-template-rows:65px minmax(300px,1fr) auto 30px}}
+.timeline{min-height:250px;display:flex;flex-direction:column}
+.timeline-body{flex:0 0 auto}
+.keyframe-toolbar{flex:0 0 auto}
+.keyframe-toolbar .dynamic-group{flex:1 1 100%;flex-wrap:wrap;row-gap:6px}
+.keyframe-toolbar .dynamic-group .tool-label{min-width:56px}
+
+.dynamic-hands{display:inline-flex;align-items:center;gap:10px;padding-right:12px;margin-right:2px;border-right:1px solid #2b3846}
+.dynamic-marker{margin-left:2px}
+/* 상단 바: 창이 좁아도 오른쪽 버튼이 잘리지 않게 제목과 선택창이 먼저 줄어든다 */
+.topbar{min-width:0}
+.topbar .brand{flex:0 1 auto;min-width:0}
+.topbar .brand select{min-width:0;max-width:170px}
+.topbar .project-title{flex:1 1 90px;min-width:48px;justify-content:center}
+.topbar .project-title input{width:100%;min-width:0}
+.topbar .top-actions{flex:0 0 auto}
+@media(max-width:1500px){.topbar .top-actions{gap:6px}.topbar .top-actions button,.topbar .top-actions .wbc-link{padding:5px 8px;font-size:12px}.topbar .brand select{max-width:130px}}
+@media(max-width:1250px){.topbar .top-actions .wbc-link{padding:4px 6px;font-size:11px}.topbar .brand select{max-width:96px}}
+.keyframe-toolbar{margin-bottom:10px}
