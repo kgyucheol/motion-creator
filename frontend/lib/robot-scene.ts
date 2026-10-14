@@ -147,6 +147,7 @@ export class RobotScene {
   candidateGraspMarkers: Record<'left' | 'right', THREE.Group>;
   labPathPreview = new THREE.Group();
   tcpOverlay = new THREE.Group();
+  comparePaths = new THREE.Group();
   gripPads: Record<'left' | 'right', THREE.Mesh>;
   transformMode: TransformMode = 'translate';
   space: 'world' | 'local' = 'world';
@@ -345,7 +346,7 @@ export class RobotScene {
       marker.traverse(node => { node.renderOrder = 6; });
       marker.visible = false; this.scene.add(marker); return [side, marker];
     })) as unknown as Record<'left' | 'right', THREE.Group>;
-    this.scene.add(this.labPathPreview, this.tcpOverlay);
+    this.scene.add(this.labPathPreview, this.tcpOverlay, this.comparePaths);
     this.gripPads = Object.fromEntries((['left', 'right'] as const).map(side => {
       const color = side === 'left' ? '#42e5bc' : '#ff9e45';
       const pad = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({
@@ -1025,6 +1026,25 @@ export class RobotScene {
       dot(overlay.now[side], .014, 0xffffff);
       const planned = overlay.planned_now?.[side];
       if (planned) { dot(planned, .011, color); line([planned, overlay.now[side]], .95, 0xff5a4d); }
+    }
+    this.dirty = true;
+  }
+
+  /** Hand paths of the original motion (grey) and the dynamic grasp result (coloured), one polyline per hand. */
+  setComparePaths(paths: { original: Record<HandSide, number[][]>; resolved: Record<HandSide, number[][]> } | null) {
+    this.comparePaths.traverse(node => {
+      if (node instanceof THREE.Line) { node.geometry.dispose(); (node.material as THREE.Material).dispose(); }
+    });
+    this.comparePaths.clear();
+    if (paths) for (const side of ['left', 'right'] as HandSide[]) {
+      const draw = (points: number[][], color: number, opacity: number) => {
+        if (points.length < 2) return;
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points.map(point => new THREE.Vector3().fromArray(point))),
+          new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity }));
+        line.renderOrder = 7; this.comparePaths.add(line);
+      };
+      draw(paths.original[side], 0xb8c2cc, .8);
+      draw(paths.resolved[side], side === 'left' ? 0x55e7c1 : 0xffbd70, 1);
     }
     this.dirty = true;
   }

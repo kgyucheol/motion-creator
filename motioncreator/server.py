@@ -1,5 +1,6 @@
 import asyncio
 import json
+import numpy as np
 import os
 import threading
 import time
@@ -552,13 +553,24 @@ def dynamic_offset(payload: DynamicOffsetInput):
     return checked(run)
 
 
+def _original_states(motion, active_robot=None):
+    """Per frame the pose without the dynamic grasp correction, or None where it equals the corrected one."""
+    original = motion.get('original_qpos')
+    if original is None:
+        return None
+    active_robot = active_robot or robot
+    return [None if np.allclose(before, after, atol=1e-6) else active_robot.state(before)
+            for before, after in zip(original, motion['qpos'])]
+
+
 @app.post('/api/preview')
 def preview(payload: ProjectInput):
     def run():
         motion = compile_motion(robot, payload.project, min(payload.fps, 30))
         return {'time': motion['time'].tolist(), 'states': [robot.state(q) for q in motion['qpos']],
                 'max_pin_error_mm': motion['max_pin_error_mm'], 'keyframe_times': motion.get('keyframe_times'),
-                'dynamic_reports': motion.get('dynamic_reports', [])}
+                'dynamic_reports': motion.get('dynamic_reports', []),
+                'original_states': _original_states(motion)}
     return checked(run)
 
 
@@ -595,7 +607,8 @@ async def preview_stream(websocket: WebSocket):
         try:
             motion = compile_motion(active_robot, project, fps, on_segment=emit)
             packet = {'type': 'done', 'max_pin_error_mm': float(motion['max_pin_error_mm']), 'keyframe_times': motion.get('keyframe_times'),
-                      'dynamic_reports': motion.get('dynamic_reports', [])}
+                      'dynamic_reports': motion.get('dynamic_reports', []),
+                      'original_states': _original_states(motion, active_robot)}
         except InterruptedError:
             return
         except Exception as exc:

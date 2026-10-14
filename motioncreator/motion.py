@@ -839,12 +839,14 @@ def _compile_motion(robot: Robot, project, fps, on_segment=None):
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
     from .dynamic_clip import resolve_project_dynamics
+    unresolved = project
     project, dynamic_reports = resolve_project_dynamics(robot, project)
     frames = project['keyframes']
     if any(frame.get('samples') is not None for frame in frames):
         result = _compile_with_clips(robot, project, fps, on_segment)
         if dynamic_reports:
             result['dynamic_reports'] = [{'index': index, **report} for index, report in dynamic_reports.items()]
+            result['original_qpos'] = _original_qpos(robot, unresolved, fps, result['qpos'])
         return result
     poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
     if on_segment is not None:
@@ -873,6 +875,16 @@ def _compile_motion(robot: Robot, project, fps, on_segment=None):
         elapsed += duration
         keyframe_times.append(elapsed)
     return {**motion_result(robot, poses, times, contacts, fps, pin_errors), 'keyframe_times': keyframe_times}
+
+
+def _original_qpos(robot: Robot, project, fps, resolved):
+    """The same motion without the dynamic grasp corrections, to compare against; None when its frames do not line up."""
+    plain = {**project, 'keyframes': [{k: v for k, v in frame.items() if k != 'dynamic'} for frame in project['keyframes']]}
+    try:
+        original = np.asarray(_compile_with_clips(robot, plain, fps)['qpos'])
+    except ValueError:
+        return None
+    return original if original.shape == np.asarray(resolved).shape else None
 
 
 def _existing_project_folder(root_folder, project_id):

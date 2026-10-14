@@ -131,6 +131,18 @@ def test_compile_follows_the_object_and_reports(robot, project):
     assert np.allclose(still['qpos'][0], moved['qpos'][0]) and np.allclose(still['qpos'][-1], moved['qpos'][-1])
 
 
+def test_compile_keeps_the_uncorrected_motion_for_comparison(robot, project):
+    still = compile_motion(robot, copy.deepcopy(project), 30)
+    moved = compile_motion(robot, move(copy.deepcopy(project), [.45, .02, .8]), 30)
+    original = moved['original_qpos']
+    assert original.shape == moved['qpos'].shape
+    assert np.allclose(original, still['qpos'])            # what the clip plays without the correction
+    assert not np.allclose(original[30], moved['qpos'][30])
+    plain = copy.deepcopy(project)
+    del plain['keyframes'][0]['dynamic']
+    assert 'original_qpos' not in compile_motion(robot, plain, 30)
+
+
 @pytest.mark.parametrize('change', [
     lambda d: d.update(window={**WINDOW, 'hold_end': 15}),
     lambda d: d.update(window={'ramp_in_start': FRAMES, 'hold_start': FRAMES + 2, 'hold_end': FRAMES + 3, 'ramp_out_end': FRAMES + 4}),

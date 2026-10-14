@@ -22,7 +22,7 @@ type SceneFile = { format: typeof SCENE_FORMAT; scene_objects: SceneObject[]; sc
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; mounted_tools?: [string, string] | null; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; lab_lateral_offsets?: Record<string, LabLateralOffsets>; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
-type Preview = { time: number[]; keyframe_times?: number[] | null; dynamic_reports?: DynamicReport[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; controller?: 'pd' | 'gear-sonic' | 'objects'; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
+type Preview = { time: number[]; keyframe_times?: number[] | null; dynamic_reports?: DynamicReport[]; original_states?: (PoseState | null)[] | null; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; controller?: 'pd' | 'gear-sonic' | 'objects'; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type PhysicsStreamFrame = { type: 'frame'; time: number; state: PoseState; objects: Record<string, SceneObjectPose> };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
@@ -195,6 +195,7 @@ export default function Editor() {
   const [fps, setFps] = useState(30);
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
+  const [showCompare, setShowCompare] = useState(true);
   const [showCollisions, setShowCollisions] = useState(false);
   const [objects, setObjects] = useState<SceneObject[]>(() => objectsFromProject({}));
   const [objectGroups, setObjectGroups] = useState<SceneObjectGroup[]>([]);
@@ -768,6 +769,21 @@ export default function Editor() {
   }, [transformMode, space, mirror]);
   useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !preview?.physics); scene.current.keyboardEnabled = !preview?.physics; } }, [busy, playing, preview]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
+  useEffect(() => {
+    const original = showCompare ? preview?.original_states?.[sample] : null;
+    if (original) scene.current?.updateReference(original);
+    scene.current?.setReferenceVisible(!!original);
+  }, [preview, sample, showCompare]);
+  useEffect(() => {
+    const originals = showCompare ? preview?.original_states : null;
+    if (!preview || !originals) { scene.current?.setComparePaths(null); return; }
+    const changed = originals.flatMap((item, index) => item ? [index] : []);
+    if (!changed.length) { scene.current?.setComparePaths(null); return; }
+    const from = Math.max(0, changed[0] - 5), to = Math.min(preview.states.length - 1, changed[changed.length - 1] + 5);
+    const path = (side: 'left' | 'right', corrected: boolean) => preview.states.slice(from, to + 1)
+      .map((now, offset) => ((corrected ? null : originals[from + offset]) ?? now).handles[`${side}_hand`].position);
+    scene.current?.setComparePaths({ original: { left: path('left', false), right: path('right', false) }, resolved: { left: path('left', true), right: path('right', true) } });
+  }, [preview, showCompare]);
   useEffect(() => { scene.current?.setCollisionProxiesVisible(showCollisions); }, [showCollisions]);
   useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
   useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
@@ -1419,7 +1435,7 @@ export default function Editor() {
             socket.onopen = () => socket.send(JSON.stringify({ project, fps: 30 }));
             socket.onmessage = event => {
               const packet = JSON.parse(event.data) as { type: 'batch'; time: number[]; states: PoseState[] }
-                | { type: 'done'; max_pin_error_mm: number; keyframe_times?: number[] | null; dynamic_reports?: DynamicReport[] } | { type: 'error'; message: string };
+                | { type: 'done'; max_pin_error_mm: number; keyframe_times?: number[] | null; dynamic_reports?: DynamicReport[]; original_states?: (PoseState | null)[] | null } | { type: 'error'; message: string };
               if (request.cancelled || !alive.current) return;
               if (packet.type === 'batch') {
                 if (!started) {
@@ -1429,7 +1445,7 @@ export default function Editor() {
                 } else setPreview(previous => previous ? { ...previous,
                   time: [...previous.time, ...packet.time], states: [...previous.states, ...packet.states] } : previous);
               } else if (packet.type === 'done') {
-                setPreview(previous => previous ? { ...previous, max_pin_error_mm: packet.max_pin_error_mm, keyframe_times: packet.keyframe_times, dynamic_reports: packet.dynamic_reports } : previous);
+                setPreview(previous => previous ? { ...previous, max_pin_error_mm: packet.max_pin_error_mm, keyframe_times: packet.keyframe_times, dynamic_reports: packet.dynamic_reports, original_states: packet.original_states } : previous);
                 finish();
               } else finish(new Error(packet.message));
             };
@@ -2101,6 +2117,7 @@ export default function Editor() {
               <label className="dynamic-hand" title="켜면 물체가 기울어진 만큼 손도 기울입니다(기본은 이동과 수직축 회전만)"><input type="checkbox" disabled={disabled} checked={activeFrame.dynamic.freedom === 'full6d'} onChange={e => setDynamic({ freedom: e.target.checked ? 'full6d' : 'yaw_xyz' })}/>기울기</label>
               {activeFrame.dynamic.object_id && <button disabled={disabled} onClick={placeObjectBetweenHands} title="재생 막대 위치에서 두 손의 가운데로 물체를 옮깁니다">손 사이에 놓기</button>}
               <button disabled={disabled} onClick={recaptureDynamicReference} title="물체가 있다면 그 지금 위치를, 없다면 두 손의 가운데를 기준점으로 다시 저장합니다">기준 다시 잡기</button>
+              <label className="dynamic-hand" title="동적 파지를 적용하기 전 원본 동작을 반투명 로봇과 회색 손 경로로 겹쳐 보여 줍니다(색 선은 보정된 손 경로)"><input type="checkbox" checked={showCompare} onChange={e => setShowCompare(e.target.checked)}/>원본 비교</label>
               <span className={`dynamic-chip ${dynamicReport?.status ?? 'pending'}`} title="물체 위치에 맞춘 손 경로의 도달 판정">{dynamicStatusText(dynamicReport)}</span>
               <button disabled={disabled} onClick={() => setDynamic(null, '동적 파지를 해제했습니다. 클립은 원본 동작을 재생합니다.')}>해제</button>
             </>}
