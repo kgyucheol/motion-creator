@@ -257,3 +257,11 @@ def test_capture_reads_the_offset_off_an_edited_pose(robot, project):
     resolved, reports = resolve_project_dynamics(robot, project)
     assert reports[0]['status'] == 'ok'
     assert np.linalg.norm(robot.point(robot.data(np.asarray(resolved['keyframes'][0]['samples'][30])), 'left_hand')[0] - target) < .004
+
+
+def test_arm_geoms_cover_only_the_arms(robot):
+    arms = set(robot.arm_geom_ids)
+    assert arms and arms < {str(i) for i in robot.visual_ids}
+    for i in robot.visual_ids:
+        name = robot.model.body(int(robot.model.geom_bodyid[i])).name
+        assert (str(i) in arms) == any(part in name for part in ('shoulder', 'elbow', 'wrist', 'hand')), name

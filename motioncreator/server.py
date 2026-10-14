@@ -273,7 +273,7 @@ def health():
 @app.get('/api/init')
 def initialize():
     return {'model_id': robot.model_id, 'visual_revision': robot.visual_revision,
-            'state': robot.state(robot.home), 'project': new_project(robot), 'joint_names': robot.names,
+            'state': robot.state(robot.home), 'arm_geoms': robot.arm_geom_ids, 'project': new_project(robot), 'joint_names': robot.names,
             'tools': list(robot.tools) if robot.tools else None, 'tool_options': tool_options(),
             'limits': robot.model.jnt_range[1:].tolist()}
 

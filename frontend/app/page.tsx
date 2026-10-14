@@ -709,9 +709,10 @@ export default function Editor() {
         scene.current = viewer;
       } catch { setError('WebGL을 시작하지 못했습니다. 브라우저의 하드웨어 가속 설정을 확인하세요.'); }
     };
-    api<{ model_id: string; visual_revision: string; state: PoseState; project: Project; limits: number[][]; tools?: [string, string] | null; tool_options?: { id: string; label: string }[] }>('init').then(async init => {
+    api<{ model_id: string; visual_revision: string; state: PoseState; arm_geoms?: string[]; project: Project; limits: number[][]; tools?: [string, string] | null; tool_options?: { id: string; label: string }[] }>('init').then(async init => {
       if (!alive.current) return;
       createViewer(init.model_id, init.visual_revision);
+      scene.current?.setReferenceOnly(init.arm_geoms ?? null);
       setModelId(init.model_id);
       setTools(init.tools ?? null); setToolOptions(init.tool_options ?? []);
       draftKey.current = init.model_id === 'g1' ? 'g1-motion-draft-v1' : `g1-motion-draft-v1-${init.model_id}`;

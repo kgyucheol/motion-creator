@@ -450,6 +450,18 @@ class Robot:
                         'joint_errors_deg': joint_errors,
                         'angle_pin_error_deg': float(np.rad2deg(angle_pin_error))}
 
+    @property
+    def arm_geom_ids(self):
+        """Visual geoms attached to the arms (from the shoulder down, hands and tools included), as the strings state() uses."""
+        roots = {self.model.body(f'{side}_shoulder_pitch_link').id for side in ('left', 'right')}
+        def on_arm(body):
+            while body > 0:
+                if body in roots:
+                    return True
+                body = int(self.model.body_parentid[body])
+            return False
+        return [str(i) for i in self.visual_ids if on_arm(int(self.model.geom_bodyid[i]))]
+
     def state(self, q):
         d = self.data(q)
         # Convert all rotation matrices in one call; a scipy Rotation per handle/geom dominated the cost.

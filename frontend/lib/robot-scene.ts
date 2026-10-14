@@ -111,6 +111,7 @@ export class RobotScene {
   labels: Record<string, HTMLDivElement> = {};
   geoms: Record<string, THREE.Object3D> = {};
   referenceGeoms: Record<string, THREE.Object3D> = {};
+  referenceOnly: Set<string> | null = null;
   referenceRoot: THREE.Object3D | null = null;
   referenceState?: PoseState;
   referenceVisible = false;
@@ -421,6 +422,7 @@ export class RobotScene {
         }
       });
       reference.visible = this.referenceVisible;
+      this.setReferenceOnly(this.referenceOnly);
       this.referenceRoot = reference;
       this.scene.add(reference);
       if (this.referenceState) this.updateReference(this.referenceState);
@@ -712,6 +714,13 @@ export class RobotScene {
       const object = this.referenceGeoms[id];
       if (object) { object.position.fromArray(pose.position); object.quaternion.fromArray(pose.quaternion); }
     }
+    this.dirty = true;
+  }
+
+  /** Show only these geoms (by id) of the reference robot, e.g. just the arms; null shows all of it. */
+  setReferenceOnly(ids: Iterable<string> | null) {
+    this.referenceOnly = ids ? new Set(ids) : null;
+    for (const [id, object] of Object.entries(this.referenceGeoms)) object.visible = !this.referenceOnly || this.referenceOnly.has(id);
     this.dirty = true;
   }
 
