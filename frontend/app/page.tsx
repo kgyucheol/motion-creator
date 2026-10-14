@@ -196,6 +196,7 @@ export default function Editor() {
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
   const [showCompare, setShowCompare] = useState(true);
+  const [bakeCount, setBakeCount] = useState(2);
   const [showCollisions, setShowCollisions] = useState(false);
   const [objects, setObjects] = useState<SceneObject[]>(() => objectsFromProject({}));
   const [objectGroups, setObjectGroups] = useState<SceneObjectGroup[]>([]);
@@ -1786,9 +1787,10 @@ export default function Editor() {
     }
   }
   /** 고른 두 카드 사이를 지금 재생되는 그대로(동작 방식 포함) 한 클립으로 합친다. */
-  async function bakeSelectionToClip() {
-    if (!project || transitionSelection.length !== 2 || poseDirty) return;
-    const [start, end] = [...transitionSelection].sort((a, b) => a - b);
+  async function bakeSelectionToClip(range?: [number, number]) {
+    if (!project || poseDirty) return;
+    if (!range && transitionSelection.length !== 2) return;
+    const [start, end] = range ?? [...transitionSelection].sort((a, b) => a - b);
     await run(async () => {
       const joined = await api<Keyframe>('keyframes-to-clip', { project: sceneProject(project), start, end, fps: 30 });
       // 합친 클립의 끝은 마지막 카드의 끝이므로 그 카드의 동작 방식을 물려받는다(없으면 첫 카드의 것).
@@ -2113,7 +2115,14 @@ export default function Editor() {
             <NumericInput aria-label="변환할 키프레임 수" min={2} max={Math.max(2, activeClipLength)} step="1" disabled={disabled} value={convertCount} onChange={e => setConvertCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
             <span className="tool-unit">개</span>
             <button className="primary" disabled={disabled || activeClipLength < 2} onClick={convertActiveClip} title="이 클립을 편집 가능한 포즈 키프레임으로 바꿉니다(시작·끝 포함 균등 간격, 양발 고정). 앞뒤 클립과는 자동으로 이어집니다.">키프레임으로 변환</button></div>
-        </> : <span className="tool-hint">클립을 선택하면 분할 · 합치기 · 키프레임 변환 도구가 여기에 나타납니다.</span>}
+        </> : <div className="tool-group"><span className="tool-label">변환</span>
+          <NumericInput aria-label="클립으로 합칠 카드 수" min={2} max={Math.max(2, project!.keyframes.length - frameIndex)} step="1" disabled={disabled} value={Math.min(bakeCount, Math.max(2, project!.keyframes.length - frameIndex))}
+            onChange={e => setBakeCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
+          <span className="tool-unit">장</span>
+          <button className="primary" disabled={disabled || poseDirty || frameIndex >= project!.keyframes.length - 1}
+            onClick={() => void bakeSelectionToClip([frameIndex, Math.min(project!.keyframes.length - 1, frameIndex + Math.max(2, bakeCount) - 1)])}
+            title="이 카드부터 지정한 장수만큼(이 카드 포함)을 녹화된 그대로 클립 하나로 합칩니다. 합친 클립은 마지막 카드의 동작 방식을 가집니다. 구간이 멀면 헤더의 '선택 구간을 클립으로'로 두 카드를 직접 고를 수도 있습니다.">클립으로 변환</button>
+        </div>}
         <div className="tool-group dynamic-group"><span className="tool-label">동작 방식</span>
           <select aria-label="카드 동작 방식" disabled={disabled} value={activeFrame.motion?.mode ?? 'recorded'} onChange={e => void chooseMotionMode(e.target.value as CardMotion['mode'])}
             title="원본 그대로: 녹화된 동작 · 관절 델타: 앞 카드가 끝난 자세에서 이어서 원본의 관절 변화만 더함(동작이 중요한 카드) · 카테시안: 끝 지점을 목표 위치로 옮김(도착 위치가 중요한 카드)">
