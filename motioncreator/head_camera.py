@@ -6,6 +6,22 @@ DEFAULT_ENDPOINT = 'tcp://192.168.123.164:55555'
 POLL_MS = 300
 
 
+def jpeg_size(data):
+    """(width, height) from the JPEG start-of-frame marker, or None if it is not found."""
+    position = 2
+    while position + 9 < len(data):
+        if data[position] != 0xFF:
+            return None
+        marker = data[position + 1]
+        if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+            position += 2
+            continue
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            return int.from_bytes(data[position + 7:position + 9], 'big'), int.from_bytes(data[position + 5:position + 7], 'big')
+        position += 2 + int.from_bytes(data[position + 2:position + 4], 'big')
+    return None
+
+
 def head_camera_endpoint():
     return os.environ.get('MOTIONCREATOR_HEAD_CAMERA_ENDPOINT') or DEFAULT_ENDPOINT
 
@@ -22,6 +38,7 @@ class HeadCameraStream:
         self._frame = None
         self._sequence = 0
         self._frame_time = None
+        self._size = None
 
     def acquire(self):
         try:
@@ -52,8 +69,10 @@ class HeadCameraStream:
     def status(self):
         with self._condition:
             age = None if self._frame_time is None else self._clock() - self._frame_time
+            size = self._size if age is not None else None
             return {'endpoint': self.endpoint, 'viewers': self._viewers,
-                    'receiving': age is not None and age < 2.0, 'age': age}
+                    'receiving': age is not None and age < 2.0, 'age': age,
+                    'width': size[0] if size else None, 'height': size[1] if size else None}
 
     def _run(self):
         import zmq
@@ -69,6 +88,7 @@ class HeadCameraStream:
                     if self._viewers == 0:
                         self._frame = None
                         self._frame_time = None
+                        self._size = None
                         self._thread = None
                         return
                 if not socket.poll(POLL_MS):
@@ -76,6 +96,7 @@ class HeadCameraStream:
                 data = socket.recv()
                 with self._condition:
                     self._frame = data
+                    self._size = jpeg_size(data)
                     self._sequence += 1
                     self._frame_time = self._clock()
                     self._condition.notify_all()

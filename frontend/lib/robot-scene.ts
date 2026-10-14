@@ -519,8 +519,9 @@ export class RobotScene {
       label.textContent = 'HEAD CAM · REAL · 연결 중';
       const poll = async () => {
         try {
-          const status = await (await fetch('/api/head-camera/status')).json() as { receiving: boolean };
-          label.textContent = `HEAD CAM · REAL · ${status.receiving ? 'LIVE' : '신호 없음'}`;
+          const status = await (await fetch('/api/head-camera/status')).json() as { receiving: boolean; width: number | null; height: number | null };
+          const size = status.receiving && status.width && status.height ? ` ${status.width}×${status.height}` : '';
+          label.textContent = `HEAD CAM · REAL · ${status.receiving ? `LIVE${size}` : '신호 없음'}`;
         } catch { label.textContent = 'HEAD CAM · REAL · 서버 오류'; }
       };
       this.headCameraStatusTimer = window.setInterval(() => { void poll(); }, 1000);

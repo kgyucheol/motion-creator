@@ -5,7 +5,7 @@ import pytest
 
 zmq = pytest.importorskip('zmq')
 
-from motioncreator.head_camera import HeadCameraStream
+from motioncreator.head_camera import HeadCameraStream, jpeg_size
 
 
 def publisher():
@@ -58,3 +58,10 @@ def test_wait_frame_times_out_without_publisher():
         assert stream.status()['receiving'] is False
     finally:
         stream.release()
+
+
+def test_jpeg_size_reads_the_frame_marker():
+    # SOI, APP0 (16 bytes), SOF0 for 848x480
+    data = b'\xff\xd8' + b'\xff\xe0\x00\x10' + b'JFIF\x00' + bytes(9) + b'\xff\xc0\x00\x11\x08\x01\xe0\x03\x50\x03' + bytes(20)
+    assert jpeg_size(data) == (848, 480)
+    assert jpeg_size(b'not a jpeg') is None
