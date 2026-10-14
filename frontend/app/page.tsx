@@ -1603,6 +1603,20 @@ export default function Editor() {
       ? 'MuJoCo + GEAR-SONIC · 계산되는 자세와 충돌을 실시간으로 보여줍니다.'
       : 'MuJoCo + 기본 PD · 계산되는 자세와 충돌을 실시간으로 보여줍니다. 균형 정책이 없어 넘어질 수 있습니다.');
   }
+  // 재생 버튼을 누르지 않아도 타임라인 슬라이더가 바로 쓰이도록, 편집이 멈추면 미리보기를 미리 계산해 둔다(재생은 하지 않는다).
+  const failedPreview = useRef<unknown>(null);
+  useEffect(() => {
+    if (!project || !state || preview || playing || previewStreaming || busy || solving || failedPreview.current === project) return;
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api<Preview>('preview', { project, fps: 30 }).then(result => {
+        const now = current.current;
+        if (cancelled || now.project !== project || now.playing || now.busy || now.solving) return;
+        setPreview(previous => previous ?? result); setSample(0);
+      }).catch(() => { failedPreview.current = project; });      // a project that does not compile reports its error when played
+    }, 500);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [project, !!state, preview, playing, previewStreaming, busy, solving]); // eslint-disable-line react-hooks/exhaustive-deps -- project edits go through invalidate()
   const disabled = !state || busy || solving || playing || !!preview?.physics;
   const selectionPinned = members.some(k => pins.includes(k));
   const controls = controlSelection(members);
