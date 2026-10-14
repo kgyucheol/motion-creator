@@ -578,13 +578,48 @@ def generate_grasp_template_motion(payload: GraspTemplateInput):
         robot, load_template(), payload.object_position, payload.object_yaw_deg, payload.fps, payload.carry_target))))
 
 
+class KeyframesToClipInput(BaseModel):
+    project: dict
+    start: int = Field(ge=0)
+    end: int = Field(ge=1)
+    fps: int = Field(30, ge=1, le=30)
+
+
+@app.post('/api/keyframes-to-clip')
+def keyframes_to_clip(payload: KeyframesToClipInput):
+    """Bake cards `start`…`end` (as they play now, motion modes included) into one motion clip."""
+    def run():
+        frames = payload.project['keyframes']
+        if payload.end >= len(frames) or payload.end <= payload.start:
+            raise ValueError('Pick two or more cards in order')
+        motion = compile_motion(robot, payload.project, payload.fps)
+        times = np.asarray(motion['time'])
+        starts = motion['keyframe_times']
+        begin = starts[payload.start]
+        last = frames[payload.end]
+        finish = starts[payload.end] + (float(last['duration']) if last.get('samples') is not None else 0.)
+        first_index = int(np.searchsorted(times, begin - 1e-6))
+        last_index = int(np.searchsorted(times, finish + 1e-6, side='right')) - 1
+        samples = np.asarray(motion['qpos'])[first_index:last_index + 1]
+        if len(samples) < 2:
+            raise ValueError('The picked cards are too short to become a clip')
+        entry = frames[payload.start]
+        clip = {'name': entry['name'] if payload.start == payload.end - 1 else f"{entry['name']} → {last['name']}",
+                'duration': (len(samples) - 1) / payload.fps, 'qpos': samples[0].tolist(), 'pins': [], 'samples': samples.tolist()}
+        arrival = entry.get('transition') if entry.get('samples') is not None else entry.get('duration')
+        if payload.start > 0 and arrival is not None:
+            clip['transition'] = float(arrival)
+        return clip
+    return checked(run)
+
+
 @app.post('/api/preview')
 def preview(payload: ProjectInput):
     def run():
         motion = compile_motion(robot, payload.project, min(payload.fps, 30))
         return {'time': motion['time'].tolist(), 'states': [robot.state(q) for q in motion['qpos']],
                 'max_pin_error_mm': motion['max_pin_error_mm'], 'keyframe_times': motion.get('keyframe_times'),
-                'dynamic_reports': motion.get('dynamic_reports', []),
+                'dynamic_reports': motion.get('dynamic_reports', []), 'motion_reports': motion.get('motion_reports', []),
                 'original_states': _original_states(motion)}
     return checked(run)
 
@@ -622,7 +657,7 @@ async def preview_stream(websocket: WebSocket):
         try:
             motion = compile_motion(active_robot, project, fps, on_segment=emit)
             packet = {'type': 'done', 'max_pin_error_mm': float(motion['max_pin_error_mm']), 'keyframe_times': motion.get('keyframe_times'),
-                      'dynamic_reports': motion.get('dynamic_reports', []),
+                      'dynamic_reports': motion.get('dynamic_reports', []), 'motion_reports': motion.get('motion_reports', []),
                       'original_states': _original_states(motion, active_robot)}
         except InterruptedError:
             return

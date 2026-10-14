@@ -194,6 +194,9 @@ def validate_project(robot: Robot, project):
                 raise ValueError('Motion clips cannot use pins until they are split into keyframes')
             if frame.get('angle_pins'):
                 raise ValueError('Motion clips cannot use angle pins until they are split into keyframes')
+        if frame.get('motion') is not None:
+            from .card_motion import validate_motion
+            validate_motion(frame['motion'])
         if frame.get('dynamic') is not None:
             if frame.get('samples') is None:
                 raise ValueError('Only motion clips take a dynamic grasp binding')
@@ -838,50 +841,56 @@ def _compile_motion(robot: Robot, project, fps, on_segment=None):
     project = project_with_consistent_interactions(robot, project)
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
+    from .card_motion import resolve_project_motions
     from .dynamic_clip import resolve_project_dynamics
     unresolved = project
+    project, motion_reports = resolve_project_motions(robot, project)
     project, dynamic_reports = resolve_project_dynamics(robot, project)
     frames = project['keyframes']
     if any(frame.get('samples') is not None for frame in frames):
         result = _compile_with_clips(robot, project, fps, on_segment)
-        if dynamic_reports:
-            result['dynamic_reports'] = [{'index': index, **report} for index, report in dynamic_reports.items()]
-            result['original_qpos'] = _original_qpos(robot, unresolved, fps, result['qpos'])
-        return result
-    poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
-    if on_segment is not None:
-        on_segment([0.], poses)
-    pin_errors = []
-    # Fix the quaternion signs sequentially (cheap); after that every segment is independent.
-    endpoints, previous = [], poses[0]
-    for a, b in zip(frames, frames[1:]):
-        qa, qb = robot.validate_q(a['qpos']), robot.validate_q(b['qpos'])
-        if np.dot(qa[3:7], previous[3:7]) < 0:
-            qa[3:7] *= -1
-        if np.dot(qa[3:7], qb[3:7]) < 0:
-            qb[3:7] *= -1
-        endpoints.append((qa, qb))
-        previous = qb
-    elapsed = 0.
-    keyframe_times = [0.]
-    for segment_poses, segment_pin_errors, segment_contact, duration in _compile_segments(robot, frames, endpoints, fps):
-        for i, q in enumerate(segment_poses, start=1):
-            poses.append(q)
-            times.append(elapsed + i / fps)
-            contacts.append(segment_contact)
-        pin_errors += segment_pin_errors
+    else:
+        poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
         if on_segment is not None:
-            on_segment([elapsed + i / fps for i in range(1, len(segment_poses) + 1)], segment_poses)
-        elapsed += duration
-        keyframe_times.append(elapsed)
-    return {**motion_result(robot, poses, times, contacts, fps, pin_errors), 'keyframe_times': keyframe_times}
+            on_segment([0.], poses)
+        pin_errors = []
+        # Fix the quaternion signs sequentially (cheap); after that every segment is independent.
+        endpoints, previous = [], poses[0]
+        for a, b in zip(frames, frames[1:]):
+            qa, qb = robot.validate_q(a['qpos']), robot.validate_q(b['qpos'])
+            if np.dot(qa[3:7], previous[3:7]) < 0:
+                qa[3:7] *= -1
+            if np.dot(qa[3:7], qb[3:7]) < 0:
+                qb[3:7] *= -1
+            endpoints.append((qa, qb))
+            previous = qb
+        elapsed = 0.
+        keyframe_times = [0.]
+        for segment_poses, segment_pin_errors, segment_contact, duration in _compile_segments(robot, frames, endpoints, fps):
+            for i, q in enumerate(segment_poses, start=1):
+                poses.append(q)
+                times.append(elapsed + i / fps)
+                contacts.append(segment_contact)
+            pin_errors += segment_pin_errors
+            if on_segment is not None:
+                on_segment([elapsed + i / fps for i in range(1, len(segment_poses) + 1)], segment_poses)
+            elapsed += duration
+            keyframe_times.append(elapsed)
+        result = {**motion_result(robot, poses, times, contacts, fps, pin_errors), 'keyframe_times': keyframe_times}
+    if dynamic_reports:
+        result['dynamic_reports'] = [{'index': index, **report} for index, report in dynamic_reports.items()]
+    if motion_reports:
+        result['motion_reports'] = list(motion_reports.values())
+    if dynamic_reports or motion_reports:
+        result['original_qpos'] = _original_qpos(robot, unresolved, fps, result['qpos'])
+    return result
 
 
 def _original_qpos(robot: Robot, project, fps, resolved):
     """The same motion without the dynamic grasp corrections, to compare against; None when its frames do not line up."""
-    plain = {**project, 'keyframes': [{k: v for k, v in frame.items() if k != 'dynamic'} for frame in project['keyframes']]}
+    plain = {**project, 'keyframes': [{k: v for k, v in frame.items() if k not in ('dynamic', 'motion')} for frame in project['keyframes']]}
     try:
-        original = np.asarray(_compile_with_clips(robot, plain, fps)['qpos'])
+        original = np.asarray(_compile_motion(robot, plain, fps)['qpos'])
     except ValueError:
         return None
     return original if original.shape == np.asarray(resolved).shape else None
