@@ -108,6 +108,8 @@ export type CardMotion = {
 export type MotionReport = {
   index: number; mode: CardMotion['mode']; status: 'ok' | 'approx' | 'unreachable' | 'too_far' | 'missing_object' | 'unchanged' | 'limit';
   shift_mm?: number; max_position_error_mm?: number; max_shift_mm?: number; offset_deg?: number; clamped_deg?: number; after_unreachable?: number;
+  /** Set when a joint limit or an unreachable card could be avoided by moving less in the same direction. */
+  caused_by?: number; blocks?: number[]; safe_fraction?: number; safe_shift_mm?: number[]; requested_shift_mm?: number[];
 };
 
 export type Keyframe = {

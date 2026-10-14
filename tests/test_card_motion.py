@@ -144,3 +144,32 @@ def test_the_right_hand_example_is_exactly_left_right_symmetric_and_stays_so_on_
     resolved, reports = resolve_project_motions(robot, moved)
     assert reports[2]['status'] in ('ok', 'approx')
     assert asymmetry(resolved['keyframes']) < 1                                    # the retargeted motion is still symmetric
+
+
+def test_a_flagged_card_reports_how_far_the_target_can_move_the_same_way(robot):
+    mirror = json.loads((EXAMPLE.parent / 'pick_cards_right_mirrored.project.json').read_text())
+    moved = move_cube(copy.deepcopy(mirror), [-.05, 0., 0.])
+    _, reports = resolve_project_motions(robot, moved)
+    flagged = reports[4]                                                   # 몸쪽으로 이동 hits a joint limit
+    assert flagged['status'] == 'limit' and flagged['caused_by'] == 2
+    assert reports[2]['blocks'] == [4] and reports[2]['safe_shift_mm'] == flagged['safe_shift_mm']      # the card to move is told too
+    safe = np.array(flagged['safe_shift_mm'])
+    assert 0 < flagged['safe_fraction'] < 1 and safe[0] < -20 and abs(safe[1]) < 1 and abs(safe[2]) < 1     # backwards only, less than asked
+    within, beyond = (move_cube(copy.deepcopy(mirror), safe * f / 1000) for f in (.98, 1.15))
+    assert not [r for r in resolve_project_motions(robot, within)[1].values() if r['status'] in ('limit', 'unreachable')]
+    assert [r for r in resolve_project_motions(robot, beyond)[1].values() if r['status'] in ('limit', 'unreachable')]
+
+
+def test_a_move_that_is_fine_gets_no_advice_and_costs_no_search(robot):
+    mirror = json.loads((EXAMPLE.parent / 'pick_cards_right_mirrored.project.json').read_text())
+    _, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(mirror), [.03, 0., .03]))
+    assert all('safe_shift_mm' not in report for report in reports.values())
+
+
+def test_a_point_target_gets_advice_too(robot):
+    mirror = json.loads((EXAMPLE.parent / 'pick_cards_right_mirrored.project.json').read_text())
+    mirror['keyframes'][5]['motion']['target']['point'] = [.9, 0., 1.0]        # far beyond the arms' reach
+    _, reports = resolve_project_motions(robot, mirror)
+    assert reports[5]['status'] in ('unreachable', 'too_far')
+    if reports[5]['status'] == 'unreachable':
+        assert reports[5]['caused_by'] == 5 and reports[5]['safe_fraction'] < 1

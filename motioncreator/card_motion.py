@@ -139,8 +139,11 @@ def _solve_end(robot: Robot, end_q, spec, goals):
     return result, position_error, angle_error
 
 
-def resolve_project_motions(robot: Robot, project):
-    """Apply every card's motion mode. Returns (project, {card index: report}); the input project is not modified."""
+def resolve_project_motions(robot: Robot, project, advise=True):
+    """Apply every card's motion mode. Returns (project, {card index: report}); the input project is not modified.
+
+    With `advise`, a card that ends on a joint limit or out of reach also reports how far the target that causes it
+    could move in the same direction without that (`safe_shift_mm`, `safe_fraction`, `caused_by`)."""
     frames = project['keyframes']
     if not any(frame.get('motion') for frame in frames):
         return project, {}
@@ -201,4 +204,79 @@ def resolve_project_motions(robot: Robot, project):
         offset = exit_offset
         if mode != 'recorded' or np.any(entry):
             reports[index] = report
+    if advise:
+        _advise(robot, project, reports)
     return {**project, 'keyframes': resolved}, reports
+
+
+FLAGGED = ('limit', 'unreachable')
+SEARCH_STEPS = 7
+
+
+def _flagged(reports):
+    return [index for index, report in reports.items() if report['status'] in FLAGGED]
+
+
+def _target_shift(robot: Robot, project, index):
+    """How far the target of cartesian card `index` lies from where the recording has it: (vector in m, how to scale it back)."""
+    frame = project['keyframes'][index]
+    spec = validate_motion(frame['motion'])
+    target = spec['target']
+    if target['kind'] == 'object':
+        pose = scene_object_pose(project, target['object_id'])
+        if pose is None:
+            return None
+        reference = np.asarray(target['reference_pose']['position'], dtype=float)
+        shift = np.asarray(pose[0], dtype=float) - reference
+
+        def scaled(fraction):
+            moved = reference + (1 - fraction) * shift      # the reference moves toward the object: less of the move is left
+            motion = {**frame['motion'], 'target': {**target, 'reference_pose': {**target['reference_pose'], 'position': moved.tolist()}}}
+            return {**frame, 'motion': motion}
+        return shift, scaled
+    _, end = _card_ends(robot, frame)
+    data = robot.data(end)
+    middle = np.mean([robot.point(data, f'{side}_hand')[0] for side in spec['hands']], axis=0)
+    shift = np.asarray(target['point'], dtype=float) - middle
+
+    def scaled(fraction):
+        motion = {**frame['motion'], 'target': {'kind': 'point', 'point': (middle + fraction * shift).tolist()}}
+        return {**frame, 'motion': motion}
+    return shift, scaled
+
+
+def _advise(robot: Robot, project, reports):
+    """Find, for every cartesian card that causes a flagged card, the largest part of its move that stays clear."""
+    flagged = _flagged(reports)
+    if not flagged:
+        return
+    frames = project['keyframes']
+    causes = {}
+    for index in flagged:
+        cause = next((i for i in range(index, -1, -1) if frames[i].get('motion', {}).get('mode') == 'cartesian'), None)
+        if cause is not None:
+            causes.setdefault(cause, []).append(index)
+    for cause, affected in causes.items():
+        found = _target_shift(robot, project, cause)
+        if found is None:
+            continue
+        shift, scaled = found
+
+        def clear(fraction):
+            trial = {**project, 'keyframes': [scaled(fraction) if i == cause else frame for i, frame in enumerate(frames)]}
+            _, trial_reports = resolve_project_motions(robot, trial, advise=False)
+            return not _flagged(trial_reports)
+        if not clear(0.):
+            continue                      # flagged even where the recording has it: moving the target is not the cure
+        low, high = 0., 1.
+        for _ in range(SEARCH_STEPS):
+            middle = (low + high) / 2
+            if clear(middle):
+                low = middle
+            else:
+                high = middle
+        advice = {'safe_fraction': low, 'safe_shift_mm': (shift * low * 1000).tolist(), 'requested_shift_mm': (shift * 1000).tolist()}
+        for index in affected:
+            reports[index].update(caused_by=cause, **advice)
+        if cause not in affected:
+            reports[cause].update(blocks=affected, **advice)      # the card to move is not the one that complains

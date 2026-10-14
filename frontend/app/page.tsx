@@ -1758,6 +1758,19 @@ export default function Editor() {
     patchMotion({ target: { ...target, reference_pose: { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } });
     setMessage('물체의 지금 위치를 기준으로 다시 잡았습니다.');
   }
+  /** 월드 좌표 이동량(mm)을 "앞 3.5cm · 위 2.0cm"처럼 읽는다. 5mm 미만 성분은 생략한다. */
+  function describeShift(mm: number[]) {
+    const words: [string, string][] = [['앞', '뒤'], ['왼쪽', '오른쪽'], ['위', '아래']];
+    const parts = mm.flatMap((value, axis) => Math.abs(value) < 5 ? [] : [`${words[axis][value > 0 ? 0 : 1]} ${(Math.abs(value) / 10).toFixed(1)}cm`]);
+    return parts.length ? parts.join(' · ') : '거의 움직이지 않는 범위';
+  }
+  /** 한계에 걸린 이동을 어디까지 줄이면 되는지 안내하는 문장(없으면 null). */
+  function motionAdvice(report: MotionReport | null) {
+    if (!report?.safe_shift_mm || !report.requested_shift_mm) return null;
+    const where = report.caused_by !== undefined && report.caused_by !== frameIndex ? `${report.caused_by + 1}번 카드의 목표를 ` : '';
+    const blocked = report.blocks?.length ? `${report.blocks.map(item => item + 1).join(', ')}번 카드가 한계에 걸립니다. ` : '';
+    return `${blocked}${where}같은 방향으로 ${describeShift(report.safe_shift_mm)}까지만 옮기면 안전합니다 (지금 ${describeShift(report.requested_shift_mm)}).`;
+  }
   function motionStatusText(report: MotionReport | null) {
     if (!report) return '미리보기를 만들면 표시됩니다';
     const error = report.max_position_error_mm !== undefined ? ` · ${report.max_position_error_mm.toFixed(1)}mm` : '';
@@ -2137,6 +2150,7 @@ export default function Editor() {
             <label className="dynamic-hand" title="켜면 물체가 기울어진 만큼 손도 기울입니다(기본은 이동과 수직축 회전만)"><input type="checkbox" disabled={disabled} checked={activeFrame.motion.freedom === 'full6d'} onChange={e => patchMotion({ freedom: e.target.checked ? 'full6d' : 'yaw_xyz' })}/>기울기</label>
           </>}
           {activeFrame.motion && activeFrame.motion.mode !== 'recorded' && <span className={`dynamic-chip ${motionReport?.status ?? 'pending'}`} title="이 카드의 끝 지점 판정">{motionStatusText(motionReport)}</span>}
+          {motionAdvice(motionReport) && <span className="motion-advice" role="status">{motionAdvice(motionReport)}</span>}
           <label className="dynamic-hand" title="동작 방식을 적용하기 전 원본 동작을 반투명 팔과 회색 손 경로로 겹쳐 보여 줍니다(색 선은 적용 결과)"><input type="checkbox" checked={showCompare} onChange={e => setShowCompare(e.target.checked)}/>원본 비교</label>
           {activeFrame.dynamic && <button disabled={disabled} onClick={() => { checkpoint(); editFrame(frameIndex, { dynamic: undefined }); setMessage('이전 방식(창 번호)의 동적 파지를 해제했습니다.'); }} title="이 클립에는 이전 방식의 동적 파지가 남아 있습니다. 해제하면 동작 방식으로 대체할 수 있습니다.">이전 동적 파지 해제</button>}
         </div>
