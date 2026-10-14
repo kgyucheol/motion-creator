@@ -1,7 +1,7 @@
 # 카드 동작 방식
 
 키프레임(포즈)과 클립 카드마다 앞 카드에 대한 움직임 방식을 하나 고른다. 구현: `motioncreator/card_motion.py`.
-예시 프로젝트: `examples/pick_cards_modes.project.json`(8장: 포즈 5·클립 3, 텔레옵 그대로)와 `examples/pick_cards_right_mirrored.project.json`(같은 구성이고 왼팔을 오른팔의 거울상으로 채운 좌우대칭 버전).
+예시 프로젝트: `examples/pick_cards_modes.project.json`(8장: 포즈 5·클립 3, 텔레옵 그대로)와 `examples/pick_cards_right_mirrored.project.json`(같은 구성이고 왼팔을 오른팔의 거울상으로 채운 좌우대칭 버전), `examples/pick_all_keyframes.project.json`(그 프로젝트를 직접 손본 저장본에서 클립을 모두 키프레임 20장으로 바꾼 것).
 
 | 방식 | 의미 | 쓰는 곳 |
 |---|---|---|

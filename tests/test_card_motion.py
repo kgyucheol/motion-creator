@@ -173,3 +173,17 @@ def test_a_point_target_gets_advice_too(robot):
     assert reports[5]['status'] in ('unreachable', 'too_far')
     if reports[5]['status'] == 'unreachable':
         assert reports[5]['caused_by'] == 5 and reports[5]['safe_fraction'] < 1
+
+
+def test_the_all_keyframe_example_has_no_clips_and_plays_as_long_as_the_original(robot):
+    path = EXAMPLE.parent / 'pick_all_keyframes.project.json'
+    project = json.loads(path.read_text())
+    assert not any(frame.get('samples') for frame in project['keyframes'])
+    assert len(project['keyframes']) > 8
+    motion = compile_motion(robot, project, 30)
+    assert abs(motion['time'][-1] - sum(float(frame['duration']) for frame in project['keyframes'][1:])) < 1 / 30
+    modes = [(frame.get('motion') or {}).get('mode') for frame in project['keyframes']]
+    assert 'cartesian' in modes and 'delta' in modes
+    moved = move_cube(copy.deepcopy(project), [.03, 0., .03])
+    resolved, reports = resolve_project_motions(robot, moved)
+    assert not [report for report in reports.values() if report['status'] in ('limit', 'unreachable', 'too_far')]
