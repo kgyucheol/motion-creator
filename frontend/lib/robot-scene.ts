@@ -102,6 +102,7 @@ export class RobotScene {
   private editorSettingsKey: string;
   private headCameraPosition: { top: number; right: number } | null = null;
   private headCameraMoving = false;
+  private headCameraWidth: number | null = null;
   headCameraAvailable = false;
   headCameraSource: 'sim' | 'real' = 'sim';
   private headCameraStatusTimer: number | null = null;
@@ -167,7 +168,7 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><img class="head-camera-feed" alt="실제 HEAD CAM 영상" hidden><b>HEAD CAM · SIM</b><button class="head-camera-move-button" type="button" aria-label="PiP 이동 시작" aria-pressed="false" title="PiP 위치 이동">⤧</button><div id="head-camera-settings" class="head-camera-controls" hidden><div class="head-camera-source" role="group" aria-label="PiP 카메라 소스"><button type="button" data-source="sim" aria-pressed="true">가상 카메라</button><button type="button" data-source="real" aria-pressed="false" title="로봇 D435 영상 (teleimager ZMQ)">실제 카메라</button></div><div class="head-camera-controls-title"><strong>PiP 카메라 화각 (°)</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><span>가로</span><input type="range" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 수치"></label><label><span>세로</span><input type="range" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 수치"></label></div>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><img class="head-camera-feed" alt="실제 HEAD CAM 영상" hidden><div class="head-camera-resize" role="separator" aria-label="PiP 크기 조절" title="이동 모드에서 드래그해 크기 조절"></div><b>HEAD CAM · SIM</b><button class="head-camera-move-button" type="button" aria-label="PiP 이동 시작" aria-pressed="false" title="PiP 위치 이동">⤧</button><div id="head-camera-settings" class="head-camera-controls" hidden><div class="head-camera-source" role="group" aria-label="PiP 카메라 소스"><button type="button" data-source="sim" aria-pressed="true">가상 카메라</button><button type="button" data-source="real" aria-pressed="false" title="로봇 D435 영상 (teleimager ZMQ)">실제 카메라</button></div><div class="head-camera-controls-title"><strong>PiP 카메라 화각 (°)</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><span>가로</span><input type="range" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 수치"></label><label><span>세로</span><input type="range" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 수치"></label></div>';
     const moveButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-move-button')!;
     moveButton.addEventListener('click', () => {
       this.headCameraMoving = !this.headCameraMoving;
@@ -178,21 +179,35 @@ export class RobotScene {
       if (!this.headCameraMoving) this.saveEditorViewSettings();
     });
     let drag: { x: number; y: number; top: number; right: number } | null = null;
+    let resize: { x: number; width: number } | null = null;
     this.headCameraOverlay.addEventListener('pointerdown', event => {
-      if (!this.headCameraMoving || (event.target as HTMLElement).closest('button,input,.head-camera-controls')) return;
+      if (!this.headCameraMoving) return;
+      if ((event.target as HTMLElement).closest('.head-camera-resize')) {
+        resize = { x: event.clientX, width: this.headCameraRect(this.host.clientWidth, this.host.clientHeight).width };
+        this.headCameraOverlay.setPointerCapture(event.pointerId);
+        event.preventDefault();
+        return;
+      }
+      if ((event.target as HTMLElement).closest('button,input,.head-camera-controls')) return;
       const rect = this.headCameraRect(this.host.clientWidth, this.host.clientHeight);
       drag = { x: event.clientX, y: event.clientY, top: rect.top, right: rect.right };
       this.headCameraOverlay.setPointerCapture(event.pointerId);
       event.preventDefault();
     });
     this.headCameraOverlay.addEventListener('pointermove', event => {
+      if (resize) {
+        this.headCameraWidth = resize.width - (event.clientX - resize.x);
+        this.headCameraWidth = this.headCameraRect(this.host.clientWidth, this.host.clientHeight).width;
+        this.dirty = true;
+        return;
+      }
       if (!drag) return;
       this.headCameraPosition = { top: drag.top + event.clientY - drag.y, right: drag.right - (event.clientX - drag.x) };
       const rect = this.headCameraRect(this.host.clientWidth, this.host.clientHeight);
       this.headCameraPosition = { top: rect.top, right: rect.right };
       this.dirty = true;
     });
-    const finishMove = () => { if (drag) { drag = null; this.saveEditorViewSettings(); } };
+    const finishMove = () => { if (drag || resize) { drag = null; resize = null; this.saveEditorViewSettings(); } };
     this.headCameraOverlay.addEventListener('pointerup', finishMove);
     this.headCameraOverlay.addEventListener('pointercancel', finishMove);
     const settingsButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-settings-button')!;
@@ -441,7 +456,7 @@ export class RobotScene {
     try {
       window.localStorage.setItem(this.editorSettingsKey, JSON.stringify({
         camera: { position: this.camera.position.toArray(), target: this.orbit.target.toArray() },
-        pip: { position: this.headCameraPosition, horizontalFov: this.headCameraHorizontalFov,
+        pip: { position: this.headCameraPosition, width: this.headCameraWidth, horizontalFov: this.headCameraHorizontalFov,
           verticalFov: this.headCameraVerticalFov, aspect: this.headCameraAspect, source: this.headCameraSource },
       }));
     } catch { /* 에디터 설정 저장이 불가능해도 편집은 계속합니다. */ }
@@ -461,6 +476,7 @@ export class RobotScene {
       if (Number.isFinite(pip?.position?.top) && Number.isFinite(pip?.position?.right)) {
         this.headCameraPosition = { top: pip.position.top, right: pip.position.right };
       }
+      if (Number.isFinite(pip?.width) && pip.width > 0) this.headCameraWidth = pip.width;
       if (Number.isFinite(pip?.horizontalFov) && pip.horizontalFov >= 1 && pip.horizontalFov <= 120) this.headCameraHorizontalFov = pip.horizontalFov;
       if (Number.isFinite(pip?.verticalFov) && pip.verticalFov >= 1 && pip.verticalFov <= 120) this.headCameraVerticalFov = pip.verticalFov;
       if (pip?.aspect === null || pip?.aspect === 4 / 3 || pip?.aspect === 16 / 9) this.headCameraAspect = pip.aspect;
@@ -508,7 +524,8 @@ export class RobotScene {
   }
 
   private headCameraRect(width: number, height: number) {
-    const frameWidth = Math.min(220, Math.max(150, width * .28));
+    const maxWidth = Math.max(120, Math.min(width - 8, (height - 8) * (this.headCameraAspect ?? 16 / 9), 960));
+    const frameWidth = this.headCameraWidth ? THREE.MathUtils.clamp(this.headCameraWidth, 120, maxWidth) : Math.min(220, Math.max(150, width * .28));
     const frameHeight = frameWidth / (this.headCameraAspect ?? 16 / 9);
     const right = THREE.MathUtils.clamp(this.headCameraPosition?.right ?? 18, 4, Math.max(4, width - frameWidth - 4));
     const top = THREE.MathUtils.clamp(this.headCameraPosition?.top ?? 52, 4, Math.max(4, height - frameHeight - 4));

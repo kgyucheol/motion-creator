@@ -806,3 +806,20 @@ test('PiP source switch streams the real head camera and releases it when switch
     globalThis.fetch = previous.fetch;
   }
 });
+
+test('PiP width can be resized within sensible bounds and keeps its aspect', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  viewer.headCameraAspect = null;
+  viewer.headCameraPosition = null;
+  viewer.headCameraWidth = 400;
+  const wide = viewer.headCameraRect(1200, 800);
+  assert.equal(wide.width, 400);
+  assert.ok(Math.abs(wide.height - 400 * 9 / 16) < 1e-9);
+  viewer.headCameraWidth = 10;
+  assert.equal(viewer.headCameraRect(1200, 800).width, 120);
+  viewer.headCameraWidth = 5000;
+  assert.ok(viewer.headCameraRect(600, 400).width <= 600 - 8);
+  viewer.headCameraWidth = 5000;
+  const tall = viewer.headCameraRect(1200, 200);
+  assert.ok(tall.top + tall.height <= 200);
+});
