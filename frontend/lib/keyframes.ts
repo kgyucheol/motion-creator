@@ -393,6 +393,23 @@ export function moveKeyframe(keyframes: Keyframe[], index: number, delta: -1 | 1
 }
 
 /** Remove card `index`; the previous card keeps its own time to whatever now follows it. */
+/**
+ * Merge card `index` into the keyframe after it: the pose of `index` disappears, the later keyframe (with its name and motion mode)
+ * stays, and the time from the card before to it becomes the sum of the two times, so the motion keeps its total length.
+ * A clip at `index` counts with its playing time. The next card must be a pose keyframe.
+ */
+export function mergeIntoNextPose(keyframes: Keyframe[], index: number) {
+  const frame = keyframes[index], next = keyframes[index + 1];
+  if (!frame || !next) throw new Error('합칠 다음 카드가 없습니다.');
+  if (next.samples) throw new Error('다음 카드가 클립이면 키프레임으로 합칠 수 없습니다. 클립 쪽에서 "다음과 합치기"를 쓰세요.');
+  const out = takeOutgoing(keyframes);
+  if (index > 0) {
+    const through = (out[index] ?? next.duration) + (frame.samples ? frame.duration : 0);
+    out[index - 1] = (out[index - 1] ?? 0) + through;
+  }
+  return applyOutgoing(keyframes.filter((_, i) => i !== index), out.filter((_, i) => i !== index));
+}
+
 export function removeKeyframe(keyframes: Keyframe[], index: number) {
   const out = takeOutgoing(keyframes);
   return applyOutgoing(keyframes.filter((_, i) => i !== index), out.filter((_, i) => i !== index));

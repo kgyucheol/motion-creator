@@ -11,7 +11,7 @@ import { ReplayPanel } from './ReplayPanel';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, clipSampleIndexAtTime, convertClipToPoses, defaultDynamicWindow, setDynamicWindowValue, DYNAMIC_WINDOW_KEYS, type DynamicGrasp, type DynamicReport, type CardMotion, type MotionReport, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
+import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, mergeIntoNextPose, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, clipSampleIndexAtTime, convertClipToPoses, defaultDynamicWindow, setDynamicWindowValue, DYNAMIC_WINDOW_KEYS, type DynamicGrasp, type DynamicReport, type CardMotion, type MotionReport, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
 import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, withLabLateralOffsets, type LabLateralOffsets, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
 import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } from '../lib/lab-grasp-group';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
@@ -1787,6 +1787,17 @@ export default function Editor() {
     }
   }
   /** 고른 두 카드 사이를 지금 재생되는 그대로(동작 방식 포함) 한 클립으로 합친다. */
+  /** 이 카드를 바로 다음 키프레임에 합친다: 이 카드의 자세는 사라지고 다음 키프레임이 남으며, 두 구간의 시간은 더해진다. */
+  function mergeActiveIntoNextPose() {
+    if (!project || !activeFrame) return;
+    try {
+      const keyframes = mergeIntoNextPose(project.keyframes, frameIndex);
+      const next = project.keyframes[frameIndex + 1];
+      checkpoint();
+      setProject({ ...project, keyframes }); setTransitionSelection([]); invalidate();
+      setMessage(`"${activeFrame.name}"을 "${next.name}"에 합쳤습니다. "${next.name}" 키프레임이 남고, 걸리는 시간은 두 구간의 합입니다.`);
+    } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
+  }
   async function bakeSelectionToClip(range?: [number, number]) {
     if (!project || poseDirty) return;
     if (!range && transitionSelection.length !== 2) return;
@@ -2114,7 +2125,9 @@ export default function Editor() {
           <div className="tool-group"><span className="tool-label">변환</span>
             <NumericInput aria-label="변환할 키프레임 수" min={2} max={Math.max(2, activeClipLength)} step="1" disabled={disabled} value={convertCount} onChange={e => setConvertCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
             <span className="tool-unit">개</span>
-            <button className="primary" disabled={disabled || activeClipLength < 2} onClick={convertActiveClip} title="이 클립을 편집 가능한 포즈 키프레임으로 바꿉니다(시작·끝 포함 균등 간격, 양발 고정). 앞뒤 클립과는 자동으로 이어집니다.">키프레임으로 변환</button></div>
+            <button className="primary" disabled={disabled || activeClipLength < 2} onClick={convertActiveClip} title="이 클립을 편집 가능한 포즈 키프레임으로 바꿉니다(시작·끝 포함 균등 간격, 양발 고정). 앞뒤 클립과는 자동으로 이어집니다.">키프레임으로 변환</button>
+            <button disabled={disabled || poseDirty || !project!.keyframes[frameIndex + 1] || !!project!.keyframes[frameIndex + 1]?.samples} onClick={mergeActiveIntoNextPose}
+              title="이 클립을 없애고 바로 다음 키프레임 하나로 합칩니다. 남는 것은 다음 키프레임이고, 걸리는 시간은 클립 재생 시간을 포함한 합입니다. 클립의 중간 동작은 사라집니다.">다음 키프레임에 합치기</button></div>
         </> : <div className="tool-group"><span className="tool-label">변환</span>
           <NumericInput aria-label="클립으로 합칠 카드 수" min={2} max={Math.max(2, project!.keyframes.length - frameIndex)} step="1" disabled={disabled} value={Math.min(bakeCount, Math.max(2, project!.keyframes.length - frameIndex))}
             onChange={e => setBakeCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
@@ -2122,6 +2135,8 @@ export default function Editor() {
           <button className="primary" disabled={disabled || poseDirty || frameIndex >= project!.keyframes.length - 1}
             onClick={() => void bakeSelectionToClip([frameIndex, Math.min(project!.keyframes.length - 1, frameIndex + Math.max(2, bakeCount) - 1)])}
             title="이 카드부터 지정한 장수만큼(이 카드 포함)을 녹화된 그대로 클립 하나로 합칩니다. 합친 클립은 마지막 카드의 동작 방식을 가집니다. 구간이 멀면 헤더의 '선택 구간을 클립으로'로 두 카드를 직접 고를 수도 있습니다.">클립으로 변환</button>
+          <button disabled={disabled || poseDirty || !project!.keyframes[frameIndex + 1] || !!project!.keyframes[frameIndex + 1]?.samples} onClick={mergeActiveIntoNextPose}
+            title="이 카드의 자세를 없애고 바로 다음 키프레임 하나로 합칩니다. 남는 것은 다음 키프레임(이름·동작 방식 포함)이고, 걸리는 시간은 두 구간의 합입니다.">다음 키프레임에 합치기</button>
         </div>}
         <div className="tool-group dynamic-group"><span className="tool-label">동작 방식</span>
           <select aria-label="카드 동작 방식" disabled={disabled} value={activeFrame.motion?.mode ?? 'recorded'} onChange={e => void chooseMotionMode(e.target.value as CardMotion['mode'])}

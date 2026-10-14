@@ -177,3 +177,26 @@ test('splitting keeps a delta mode on both parts and gives the target only to th
   assert.equal(mergeMotionClips(aimed, 0).keyframes[0].motion.mode, 'cartesian');       // the end is still the target
   assert.equal(mergeMotionClips(delta, 0).keyframes[0].motion.mode, 'delta');
 });
+
+test('merging a card into the next keyframe keeps the total time and the later keyframe', async () => {
+  const { mergeIntoNextPose, keyframeStartTimes } = await import('../lib/keyframes.ts');
+  const pose = (name, duration, extra = {}) => ({ name, duration, qpos: [0], pins: [], ...extra });
+  const frames = [pose('a', .1), pose('b', 2), pose('c', 3, { motion: { mode: 'delta' } }), pose('d', 1)];
+  const merged = mergeIntoNextPose(frames, 1);
+  assert.deepEqual(merged.map(frame => frame.name), ['a', 'c', 'd']);
+  assert.equal(merged[1].duration, 5);                      // 2 s into b plus 3 s on to c
+  assert.equal(merged[1].motion.mode, 'delta');
+  assert.ok(Math.abs(keyframeStartTimes(merged).at(-1) - keyframeStartTimes(frames).at(-1)) < 1e-9);
+  assert.deepEqual(mergeIntoNextPose(frames, 0).map(frame => frame.name), ['b', 'c', 'd']);
+  assert.throws(() => mergeIntoNextPose(frames, 3));
+  const clipNext = [pose('a', .1), pose('b', 2), { ...clip(5, 2), name: 'c' }];
+  assert.throws(() => mergeIntoNextPose(clipNext, 1));
+});
+
+test('a clip merged into the next keyframe counts its playing time', async () => {
+  const { mergeIntoNextPose, keyframeStartTimes } = await import('../lib/keyframes.ts');
+  const frames = [{ name: 'a', duration: .1, qpos: [0], pins: [] }, { ...clip(11, 10), name: 'clip', qpos: [0] }, { name: 'p', duration: 2, qpos: [10], pins: [] }];
+  const merged = mergeIntoNextPose(frames, 1);
+  assert.deepEqual(merged.map(frame => frame.name), ['a', 'p']);
+  assert.equal(merged[1].duration, 12);                     // the clip's 10 s plus 2 s to the pose
+});
