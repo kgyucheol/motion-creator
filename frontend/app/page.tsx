@@ -1681,6 +1681,7 @@ export default function Editor() {
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
   }
   const [convertCount, setConvertCount] = useState(2);
+  const [convertSmooth, setConvertSmooth] = useState(true);
   function convertActiveClip() {
     if (!project || !activeFrame?.samples) return;
     const frame = activeFrame;
@@ -1698,7 +1699,15 @@ export default function Editor() {
       const first = result.keyframes[frameIndex];
       const restored = await api<PoseState>('pose', { qpos: first.qpos });
       checkpoint();
-      setProject({ ...project, keyframes: result.keyframes }); setFrameIndex(frameIndex); setTransitionSelection([]);
+      // 클립의 동작 방식을 새 키프레임이 이어받는다: 델타는 모두, 카테시안(목표)은 마지막만(앞은 델타), 원본 그대로는 없음.
+      const converted = result.keyframes.map((item, i) => {
+        if (i < frameIndex || i >= frameIndex + convertCount) return item;
+        const last = i === frameIndex + convertCount - 1;
+        const motion: CardMotion | undefined = !frame.motion || frame.motion.mode === 'recorded' ? undefined
+          : frame.motion.mode === 'cartesian' && last ? structuredClone(frame.motion) : { mode: 'delta' };
+        return { ...item, ...(convertSmooth ? { generated_transition: true } : {}), ...(motion ? { motion } : {}) };
+      });
+      setProject({ ...project, keyframes: converted }); setFrameIndex(frameIndex); setTransitionSelection([]);
       applyState(restored); setPins([...first.pins]); setAnglePins([]); setPoseDirty(false); setInfo(null); invalidate();
       setMessage(`클립을 키프레임 ${convertCount}개로 변환했습니다.${frame.dynamic ? ' 물체의 현재 위치에 맞춘 자세로 만들었고 동적 파지 설정은 해제되었습니다.' : ''} 손이나 관절을 수정한 뒤 "선택 프레임에 반영"을 누르세요. 양발은 고정되어 있습니다.`);
     });
@@ -2125,10 +2134,14 @@ export default function Editor() {
           <div className="tool-group"><span className="tool-label">변환</span>
             <NumericInput aria-label="변환할 키프레임 수" min={2} max={Math.max(2, activeClipLength)} step="1" disabled={disabled} value={convertCount} onChange={e => setConvertCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
             <span className="tool-unit">개</span>
+            <label className="dynamic-hand" title="켜면 변환한 키프레임을 부드러운 연결로 만듭니다. 키프레임마다 멈추지 않고 속도가 이어져 원래 클립처럼 자연스럽게 움직입니다."><input type="checkbox" disabled={disabled} checked={convertSmooth} onChange={e => setConvertSmooth(e.target.checked)}/>부드러운 연결</label>
             <button className="primary" disabled={disabled || activeClipLength < 2} onClick={convertActiveClip} title="이 클립을 편집 가능한 포즈 키프레임으로 바꿉니다(시작·끝 포함 균등 간격, 양발 고정). 앞뒤 클립과는 자동으로 이어집니다.">키프레임으로 변환</button>
             <button disabled={disabled || poseDirty || !project!.keyframes[frameIndex + 1] || !!project!.keyframes[frameIndex + 1]?.samples} onClick={mergeActiveIntoNextPose}
               title="이 클립을 없애고 바로 다음 키프레임 하나로 합칩니다. 남는 것은 다음 키프레임이고, 걸리는 시간은 클립 재생 시간을 포함한 합입니다. 클립의 중간 동작은 사라집니다.">다음 키프레임에 합치기</button></div>
-        </> : <div className="tool-group"><span className="tool-label">변환</span>
+        </> : <div className="tool-group"><span className="tool-label">연결</span>
+          <label className="dynamic-hand" title="켜면 이 카드를 지날 때 멈추지 않고 앞뒤 카드와 속도가 이어집니다(부드러운 연결). 끄면 이 카드에서 잠깐 멈춥니다. 첫 카드와 마지막 카드에서는 효과가 없습니다."><input type="checkbox" disabled={disabled} checked={!!activeFrame.generated_transition} onChange={e => { checkpoint(); editFrame(frameIndex, { generated_transition: e.target.checked ? true : undefined }); invalidate(); }}/>부드러운 연결</label>
+        </div>}
+        {!activeIsClip && <div className="tool-group"><span className="tool-label">변환</span>
           <NumericInput aria-label="클립으로 합칠 카드 수" min={2} max={Math.max(2, project!.keyframes.length - frameIndex)} step="1" disabled={disabled} value={Math.min(bakeCount, Math.max(2, project!.keyframes.length - frameIndex))}
             onChange={e => setBakeCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
           <span className="tool-unit">장</span>
@@ -2197,7 +2210,7 @@ export default function Editor() {
           const collapsed = !!group && collapsedLabGroups.includes(group.id);
           return <Fragment key={i}>
             {group?.start === i && <button className="lab-frame-header" disabled={disabled} onClick={() => setCollapsedLabGroups(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])} title="파지법 구간 접기/펼치기">파지법 {group.frames.length}개 {collapsed ? '▸' : '▾'}</button>}
-            {(!collapsed || group?.start === i) && <button disabled={!state || busy || solving || !!preview?.physics} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playing && playbackFrame === i ? 'playing' : ''} ${!playing && playbackFrame === i ? 'playhead' : ''} ${playing && stage && i < stage.index ? 'stage-done' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}>{playing && stage?.index === i && <i className="stage-fill" style={{ width: `${stage.progress * 100}%` }}/>}<span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}{f.motion && f.motion.mode !== 'recorded' && <b className="mode-tag" title={f.motion.mode === 'delta' ? '관절 델타' : f.motion.target?.kind === 'point' ? '카테시안 · 좌표' : '카테시안 · 물체 추적'}>{f.motion.mode === 'delta' ? 'Δ' : '⌖'}</b>}</strong><small><span>{f.lab_grasp ? '파지법 · ' : ''}{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.dynamic ? '동적 ' : ''}클립 ${f.samples.length}프레임 · ${f.duration.toFixed(1)}s` : '포즈'} · <b className="card-start">{formatClock((preview?.keyframe_times ?? cardStarts)[i] ?? 0)}</b></span><span>{cardOutgoingText(project.keyframes, i)} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</span></small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
+            {(!collapsed || group?.start === i) && <button disabled={!state || busy || solving || !!preview?.physics} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playing && playbackFrame === i ? 'playing' : ''} ${!playing && playbackFrame === i ? 'playhead' : ''} ${playing && stage && i < stage.index ? 'stage-done' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}>{playing && stage?.index === i && <i className="stage-fill" style={{ width: `${stage.progress * 100}%` }}/>}<span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}{f.generated_transition && <b className="mode-tag smooth-tag" title="부드러운 연결: 이 카드를 지날 때 멈추지 않고 앞뒤 카드와 속도가 이어집니다">∿</b>}{f.motion && f.motion.mode !== 'recorded' && <b className="mode-tag" title={f.motion.mode === 'delta' ? '관절 델타' : f.motion.target?.kind === 'point' ? '카테시안 · 좌표' : '카테시안 · 물체 추적'}>{f.motion.mode === 'delta' ? 'Δ' : '⌖'}</b>}</strong><small><span>{f.lab_grasp ? '파지법 · ' : ''}{f.samples ? `${f.dynamic ? '동적 ' : ''}클립 ${f.samples.length}프레임 · ${f.duration.toFixed(1)}s` : '포즈'} · <b className="card-start">{formatClock((preview?.keyframe_times ?? cardStarts)[i] ?? 0)}</b></span><span>{cardOutgoingText(project.keyframes, i)} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</span></small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
           </Fragment>;
         })}</div>
       </div>
