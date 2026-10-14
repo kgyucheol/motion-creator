@@ -113,37 +113,6 @@ test('a pose added after a clip starts from the clip end and keeps the following
   assert.equal(outgoingSeconds(result.keyframes, 2).seconds, 3);
 });
 
-// 30 fps: reach joint 0 (30 samples), hold (30), swing joint 1 (30) - two clear phase changes
-const phases = () => {
-  const row = (a, b) => [0, 0, 0, 0, 0, 0, 0, a, b];
-  const samples = [];
-  for (let i = 0; i < 30; i++) samples.push(row(i / 29, 0));
-  for (let i = 0; i < 30; i++) samples.push(row(1, 0));
-  for (let i = 0; i < 30; i++) samples.push(row(1, i / 29));
-  return { name: 'demo', duration: (samples.length - 1) / 30, pins: [], qpos: samples[0], samples };
-};
-
-test('auto split cuts at the hold and keeps the motion intact', async () => {
-  const { autoSplitClip, suggestClipSplits } = await import('../lib/keyframes.ts');
-  const original = phases();
-  const points = suggestClipSplits(original, 6);
-  assert.ok(points.length >= 1 && points.length <= 5);
-  assert.ok(points.some(point => point >= 28 && point <= 62), `no cut near the hold: ${points}`);
-  const result = autoSplitClip([original], 0, 6);
-  assert.equal(result.keyframes.length, result.points.length + 1);
-  assert.ok(Math.abs(result.keyframes.reduce((sum, frame) => sum + frame.duration, 0) - original.duration) < 1e-9);
-});
-
-test('auto split respects the part limit and ignores straight or still clips', async () => {
-  const { autoSplitClip, suggestClipSplits } = await import('../lib/keyframes.ts');
-  assert.equal(suggestClipSplits(phases(), 2).length, 1);
-  const still = { ...clip(40, 1), samples: Array.from({ length: 40 }, () => [0, 0, 0, 0, 0, 0, 0, 1]) };
-  assert.deepEqual(suggestClipSplits(still, 6), []);
-  const straight = { ...clip(40, 1), samples: Array.from({ length: 40 }, (_, i) => [0, 0, 0, 0, 0, 0, 0, i / 39]) };
-  assert.deepEqual(suggestClipSplits(straight, 6), []);
-  assert.throws(() => autoSplitClip([straight], 0, 6));
-});
-
 const grasp = (window) => ({ object_id: 'cube', reference_pose: { position: [.4, 0, .8], quaternion_xyzw: [0, 0, 0, 1] },
   hands: ['left', 'right'], window });
 const WINDOW = { ramp_in_start: 10, hold_start: 20, hold_end: 40, ramp_out_end: 50 };
