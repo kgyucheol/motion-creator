@@ -68,6 +68,28 @@ export type ToolInteraction = {
   };
 };
 
+export type DynamicWindow = { ramp_in_start: number; hold_start: number; hold_end: number; ramp_out_end: number };
+export const DYNAMIC_WINDOW_KEYS = ['ramp_in_start', 'hold_start', 'hold_end', 'ramp_out_end'] as const;
+
+/**
+ * Clip only: the hands of this clip follow a scene object that has been moved away from `reference_pose`.
+ * The window numbers are clip sample numbers (they may lie outside the clip after a split, which keeps the weights).
+ */
+export type DynamicGrasp = {
+  object_id: string;
+  reference_pose: { position: number[]; quaternion_xyzw: number[] };
+  hands: ('left' | 'right')[];
+  window: DynamicWindow;
+  freedom?: 'yaw_xyz' | 'full6d';
+  waist?: 'free' | 'lock';
+  max_shift_m?: number;
+};
+
+export type DynamicReport = {
+  index: number; status: 'ok' | 'approx' | 'unreachable' | 'too_far' | 'missing_object' | 'unchanged';
+  object_id: string; shift_mm?: number; max_position_error_mm?: number; max_angle_error_deg?: number; max_shift_mm?: number;
+};
+
 export type Keyframe = {
   name: string;
   duration: number;
@@ -77,6 +99,8 @@ export type Keyframe = {
   samples?: number[][];
   /** Clip only: seconds to travel from the previous pose into this clip's first sample (automatic when unset). */
   transition?: number;
+  /** Clip only: follow a moved scene object (see DynamicGrasp). */
+  dynamic?: DynamicGrasp;
   grasp?: TwoHandGrasp;
   interaction?: ToolInteraction;
   generated_transition?: boolean;
@@ -178,9 +202,11 @@ export function splitMotionClip(keyframes: Keyframe[], index: number, sample: nu
   const parts = [samples.slice(0, sample + 1), samples.slice(sample)];
   const durations = [clip.duration * sample / intervals, clip.duration * (intervals - sample) / intervals];
   if (durations.some(value => value < 1 / 120)) throw new Error('분할한 구간의 재생 시간이 너무 짧습니다.');
-  const halves: Keyframe[] = parts.map((part, side) => ({
-    name: `${clip.name} ${side + 1}`, duration: durations[side], qpos: [...part[0]], pins: [], samples: part,
-  }));
+  const halves: Keyframe[] = parts.map((part, side) => {
+    const dynamic = shiftDynamic(clip.dynamic, side === 0 ? 0 : -sample, part.length);
+    return { name: `${clip.name} ${side + 1}`, duration: durations[side], qpos: [...part[0]], pins: [], samples: part,
+      ...(dynamic ? { dynamic } : {}) };
+  });
   return { keyframes: [...keyframes.slice(0, index), ...halves, ...keyframes.slice(index + 1)], index };
 }
 
@@ -274,14 +300,74 @@ export function autoSplitClip(keyframes: Keyframe[], index: number, maxParts: nu
   return { ...result, points };
 }
 
+/** The binding as seen by a part of a clip that starts `-offset` samples later (offset <= 0 for a later part). Undefined when the part is not touched. */
+export function shiftDynamic(dynamic: DynamicGrasp | undefined, offset: number, count: number): DynamicGrasp | undefined {
+  if (!dynamic) return undefined;
+  const window = Object.fromEntries(DYNAMIC_WINDOW_KEYS.map(key => [key, dynamic.window[key] + offset])) as DynamicWindow;
+  if (window.ramp_out_end < 0 || window.ramp_in_start > count - 1) return undefined;
+  return { ...structuredClone(dynamic), window };
+}
+
+/** Binding of two merged clips; `offset` is where the second clip starts inside the merged one. */
+function mergeDynamic(first: Keyframe, second: Keyframe, offset: number): DynamicGrasp | undefined {
+  const a = first.dynamic, b = second.dynamic;
+  if (!a && !b) return undefined;
+  if (a && !b) {
+    if (a.window.ramp_out_end > first.samples!.length - 1) throw new Error('다음 클립까지 이어지는 동적 파지 구간이라 다른 설정 없이는 합칠 수 없습니다.');
+    return a;
+  }
+  if (!a && b) {
+    if (b.window.ramp_in_start < 0) throw new Error('앞 클립까지 이어지는 동적 파지 구간이라 다른 설정 없이는 합칠 수 없습니다.');
+    return shiftDynamic(b, offset, first.samples!.length + second.samples!.length);
+  }
+  const same = a!.object_id === b!.object_id && JSON.stringify(a!.reference_pose) === JSON.stringify(b!.reference_pose)
+    && JSON.stringify(a!.hands) === JSON.stringify(b!.hands) && a!.freedom === b!.freedom && a!.waist === b!.waist
+    && a!.max_shift_m === b!.max_shift_m && DYNAMIC_WINDOW_KEYS.every(key => b!.window[key] + offset === a!.window[key]);
+  if (!same) throw new Error('두 클립의 동적 파지 설정이 달라 합칠 수 없습니다. 한쪽을 해제하거나 같은 설정으로 맞춰 주세요.');
+  return a;
+}
+
+/** Sample of clip `index` under project time `time`, 0..n-1 (the whole clip, unlike clipSampleAtTime which keeps off the ends). */
+export function clipSampleIndexAtTime(keyframes: Keyframe[], index: number, time: number, start?: number) {
+  const clip = keyframes[index];
+  const count = clip?.samples?.length ?? 0;
+  if (count < 2) return null;
+  const offset = start ?? keyframes.slice(0, index).reduce((sum, frame) => sum + frame.duration, 0);
+  const progress = (time - offset) / clip.duration;
+  if (progress < -1e-9 || progress > 1 + 1e-9) return null;
+  return Math.max(0, Math.min(count - 1, Math.round(progress * (count - 1))));
+}
+
+/** A first window around sample `at`: holds for about a tenth of the clip, with a tenth either side to ramp. */
+export function defaultDynamicWindow(count: number, at: number): DynamicWindow {
+  const span = Math.max(2, Math.round(count * .1));
+  const hold_start = Math.max(0, Math.min(count - 1, at));
+  const hold_end = Math.min(count - 1, hold_start + span);
+  return { ramp_in_start: Math.max(0, hold_start - span), hold_start, hold_end, ramp_out_end: Math.min(count - 1, hold_end + span) };
+}
+
+/** Change one window number and keep the four in order (earlier ones follow down, later ones follow up). */
+export function setDynamicWindowValue(window: DynamicWindow, key: keyof DynamicWindow, value: number): DynamicWindow {
+  const index = DYNAMIC_WINDOW_KEYS.indexOf(key);
+  const next = { ...window, [key]: Math.round(value) };
+  DYNAMIC_WINDOW_KEYS.forEach((other, position) => {
+    if (position < index) next[other] = Math.min(next[other], next[key]);
+    if (position > index) next[other] = Math.max(next[other], next[key]);
+  });
+  if (next.ramp_out_end <= next.ramp_in_start) next.ramp_out_end = next.ramp_in_start + 1;
+  return next;
+}
+
 /** Merge clip `index` with the next clip. A shared boundary sample (as left by splitMotionClip) is kept only once. */
 export function mergeMotionClips(keyframes: Keyframe[], index: number) {
   const first = keyframes[index], second = keyframes[index + 1];
   if (!first?.samples || !second?.samples) throw new Error('합칠 다음 클립이 없습니다.');
   const shared = first.samples.at(-1)!.length === second.samples[0].length
     && first.samples.at(-1)!.every((value, i) => value === second.samples![0][i]);
-  const merged: Keyframe = { ...first, duration: first.duration + second.duration, pins: [],
-    samples: [...first.samples, ...(shared ? second.samples.slice(1) : second.samples)] };
+  const dynamic = mergeDynamic(first, second, shared ? first.samples.length - 1 : first.samples.length);
+  const { dynamic: _dropped, ...rest } = first;
+  const merged: Keyframe = { ...rest, duration: first.duration + second.duration, pins: [],
+    samples: [...first.samples, ...(shared ? second.samples.slice(1) : second.samples)], ...(dynamic ? { dynamic } : {}) };
   return { keyframes: [...keyframes.slice(0, index), merged, ...keyframes.slice(index + 2)], index };
 }
 

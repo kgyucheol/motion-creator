@@ -404,6 +404,25 @@ def ramen_sequence(payload: RamenSequenceInput):
                                                payload.attention_pose.model_dump() if payload.attention_pose else None))
 
 
+class DynamicResolveInput(BaseModel):
+    project: dict
+    index: int = Field(ge=0)
+
+
+@app.post('/api/dynamic-resolve')
+def dynamic_resolve(payload: DynamicResolveInput):
+    """The samples a dynamic clip plays with the scene object where it is now, for baking them into poses."""
+    def run():
+        from .dynamic_clip import resolve_project_dynamics
+        validate_project(robot, payload.project)
+        frames = payload.project['keyframes']
+        if payload.index >= len(frames) or not frames[payload.index].get('dynamic'):
+            raise ValueError('Selected keyframe is not a dynamic clip')
+        resolved, reports = resolve_project_dynamics(robot, payload.project)
+        return {'samples': resolved['keyframes'][payload.index]['samples'], 'report': reports[payload.index]}
+    return checked(run)
+
+
 @app.post('/api/preview')
 def preview(payload: ProjectInput):
     def run():

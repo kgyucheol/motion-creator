@@ -89,3 +89,14 @@
 .frame-card{height:78px}.frame-card small span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}.frame-card small span+span{margin-top:3px}
 .frame-card .card-start{font-weight:600;color:#cfe0ee;font-variant-numeric:tabular-nums}.frame-card.playing .card-start{color:#ffd58a}
 .keyframe-toolbar input[type=number],.keyframe-toolbar .numeric-input{width:60px}.keyframe-toolbar .tool-readonly{width:64px;font-size:11px;padding:4px;text-align:center;opacity:.6}
+
+.keyframe-toolbar .dynamic-group{flex-wrap:wrap}
+.keyframe-toolbar .dynamic-group select{max-width:130px}
+.dynamic-hand{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:#c4d2de}
+.dynamic-marker{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#9fb3c4}
+.dynamic-marker input[type=number]{width:54px}
+.dynamic-set{padding:1px 5px}
+.dynamic-chip{font-size:11px;padding:2px 8px;border-radius:10px;border:1px solid #2b3846;color:#c4d2de;white-space:nowrap}
+.dynamic-chip.ok{border-color:#2f8f5b;color:#7fe0a8}
+.dynamic-chip.approx{border-color:#a9892f;color:#f0d36b}
+.dynamic-chip.unreachable,.dynamic-chip.too_far,.dynamic-chip.missing_object{border-color:#b04a4a;color:#ff9a9a}

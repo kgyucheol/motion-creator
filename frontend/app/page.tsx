@@ -10,7 +10,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
-import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, autoSplitClip, clipSampleAtTime, convertClipToPoses, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
+import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, autoSplitClip, clipSampleAtTime, clipSampleIndexAtTime, convertClipToPoses, defaultDynamicWindow, setDynamicWindowValue, DYNAMIC_WINDOW_KEYS, type DynamicGrasp, type DynamicReport, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
 import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, withLabLateralOffsets, type LabLateralOffsets, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
 import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } from '../lib/lab-grasp-group';
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
@@ -21,13 +21,25 @@ type SceneFile = { format: typeof SCENE_FORMAT; scene_objects: SceneObject[]; sc
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; mounted_tools?: [string, string] | null; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; lab_lateral_offsets?: Record<string, LabLateralOffsets>; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
 type InteractionSummary = { active: boolean; max_tcp_error_mm: number; max_orientation_error_deg: number; max_feedback_torque_nm: number; max_contact_force_n: Record<'left' | 'right', number>; force_limit_exceeded: boolean };
-type Preview = { time: number[]; keyframe_times?: number[] | null; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; controller?: 'pd' | 'gear-sonic' | 'objects'; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
+type Preview = { time: number[]; keyframe_times?: number[] | null; dynamic_reports?: DynamicReport[]; states: PoseState[]; object_states?: Record<string, SceneObjectPose>[]; max_pin_error_mm: number; physics?: boolean; controller?: 'pd' | 'gear-sonic' | 'objects'; summary?: { reason: string; joint_rmse_rad: number; sim_seconds: number; reference_seconds: number; start_frame_index?: number; start_frame_name?: string; grasp?: GraspSummary | null; interaction?: InteractionSummary | null } };
 type PolicyJob = { id: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message?: string };
 type PhysicsStreamFrame = { type: 'frame'; time: number; state: PoseState; objects: Record<string, SceneObjectPose> };
 type SolveInfo = { target_error_mm: number; pin_error_mm: number; rejected: boolean; converged: boolean; target_errors_mm?: Record<string, number>; angle_error_deg?: number };
 type GroupPreset = { id: string; name: string; members: string[] };
 type EditorSnapshot = { qpos: number[]; pins: string[]; anglePins: string[]; objects: SceneObject[]; objectGroups: SceneObjectGroup[]; keyframes: Keyframe[]; frameIndex: number; poseDirty: boolean };
 const feet = ['left_foot', 'right_foot'];
+function dynamicStatusText(report: DynamicReport | null) {
+  if (!report) return '계산 중…';
+  const error = report.max_position_error_mm !== undefined ? ` · ${report.max_position_error_mm.toFixed(1)}mm` : '';
+  switch (report.status) {
+    case 'unchanged': return '기준 위치 그대로';
+    case 'ok': return `도달${error}`;
+    case 'approx': return `근사${error}`;
+    case 'unreachable': return `도달 불가${error}`;
+    case 'too_far': return `너무 멂 · ${(report.shift_mm ?? 0).toFixed(0)}mm (한도 ${(report.max_shift_mm ?? 0).toFixed(0)}mm)`;
+    default: return '물체를 찾을 수 없음';
+  }
+}
 const formatClock = (seconds: number) => `${Math.floor(seconds / 60)}:${(seconds % 60).toFixed(1).padStart(4, '0')}`;
 function cardOutgoingText(keyframes: Keyframe[], index: number) {
   const out = outgoingSeconds(keyframes, index);
@@ -1367,7 +1379,7 @@ export default function Editor() {
             socket.onopen = () => socket.send(JSON.stringify({ project, fps: 30 }));
             socket.onmessage = event => {
               const packet = JSON.parse(event.data) as { type: 'batch'; time: number[]; states: PoseState[] }
-                | { type: 'done'; max_pin_error_mm: number; keyframe_times?: number[] | null } | { type: 'error'; message: string };
+                | { type: 'done'; max_pin_error_mm: number; keyframe_times?: number[] | null; dynamic_reports?: DynamicReport[] } | { type: 'error'; message: string };
               if (request.cancelled || !alive.current) return;
               if (packet.type === 'batch') {
                 if (!started) {
@@ -1377,7 +1389,7 @@ export default function Editor() {
                 } else setPreview(previous => previous ? { ...previous,
                   time: [...previous.time, ...packet.time], states: [...previous.states, ...packet.states] } : previous);
               } else if (packet.type === 'done') {
-                setPreview(previous => previous ? { ...previous, max_pin_error_mm: packet.max_pin_error_mm, keyframe_times: packet.keyframe_times } : previous);
+                setPreview(previous => previous ? { ...previous, max_pin_error_mm: packet.max_pin_error_mm, keyframe_times: packet.keyframe_times, dynamic_reports: packet.dynamic_reports } : previous);
                 finish();
               } else finish(new Error(packet.message));
             };
@@ -1587,18 +1599,80 @@ export default function Editor() {
   const [convertCount, setConvertCount] = useState(2);
   function convertActiveClip() {
     if (!project || !activeFrame?.samples) return;
-    let result;
-    try { result = convertClipToPoses(project.keyframes, frameIndex, convertCount, feet); }
-    catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); return; }
-    const first = result.keyframes[frameIndex];
+    const frame = activeFrame;
     void run(async () => {
+      let source = project.keyframes;
+      if (frame.dynamic) {
+        // 동적 파지 클립은 물체의 현재 위치로 보정된 자세를 키프레임으로 굳힌다.
+        const resolved = await api<{ samples: number[][] }>('dynamic-resolve', { project: sceneProject(project), index: frameIndex });
+        const { dynamic: _bound, ...plain } = frame;
+        source = project.keyframes.map((item, index) => index === frameIndex ? { ...plain, samples: resolved.samples, qpos: resolved.samples[0] } : item);
+      }
+      let result;
+      try { result = convertClipToPoses(source, frameIndex, convertCount, feet); }
+      catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); return; }
+      const first = result.keyframes[frameIndex];
       const restored = await api<PoseState>('pose', { qpos: first.qpos });
       checkpoint();
       setProject({ ...project, keyframes: result.keyframes }); setFrameIndex(frameIndex); setTransitionSelection([]);
       applyState(restored); setPins([...first.pins]); setAnglePins([]); setPoseDirty(false); setInfo(null); invalidate();
-      setMessage(`클립을 키프레임 ${convertCount}개로 변환했습니다. 손이나 관절을 수정한 뒤 "선택 프레임에 반영"을 누르세요. 양발은 고정되어 있습니다.`);
+      setMessage(`클립을 키프레임 ${convertCount}개로 변환했습니다.${frame.dynamic ? ' 물체의 현재 위치에 맞춘 자세로 만들었고 동적 파지 설정은 해제되었습니다.' : ''} 손이나 관절을 수정한 뒤 "선택 프레임에 반영"을 누르세요. 양발은 고정되어 있습니다.`);
     });
   }
+  // 서버가 동적 클립을 풀 때 쓰는 프로젝트: 지금 화면의 물체 위치를 담는다.
+  function sceneProject(base: Project): Project { return { ...base, scene_objects: objects.filter(object => !object.ghost), scene_groups: objectGroups }; }
+  const [dynamicObjectId, setDynamicObjectId] = useState('');
+  const [dynamicReport, setDynamicReport] = useState<DynamicReport | null>(null);
+  const dynamicObjects = objects.filter(object => !object.ghost);
+  function setDynamic(patch: Partial<DynamicGrasp> | null, message?: string) {
+    if (!activeFrame?.samples) return;
+    if (!patch) { editFrame(frameIndex, { dynamic: undefined }); setDynamicReport(null); }
+    else editFrame(frameIndex, { dynamic: { ...activeFrame.dynamic!, ...patch } });
+    if (message) setMessage(message);
+  }
+  function scrubbedClipSample() {
+    if (!project || !preview) return null;
+    return clipSampleIndexAtTime(project.keyframes, frameIndex, preview.time[sample] ?? 0, preview.keyframe_times?.[frameIndex]);
+  }
+  function enableDynamic() {
+    const target = dynamicObjects.find(object => object.id === (dynamicObjectId || selectedObjectId)) ?? dynamicObjects[0];
+    if (!target || !activeFrame?.samples) { setError('동적 파지에 쓸 오브젝트를 먼저 추가하세요.'); return; }
+    checkpoint();
+    const at = scrubbedClipSample() ?? middleSample(activeFrame.samples.length);
+    editFrame(frameIndex, { dynamic: { object_id: target.id, hands: ['left', 'right'], freedom: 'yaw_xyz', waist: 'free',
+      reference_pose: { position: [...target.position], quaternion_xyzw: [...target.quaternion_xyzw] },
+      window: defaultDynamicWindow(activeFrame.samples.length, at) } });
+    setMessage(`"${target.name}"의 지금 위치를 기준으로 지정했습니다. 기준은 영상 속 물체가 있던 자리여야 하니, 손이 물체를 잡는 순간에 물체를 손 사이에 놓은 뒤 "기준 다시 잡기"를 누르세요. 그 뒤 물체를 옮기면 손이 따라옵니다.`);
+  }
+  function placeObjectBetweenHands() {
+    const dynamic = activeFrame?.dynamic;
+    const states = preview?.states[sample];
+    const left = states?.handles?.left_hand?.position, right = states?.handles?.right_hand?.position;
+    if (!dynamic || !left || !right) { setError('재생 막대를 클립의 파지 순간에 두고 먼저 재생해 미리보기를 만든 뒤 사용하세요.'); return; }
+    checkpoint();
+    const middle = left.map((value, i) => (value + right[i]) / 2);
+    commitObjects(objects.map(object => object.id === dynamic.object_id ? { ...object, position: middle } : object), false);
+    setMessage('두 손의 가운데로 물체를 옮겼습니다. 어긋나면 직접 맞춘 뒤 "기준 다시 잡기"를 누르세요.');
+  }
+  function recaptureDynamicReference() {
+    const dynamic = activeFrame?.dynamic;
+    const target = objects.find(object => object.id === dynamic?.object_id);
+    if (!dynamic || !target) { setError('기준으로 삼을 오브젝트가 장면에 없습니다.'); return; }
+    checkpoint();
+    setDynamic({ reference_pose: { position: [...target.position], quaternion_xyzw: [...target.quaternion_xyzw] } }, '물체의 지금 위치를 기준으로 다시 잡았습니다.');
+  }
+  const dynamicKey = JSON.stringify([activeFrame?.dynamic, objects.find(object => object.id === activeFrame?.dynamic?.object_id)?.position,
+    objects.find(object => object.id === activeFrame?.dynamic?.object_id)?.quaternion_xyzw, frameIndex, activeFrame?.samples?.length]);
+  useEffect(() => {
+    if (!project || !activeFrame?.dynamic) { setDynamicReport(null); return; }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api<{ report: DynamicReport }>('dynamic-resolve', { project: sceneProject(project), index: frameIndex })
+        .then(result => { if (!cancelled) setDynamicReport(result.report); })
+        .catch(() => { if (!cancelled) setDynamicReport(null); });
+    }, 350);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [dynamicKey]); // eslint-disable-line react-hooks/exhaustive-deps -- the key covers everything the server reads
   const [autoParts, setAutoParts] = useState(6);
   function autoSplitActiveClip() {
     if (!project) return;
@@ -1909,6 +1983,34 @@ export default function Editor() {
             <NumericInput aria-label="자동 분할 최대 구간 수" min={2} max={20} step="1" disabled={disabled || activeClipLength < 5} value={autoParts} onChange={e => setAutoParts(Math.max(2, Math.min(20, Math.round(+e.target.value) || 2)))}/>
             <span className="tool-unit">개 이하</span>
             <button disabled={disabled || activeClipLength < 5} onClick={autoSplitActiveClip} title="멈춤 구간과 방향이 바뀌는 지점을 찾아 클립을 최대 이 개수로 나눕니다. 결과가 마음에 들지 않으면 되돌리기로 취소하세요.">자동 분할</button></div>
+          <div className="tool-group dynamic-group"><span className="tool-label">동적 파지</span>
+            {!activeFrame?.dynamic ? <>
+              <select aria-label="동적 파지 물체" disabled={disabled || !dynamicObjects.length} value={dynamicObjectId || selectedObjectId || dynamicObjects[0]?.id || ''} onChange={e => setDynamicObjectId(e.target.value)}>
+                {dynamicObjects.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}</select>
+              <button disabled={disabled || !dynamicObjects.length} onClick={enableDynamic} title="이 클립의 손이 선택한 오브젝트를 따라가게 합니다. 지금 물체 위치가 시연 때의 기준 위치로 저장됩니다.">기준 지정</button>
+            </> : <>
+              <select aria-label="동적 파지 물체" disabled={disabled} value={activeFrame.dynamic.object_id} onChange={e => setDynamic({ object_id: e.target.value })}>
+                {dynamicObjects.some(object => object.id === activeFrame.dynamic!.object_id) ? null : <option value={activeFrame.dynamic.object_id}>(없음) {activeFrame.dynamic.object_id}</option>}
+                {dynamicObjects.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}</select>
+              {(['left', 'right'] as const).map(side => <label key={side} className="dynamic-hand" title={`${side === 'left' ? '왼손' : '오른손'}이 물체를 따라갑니다`}>
+                <input type="checkbox" disabled={disabled} checked={activeFrame.dynamic!.hands.includes(side)} onChange={e => {
+                  const hands = (['left', 'right'] as const).filter(item => item === side ? e.target.checked : activeFrame.dynamic!.hands.includes(item));
+                  if (hands.length) setDynamic({ hands });
+                }}/>{side === 'left' ? '왼' : '오른'}</label>)}
+              {DYNAMIC_WINDOW_KEYS.map((key, position) => <label key={key} className="dynamic-marker" title={['손이 물체로 향하기 시작하는 프레임', '물체를 완전히 따라가기 시작하는 프레임(파지 시작)', '물체를 따라가는 것을 끝내기 시작하는 프레임(파지 끝)', '원래 동작으로 완전히 돌아오는 프레임'][position]}>
+                {['접근', '파지', '놓기', '복귀'][position]}
+                <NumericInput aria-label={['접근 시작', '파지 시작', '파지 끝', '놓기 끝'][position]} step="1" disabled={disabled} value={activeFrame.dynamic!.window[key]}
+                  onChange={e => setDynamic({ window: setDynamicWindowValue(activeFrame.dynamic!.window, key, +e.target.value || 0) })}/>
+                <button className="dynamic-set" disabled={disabled || scrubbedClipSample() === null} title="재생 막대의 현재 위치로 지정"
+                  onClick={() => { const at = scrubbedClipSample(); if (at !== null) setDynamic({ window: setDynamicWindowValue(activeFrame.dynamic!.window, key, at) }); }}>⌖</button></label>)}
+              <label className="dynamic-hand" title="켜면 허리를 고정하고 팔로만 물체를 향합니다"><input type="checkbox" disabled={disabled} checked={activeFrame.dynamic.waist === 'lock'} onChange={e => setDynamic({ waist: e.target.checked ? 'lock' : 'free' })}/>허리 고정</label>
+              <label className="dynamic-hand" title="켜면 물체가 기울어진 만큼 손도 기울입니다(기본은 이동과 수직축 회전만)"><input type="checkbox" disabled={disabled} checked={activeFrame.dynamic.freedom === 'full6d'} onChange={e => setDynamic({ freedom: e.target.checked ? 'full6d' : 'yaw_xyz' })}/>기울기</label>
+              <button disabled={disabled} onClick={placeObjectBetweenHands} title="재생 막대 위치에서 두 손의 가운데로 물체를 옮깁니다">손 사이에 놓기</button>
+              <button disabled={disabled} onClick={recaptureDynamicReference} title="물체의 지금 위치를 시연 때의 기준 위치로 다시 저장합니다">기준 다시 잡기</button>
+              <span className={`dynamic-chip ${dynamicReport?.status ?? 'pending'}`} title="물체 위치에 맞춘 손 경로의 도달 판정">{dynamicStatusText(dynamicReport)}</span>
+              <button disabled={disabled} onClick={() => setDynamic(null, '동적 파지를 해제했습니다. 클립은 원본 동작을 재생합니다.')}>해제</button>
+            </>}
+          </div>
           <div className="tool-group"><span className="tool-label">변환</span>
             <NumericInput aria-label="변환할 키프레임 수" min={2} max={Math.max(2, activeClipLength)} step="1" disabled={disabled} value={convertCount} onChange={e => setConvertCount(Math.max(2, Math.round(+e.target.value) || 2))}/>
             <span className="tool-unit">개</span>
@@ -1933,7 +2035,7 @@ export default function Editor() {
           const collapsed = !!group && collapsedLabGroups.includes(group.id);
           return <Fragment key={i}>
             {group?.start === i && <button className="lab-frame-header" disabled={disabled} onClick={() => setCollapsedLabGroups(values => values.includes(group.id) ? values.filter(id => id !== group.id) : [...values, group.id])} title="파지법 구간 접기/펼치기">파지법 {group.frames.length}개 {collapsed ? '▸' : '▾'}</button>}
-            {(!collapsed || group?.start === i) && <button disabled={disabled} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${stage && i < stage.index ? 'stage-done' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}>{stage?.index === i && <i className="stage-fill" style={{ width: `${stage.progress * 100}%` }}/>}<span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small><span>{f.lab_grasp ? '파지법 · ' : ''}{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `클립 ${f.samples.length}프레임 · ${f.duration.toFixed(1)}s` : '포즈'} · <b className="card-start">{formatClock((preview?.keyframe_times ?? cardStarts)[i] ?? 0)}</b></span><span>{cardOutgoingText(project.keyframes, i)} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</span></small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
+            {(!collapsed || group?.start === i) && <button disabled={disabled} data-frame-index={i} className={`frame-card ${frameIndex === i ? 'active' : ''} ${playbackFrame === i ? 'playing' : ''} ${stage && i < stage.index ? 'stage-done' : ''} ${transitionSelection.includes(i) ? 'transition-selected' : ''} ${f.generated_transition ? 'generated-transition' : ''} ${f.lab_grasp ? 'lab-linked-frame' : ''}`} aria-pressed={transitionSelection.includes(i)} onClick={() => selectTransitionFrame(i)} title={f.lab_grasp ? `Cylinder Lab 파지법 · 그린 점 ${f.lab_grasp.point_index + 1}` : '두 키프레임을 순서대로 클릭해 연결 구간을 선택합니다'}>{stage?.index === i && <i className="stage-fill" style={{ width: `${stage.progress * 100}%` }}/>}<span className="frame-number">{String(i+1).padStart(2, '0')}</span><div><strong>{f.name}</strong><small><span>{f.lab_grasp ? '파지법 · ' : ''}{f.generated_transition ? '자동 생성 · ' : ''}{f.samples ? `${f.dynamic ? '동적 ' : ''}클립 ${f.samples.length}프레임 · ${f.duration.toFixed(1)}s` : '포즈'} · <b className="card-start">{formatClock((preview?.keyframe_times ?? cardStarts)[i] ?? 0)}</b></span><span>{cardOutgoingText(project.keyframes, i)} · 위치 {f.pins.length} · 각도 {f.angle_pins?.length ?? 0}</span></small></div><div className="mini-pose"><i style={{ height: `${22 + (f.qpos[2] - .5) * 40}px` }}/></div></button>}
           </Fragment>;
         })}</div>
       </div>

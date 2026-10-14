@@ -143,3 +143,55 @@ test('auto split respects the part limit and ignores straight or still clips', a
   assert.deepEqual(suggestClipSplits(straight, 6), []);
   assert.throws(() => autoSplitClip([straight], 0, 6));
 });
+
+const grasp = (window) => ({ object_id: 'cube', reference_pose: { position: [.4, 0, .8], quaternion_xyzw: [0, 0, 0, 1] },
+  hands: ['left', 'right'], window });
+const WINDOW = { ramp_in_start: 10, hold_start: 20, hold_end: 40, ramp_out_end: 50 };
+
+test('splitting a dynamic clip shifts the window and keeps it on both parts when it spans the cut', async () => {
+  const { splitMotionClip } = await import('../lib/keyframes.ts');
+  const { keyframes } = splitMotionClip([{ ...clip(61, 6), dynamic: grasp(WINDOW) }], 0, 30);
+  assert.deepEqual(keyframes[0].dynamic.window, WINDOW);
+  assert.deepEqual(keyframes[1].dynamic.window, { ramp_in_start: -20, hold_start: -10, hold_end: 10, ramp_out_end: 20 });
+});
+
+test('a part the window does not touch loses the binding', async () => {
+  const { splitMotionClip } = await import('../lib/keyframes.ts');
+  const early = splitMotionClip([{ ...clip(61, 6), dynamic: grasp(WINDOW) }], 0, 55).keyframes;
+  assert.equal(early[1].dynamic, undefined);
+  assert.ok(early[0].dynamic);
+  const late = splitMotionClip([{ ...clip(61, 6), dynamic: grasp(WINDOW) }], 0, 5).keyframes;
+  assert.equal(late[0].dynamic, undefined);
+  assert.deepEqual(late[1].dynamic.window, { ramp_in_start: 5, hold_start: 15, hold_end: 35, ramp_out_end: 45 });
+});
+
+test('merging parts of one dynamic clip restores the original binding', async () => {
+  const { splitMotionClip, mergeMotionClips } = await import('../lib/keyframes.ts');
+  const original = { ...clip(61, 6), dynamic: grasp(WINDOW) };
+  const merged = mergeMotionClips(splitMotionClip([original], 0, 30).keyframes, 0).keyframes[0];
+  assert.deepEqual(merged.dynamic, original.dynamic);
+  assert.equal(merged.samples.length, 61);
+});
+
+test('merging clips with different bindings is refused', async () => {
+  const { splitMotionClip, mergeMotionClips } = await import('../lib/keyframes.ts');
+  const { keyframes } = splitMotionClip([{ ...clip(61, 6), dynamic: grasp(WINDOW) }], 0, 30);
+  keyframes[1].dynamic.object_id = 'other';
+  assert.throws(() => mergeMotionClips(keyframes, 0), /동적 파지/);
+  const spanning = splitMotionClip([{ ...clip(61, 6), dynamic: grasp(WINDOW) }], 0, 30).keyframes;
+  delete spanning[1].dynamic;
+  assert.throws(() => mergeMotionClips(spanning, 0), /동적 파지/);
+});
+
+test('window helpers keep the four numbers ordered and inside the clip', async () => {
+  const { defaultDynamicWindow, setDynamicWindowValue, clipSampleIndexAtTime } = await import('../lib/keyframes.ts');
+  const window = defaultDynamicWindow(100, 50);
+  assert.deepEqual(window, { ramp_in_start: 40, hold_start: 50, hold_end: 60, ramp_out_end: 70 });
+  const edge = defaultDynamicWindow(100, 98);
+  assert.ok(edge.ramp_in_start <= edge.hold_start && edge.hold_start <= edge.hold_end && edge.ramp_out_end <= 99);
+  const moved = setDynamicWindowValue(WINDOW, 'hold_start', 45);
+  assert.deepEqual(moved, { ramp_in_start: 10, hold_start: 45, hold_end: 45, ramp_out_end: 50 });
+  assert.equal(clipSampleIndexAtTime([clip(11, 10)], 0, 0), 0);
+  assert.equal(clipSampleIndexAtTime([clip(11, 10)], 0, 10), 10);
+  assert.equal(clipSampleIndexAtTime([clip(11, 10)], 0, 11), null);
+});

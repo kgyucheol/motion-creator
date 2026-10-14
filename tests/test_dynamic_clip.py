@@ -175,3 +175,17 @@ def test_a_split_clip_resolves_like_the_whole_one(robot, project, at):
     assert len(whole['qpos']) == len(split['qpos']) and abs(whole['time'][-1] - split['time'][-1]) < 1e-9
     assert np.abs(whole['qpos'] - split['qpos']).max() < 1e-2        # grids differ inside each part, so only about half a degree apart; the same length shows no entry transition was added
     assert [report['index'] for report in split['dynamic_reports']] == [0, 1]
+
+
+def test_resolve_endpoint_returns_samples_and_report(project):
+    from fastapi import HTTPException
+    from motioncreator import server
+    live = project_from_motion_bytes(server.robot, episode(), 'x.json', 30)
+    live['keyframes'][0]['dynamic'] = project['keyframes'][0]['dynamic']
+    live['scene_objects'] = move(project, [.45, .02, .8])['scene_objects']
+    result = server.dynamic_resolve(server.DynamicResolveInput(project=live, index=0))
+    assert result['report']['status'] == 'ok' and len(result['samples']) == FRAMES
+    assert not np.allclose(result['samples'][30], live['keyframes'][0]['samples'][30])
+    del live['keyframes'][0]['dynamic']
+    with pytest.raises(HTTPException):
+        server.dynamic_resolve(server.DynamicResolveInput(project=live, index=0))
