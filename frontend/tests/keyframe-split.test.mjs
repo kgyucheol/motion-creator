@@ -164,3 +164,16 @@ test('window helpers keep the four numbers ordered and inside the clip', async (
   assert.equal(clipSampleIndexAtTime([clip(11, 10)], 0, 10), 10);
   assert.equal(clipSampleIndexAtTime([clip(11, 10)], 0, 11), null);
 });
+
+test('splitting keeps a delta mode on both parts and gives the target only to the last part', async () => {
+  const { mergeMotionClips } = await import('../lib/keyframes.ts');
+  const delta = splitMotionClip([{ ...clip(11, 10), motion: { mode: 'delta' } }], 0, 4).keyframes;
+  assert.deepEqual(delta.map(part => part.motion?.mode), ['delta', 'delta']);
+  const target = { kind: 'point', point: [.3, 0, 1] };
+  const aimed = splitMotionClip([{ ...clip(11, 10), motion: { mode: 'cartesian', target } }], 0, 4).keyframes;
+  assert.deepEqual(aimed.map(part => part.motion?.mode), ['delta', 'cartesian']);
+  assert.deepEqual(aimed[1].motion.target, target);
+  assert.equal(splitMotionClip([clip(11, 10)], 0, 4).keyframes[0].motion, undefined);
+  assert.equal(mergeMotionClips(aimed, 0).keyframes[0].motion.mode, 'cartesian');       // the end is still the target
+  assert.equal(mergeMotionClips(delta, 0).keyframes[0].motion.mode, 'delta');
+});

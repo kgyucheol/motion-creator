@@ -7,13 +7,14 @@ import time
 from pathlib import Path
 from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE, ANGLE_LOCKABLE
 from .motion import new_project, validate_project, compile_motion, rename_project, enable_parallel_compile, project_from_motion_bytes, prepare_saved_project, save_bundle
 from .presets import GroupStore
+from .head_camera import head_camera
 
 SELECTION_PATH = ROOT / '.motioncreator-server.json'
 
@@ -268,6 +269,33 @@ def checked(fn):
 @app.get('/api/health')
 def health():
     return {'status': 'ok', 'model': 'G1 29 DoF', 'model_id': robot.model_id, 'nq': robot.model.nq, 'nv': robot.model.nv}
+
+
+@app.get('/api/head-camera/status')
+def head_camera_status():
+    return head_camera.status()
+
+
+@app.get('/api/head-camera/stream')
+async def head_camera_stream():
+    try:
+        head_camera.acquire()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    async def frames():
+        sequence = 0
+        try:
+            while True:
+                packet = await asyncio.to_thread(head_camera.wait_frame, sequence, 1.0)
+                if packet is None:
+                    continue
+                sequence, jpeg = packet
+                yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n' % len(jpeg)) + jpeg + b'\r\n'
+        finally:
+            head_camera.release()
+
+    return StreamingResponse(frames(), media_type='multipart/x-mixed-replace; boundary=frame', headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/api/init')
@@ -587,12 +615,17 @@ class KeyframesToClipInput(BaseModel):
 
 @app.post('/api/keyframes-to-clip')
 def keyframes_to_clip(payload: KeyframesToClipInput):
-    """Bake cards `start`…`end` (as they play now, motion modes included) into one motion clip."""
+    """Join cards `start`…`end` into one motion clip as they were recorded (motion modes left out).
+
+    The caller gives the clip the motion of the last card, so the end of the joined clip is retargeted like that card was.
+    """
     def run():
         frames = payload.project['keyframes']
         if payload.end >= len(frames) or payload.end <= payload.start:
             raise ValueError('Pick two or more cards in order')
-        motion = compile_motion(robot, payload.project, payload.fps)
+        recorded = {**payload.project, 'keyframes': [{key: value for key, value in frame.items() if key not in ('motion', 'dynamic')}
+                                                     for frame in frames]}
+        motion = compile_motion(robot, recorded, payload.fps)
         times = np.asarray(motion['time'])
         starts = motion['keyframe_times']
         begin = starts[payload.start]

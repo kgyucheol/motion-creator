@@ -94,6 +94,22 @@ export type DynamicReport = {
   object_id: string | null; shift_mm?: number; max_position_error_mm?: number; max_angle_error_deg?: number; max_shift_mm?: number;
 };
 
+/** How a card moves relative to the card before it (see motioncreator/card_motion.py). */
+export type CardMotion = {
+  mode: 'recorded' | 'delta' | 'cartesian';
+  target?: { kind: 'object'; object_id: string; reference_pose: { position: number[]; quaternion_xyzw: number[] } } | { kind: 'point'; point: number[] };
+  hands?: ('left' | 'right')[];
+  offset?: { position: number[]; yaw_deg: number };
+  freedom?: 'yaw_xyz' | 'full6d';
+  waist?: 'free' | 'lock';
+  max_shift_m?: number;
+};
+
+export type MotionReport = {
+  index: number; mode: CardMotion['mode']; status: 'ok' | 'approx' | 'unreachable' | 'too_far' | 'missing_object' | 'unchanged' | 'limit';
+  shift_mm?: number; max_position_error_mm?: number; max_shift_mm?: number; offset_deg?: number; clamped_deg?: number; after_unreachable?: number;
+};
+
 export type Keyframe = {
   name: string;
   duration: number;
@@ -103,8 +119,9 @@ export type Keyframe = {
   samples?: number[][];
   /** Clip only: seconds to travel from the previous pose into this clip's first sample (automatic when unset). */
   transition?: number;
-  /** Clip only: follow a moved scene object (see DynamicGrasp). */
+  /** Clip only: follow a moved scene object (the older window-based form, see DynamicGrasp). */
   dynamic?: DynamicGrasp;
+  motion?: CardMotion;
   grasp?: TwoHandGrasp;
   interaction?: ToolInteraction;
   generated_transition?: boolean;
@@ -208,8 +225,10 @@ export function splitMotionClip(keyframes: Keyframe[], index: number, sample: nu
   if (durations.some(value => value < 1 / 120)) throw new Error('분할한 구간의 재생 시간이 너무 짧습니다.');
   const halves: Keyframe[] = parts.map((part, side) => {
     const dynamic = shiftDynamic(clip.dynamic, side === 0 ? 0 : -sample, part.length);
+    // 델타는 양쪽이 그대로 이어받고, 목표(카테시안)를 향하는 끝은 뒤쪽 조각만 갖는다. 앞쪽 조각은 앞 카드를 따라 이어서 움직인다.
+    const motion = !clip.motion ? undefined : clip.motion.mode === 'cartesian' && side === 0 ? { mode: 'delta' as const } : structuredClone(clip.motion);
     return { name: `${clip.name} ${side + 1}`, duration: durations[side], qpos: [...part[0]], pins: [], samples: part,
-      ...(dynamic ? { dynamic } : {}) };
+      ...(dynamic ? { dynamic } : {}), ...(motion ? { motion } : {}) };
   });
   return { keyframes: [...keyframes.slice(0, index), ...halves, ...keyframes.slice(index + 1)], index };
 }
@@ -280,8 +299,11 @@ export function mergeMotionClips(keyframes: Keyframe[], index: number) {
     && first.samples.at(-1)!.every((value, i) => value === second.samples![0][i]);
   const dynamic = mergeDynamic(first, second, shared ? first.samples.length - 1 : first.samples.length);
   const { dynamic: _dropped, ...rest } = first;
+  // 합친 클립의 끝은 뒤 클립의 끝이므로 뒤가 목표(카테시안)면 그것을, 아니면 앞의 방식을 따른다.
+  const motion = second.motion?.mode === 'cartesian' ? second.motion : first.motion ?? second.motion;
   const merged: Keyframe = { ...rest, duration: first.duration + second.duration, pins: [],
-    samples: [...first.samples, ...(shared ? second.samples.slice(1) : second.samples)], ...(dynamic ? { dynamic } : {}) };
+    samples: [...first.samples, ...(shared ? second.samples.slice(1) : second.samples)], ...(dynamic ? { dynamic } : {}), ...(motion ? { motion: structuredClone(motion) } : {}) };
+  if (!motion) delete merged.motion;
   return { keyframes: [...keyframes.slice(0, index), merged, ...keyframes.slice(index + 2)], index };
 }
 

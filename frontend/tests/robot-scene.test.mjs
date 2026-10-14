@@ -770,3 +770,39 @@ test('symmetric translation mirrors across the torso plane for arms and the pelv
   const forward = along([0, .01, 0]);
   assert.ok(Math.abs(forward.right_hand[1] - .51) < 1e-9 && Math.abs(forward.left_hand[1] - .51) < 1e-9);
 });
+
+test('PiP source switch streams the real head camera and releases it when switching back', () => {
+  const attributes = new Map();
+  const feed = { hidden: true, src: '', removeAttribute(name) { if (name === 'src') this.src = ''; } };
+  const label = { textContent: 'HEAD CAM · SIM' };
+  const sources = ['sim', 'real'].map(source => ({ dataset: { source }, setAttribute: (name, value) => attributes.set(source, value) }));
+  const controls = [{ disabled: false }];
+  const overlay = {
+    classList: { toggle(name, on) { attributes.set(name, on); } },
+    querySelector: selector => selector === '.head-camera-feed' ? feed : label,
+    querySelectorAll: selector => selector.includes('.head-camera-source') ? sources : controls,
+  };
+  const timers = [];
+  const previous = { window: globalThis.window, fetch: globalThis.fetch };
+  globalThis.window = { setInterval: callback => timers.push(callback) || timers.length, clearInterval: () => {} };
+  globalThis.fetch = async () => ({ json: async () => ({ receiving: true }) });
+  try {
+    const viewer = Object.create(RobotScene.prototype);
+    viewer.headCameraOverlay = overlay;
+    viewer.headCameraStatusTimer = null;
+    viewer.setHeadCameraSource('real');
+    assert.equal(feed.src, '/api/head-camera/stream');
+    assert.equal(feed.hidden, false);
+    assert.equal(attributes.get('real'), 'true');
+    assert.equal(attributes.get('sim'), 'false');
+    assert.equal(controls[0].disabled, true);
+    viewer.setHeadCameraSource('sim');
+    assert.equal(feed.src, '');
+    assert.equal(feed.hidden, true);
+    assert.equal(label.textContent, 'HEAD CAM · SIM');
+    assert.equal(controls[0].disabled, false);
+  } finally {
+    globalThis.window = previous.window;
+    globalThis.fetch = previous.fetch;
+  }
+});

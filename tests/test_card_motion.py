@@ -121,3 +121,11 @@ def test_cards_become_a_clip_and_back(robot, project):
     project['keyframes'][1:3] = [clip]
     assert len(compile_motion(robot, project, 30)['qpos']) > 400
     assert client.post('/api/keyframes-to-clip', json={'project': project, 'start': 2, 'end': 2}).status_code == 422
+
+
+def test_joining_cards_uses_the_recording_not_the_retargeted_result(robot, project):
+    from fastapi.testclient import TestClient
+    from motioncreator.server import app
+    moved = move_cube(copy.deepcopy(project), [.05, 0., 0.])
+    clip = TestClient(app).post('/api/keyframes-to-clip', json={'project': moved, 'start': 1, 'end': 2, 'fps': 30}).json()
+    assert np.allclose(clip['samples'][-1], project['keyframes'][2]['qpos'], atol=1e-6)      # the recorded end, not the moved one
