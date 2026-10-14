@@ -143,3 +143,7 @@ button.danger{border-color:#b04a4a;color:#ff9a9a}
 @media(max-width:1500px){.topbar .top-actions{gap:6px}.topbar .top-actions button,.topbar .top-actions .wbc-link{padding:5px 8px;font-size:12px}.topbar .brand select{max-width:130px}}
 @media(max-width:1250px){.topbar .top-actions .wbc-link{padding:4px 6px;font-size:11px}.topbar .brand select{max-width:96px}}
 .keyframe-toolbar{margin-bottom:10px}
+
+.dynamic-offset{display:inline-flex;align-items:center;gap:6px;padding:0 10px;border-left:1px solid #2b3846;border-right:1px solid #2b3846}
+.dynamic-offset label{display:inline-flex;align-items:center;gap:3px;font-size:11px;color:#9fb3c4}
+.dynamic-offset .numeric-input,.dynamic-offset input[type=number]{width:54px}

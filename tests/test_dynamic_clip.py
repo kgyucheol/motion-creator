@@ -138,7 +138,9 @@ def test_compile_follows_the_object_and_reports(robot, project):
     lambda d: d.update(hands=['middle']),
     lambda d: d.update(freedom='sideways'),
     lambda d: d.update(reference_pose={'position': [0, 0], 'quaternion_xyzw': [0, 0, 0, 1]}),
-    lambda d: d.update(object_id=''),
+    lambda d: d.update(offset={'position': [2., 0., 0.]}),
+    lambda d: d.update(offset={'position': [0., 0., 0.], 'yaw_deg': 270}),
+    lambda d: d.update(object_id=7),
 ])
 def test_invalid_bindings_are_rejected(robot, project, change):
     change(project['keyframes'][0]['dynamic'])
@@ -189,3 +191,57 @@ def test_resolve_endpoint_returns_samples_and_report(project):
     del live['keyframes'][0]['dynamic']
     with pytest.raises(HTTPException):
         server.dynamic_resolve(server.DynamicResolveInput(project=live, index=0))
+
+
+def test_a_tcp_offset_moves_the_grip_without_any_object(robot, project):
+    clip = project['keyframes'][0]
+    clip['dynamic'].update(object_id=None, offset={'position': [.03, -.02, .01], 'yaw_deg': 0.})
+    project['scene_objects'] = []                              # no object needed
+    resolved, reports = resolve_project_dynamics(robot, project)
+    assert reports[0]['status'] == 'ok' and reports[0]['object_id'] is None
+    original, moved = np.asarray(clip['samples']), np.asarray(resolved['keyframes'][0]['samples'])
+    for index in (20, 30, 40):
+        before, after = hands(robot, original[index]), hands(robot, moved[index])
+        for side in before:
+            assert np.linalg.norm(after[side][0] - (before[side][0] + [.03, -.02, .01])) < .003
+    assert np.array_equal(moved[:10], original[:10]) and np.array_equal(moved[50:], original[50:])
+
+
+def test_the_offset_adds_to_the_object_move(robot, project):
+    clip = project['keyframes'][0]
+    clip['dynamic']['offset'] = {'position': [0., 0., .02], 'yaw_deg': 0.}
+    shift = np.array([.03, 0., 0.])
+    samples, report = resolve_dynamic_clip(robot, clip, np.array(REFERENCE['position']) + shift, REFERENCE['quaternion_xyzw'])
+    before, after = hands(robot, np.asarray(clip['samples'])[30]), hands(robot, samples[30])
+    assert report['status'] == 'ok'
+    for side in before:
+        assert np.linalg.norm(after[side][0] - (before[side][0] + shift + [0, 0, .02])) < .003
+
+
+def test_a_yaw_offset_turns_the_grip_about_the_reference(robot, project):
+    clip = project['keyframes'][0]
+    clip['dynamic']['offset'] = {'position': [0., 0., 0.], 'yaw_deg': 8.}
+    samples, report = resolve_dynamic_clip(robot, clip, REFERENCE['position'], REFERENCE['quaternion_xyzw'])
+    centre, turn = np.array(REFERENCE['position']), Rotation.from_euler('z', 8, degrees=True)
+    before, after = hands(robot, np.asarray(clip['samples'])[30])['left'][0], hands(robot, samples[30])['left'][0]
+    assert report['status'] in ('ok', 'approx') and np.linalg.norm(after - (centre + turn.apply(before - centre))) < .01
+
+
+def test_capture_reads_the_offset_off_an_edited_pose(robot, project):
+    from motioncreator.dynamic_clip import capture_tcp_offset
+    project['keyframes'][0]['dynamic'].update(object_id=None)
+    project['scene_objects'] = []
+    clip = project['keyframes'][0]
+    sample = np.asarray(clip['samples'][30])
+    target = robot.point(robot.data(sample), 'left_hand')[0] + [.02, .01, -.015]
+    edited, info = robot.solve(sample, sample, pins=('left_foot', 'right_foot', 'pelvis'), angle_pins=['pelvis'], mode='free', resistance=0.,
+                               selected_targets={'left_hand': target}, posture_reference=sample, posture_weight=.3, max_nfev=200)
+    captured = capture_tcp_offset(robot, project, 0, 30, edited)
+    assert captured['hand'] == 'left' and captured['moved_mm'] == pytest.approx(np.linalg.norm([20, 10, -15]), abs=3)
+    np.testing.assert_allclose(captured['offset']['position'], [.02, .01, -.015], atol=.003)
+    with pytest.raises(ValueError):
+        capture_tcp_offset(robot, project, 0, 5, edited)         # outside the hold: the weight would hide the edit
+    clip['dynamic']['offset'] = captured['offset']
+    resolved, reports = resolve_project_dynamics(robot, project)
+    assert reports[0]['status'] == 'ok'
+    assert np.linalg.norm(robot.point(robot.data(np.asarray(resolved['keyframes'][0]['samples'][30])), 'left_hand')[0] - target) < .004

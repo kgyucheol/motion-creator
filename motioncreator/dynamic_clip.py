@@ -37,9 +37,9 @@ def validate_dynamic(spec, sample_count):
     """Return the normalised binding or raise ValueError (the message is shown to the user)."""
     if not isinstance(spec, dict):
         raise ValueError('Dynamic grasp settings must be an object')
-    object_id = spec.get('object_id')
-    if not isinstance(object_id, str) or not object_id:
-        raise ValueError('Dynamic grasp needs an object')
+    object_id = spec.get('object_id') or None
+    if object_id is not None and not isinstance(object_id, str):
+        raise ValueError('Dynamic grasp object must be an object id or empty')
     reference = spec.get('reference_pose')
     if not isinstance(reference, dict):
         raise ValueError('Dynamic grasp needs the object reference pose')
@@ -68,7 +68,15 @@ def validate_dynamic(spec, sample_count):
     shift = float(spec.get('max_shift_m', DEFAULT_MAX_SHIFT_M))
     if not np.isfinite(shift) or not .01 <= shift <= 2:
         raise ValueError('Maximum object shift must be 0.01–2 m')
-    return {'object_id': object_id, 'reference_pose': {'position': position.tolist(), 'quaternion_xyzw': quaternion.tolist()},
+    offset = spec.get('offset') or {}
+    offset_position = np.asarray(offset.get('position', [0., 0., 0.]), dtype=float)
+    offset_yaw = float(offset.get('yaw_deg', 0.))
+    if offset_position.shape != (3,) or not np.isfinite(offset_position).all() or np.abs(offset_position).max() > 1:
+        raise ValueError('TCP offset must be three finite values within 1 m')
+    if not np.isfinite(offset_yaw) or abs(offset_yaw) > 180:
+        raise ValueError('TCP offset yaw must be within ±180 degrees')
+    return {'object_id': object_id, 'offset': {'position': offset_position.tolist(), 'yaw_deg': offset_yaw},
+            'reference_pose': {'position': position.tolist(), 'quaternion_xyzw': quaternion.tolist()},
             'hands': list(hands), 'window': dict(window), 'freedom': freedom, 'waist': waist, 'max_shift_m': shift}
 
 
@@ -94,14 +102,17 @@ def window_weights(window, count):
 
 
 def object_delta(spec, now_position, now_quaternion_xyzw):
-    """(rotation, reference position, current position) of the rigid transform that carries the reference pose onto the current one."""
+    """(rotation, reference position, current position) of the rigid transform that carries the reference pose onto the current one,
+    followed by the binding's own TCP offset (a shift in world coordinates and a turn about the reference position)."""
     reference = spec['reference_pose']
     reference_rotation = Rotation.from_quat(reference['quaternion_xyzw'])
     now_rotation = Rotation.from_quat(now_quaternion_xyzw)
     relative = now_rotation * reference_rotation.inv()
     if spec['freedom'] == 'yaw_xyz':
         relative = Rotation.from_euler('z', relative.as_euler('zyx')[0])
-    return relative, np.asarray(reference['position'], dtype=float), np.asarray(now_position, dtype=float)
+    offset = spec.get('offset') or {'position': [0., 0., 0.], 'yaw_deg': 0.}
+    relative = Rotation.from_euler('z', offset['yaw_deg'], degrees=True) * relative
+    return relative, np.asarray(reference['position'], dtype=float), np.asarray(now_position, dtype=float) + np.asarray(offset['position'], dtype=float)
 
 
 def _level(position_mm, angle_deg):
@@ -234,7 +245,9 @@ def resolve_project_dynamics(robot: Robot, project):
             resolved.append(frame)
             continue
         spec = validate_dynamic(frame['dynamic'], len(frame['samples']))
-        pose = scene_object_pose(project, spec['object_id'])
+        # without an object only the TCP offset acts: the "object" stays where it was at the reference
+        pose = (spec['reference_pose']['position'], spec['reference_pose']['quaternion_xyzw']) if spec['object_id'] is None \
+            else scene_object_pose(project, spec['object_id'])
         if pose is None:
             reports[index] = _report('missing_object', spec)
             resolved.append(frame)
@@ -243,3 +256,27 @@ def resolve_project_dynamics(robot: Robot, project):
         reports[index] = report
         resolved.append({**frame, 'samples': samples.tolist(), 'qpos': samples[0].tolist()})
     return {**project, 'keyframes': resolved}, reports
+
+
+def capture_tcp_offset(robot: Robot, project, index: int, sample: int, qpos):
+    """The binding's TCP offset that makes clip sample `sample` land where the edited pose `qpos` has its hands.
+
+    The hand that was moved most decides (an edit of one hand should not be halved by the other). `sample` must lie where the
+    hands follow completely, otherwise the weight would hide part of the edit.
+    """
+    frame = project['keyframes'][index]
+    spec = validate_dynamic(frame['dynamic'], len(frame['samples']))
+    weights = window_weights(spec['window'], len(frame['samples']))
+    if not 0 <= sample < len(weights) or weights[sample] < .999:
+        raise ValueError('손 위치를 반영하려면 재생 막대를 파지 구간(파지~놓기 프레임 사이)에 두세요')
+    resolved, _ = resolve_project_dynamics(robot, project)
+    shown = robot.data(np.asarray(resolved['keyframes'][index]['samples'][sample], dtype=float))
+    edited = robot.data(robot.validate_q(qpos))
+    deltas = {side: robot.point(edited, f'{side}_hand')[0] - robot.point(shown, f'{side}_hand')[0] for side in spec['hands']}
+    side = max(deltas, key=lambda key: float(np.linalg.norm(deltas[key])))
+    delta = deltas[side]
+    position = (np.asarray(spec['offset']['position']) + delta).tolist()
+    if np.abs(position).max() > 1:
+        raise ValueError('TCP 오프셋이 1 m를 넘습니다')
+    return {'offset': {'position': position, 'yaw_deg': spec['offset']['yaw_deg']}, 'hand': side,
+            'moved_mm': float(np.linalg.norm(delta)) * 1000}

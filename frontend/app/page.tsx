@@ -1612,7 +1612,8 @@ export default function Editor() {
       api<Preview>('preview', { project, fps: 30 }).then(result => {
         const now = current.current;
         if (cancelled || now.project !== project || now.playing || now.busy || now.solving) return;
-        setPreview(previous => previous ?? result); setSample(0);
+        setPreview(previous => previous ?? result);
+        setSample(Math.max(0, result.time.findIndex(time => time >= scrubTime.current - 1e-9)));
       }).catch(() => { failedPreview.current = project; });      // a project that does not compile reports its error when played
     }, 500);
     return () => { cancelled = true; clearTimeout(timer); };
@@ -1675,7 +1676,7 @@ export default function Editor() {
   }
   // 서버가 동적 클립을 풀 때 쓰는 프로젝트: 지금 화면의 물체 위치를 담는다.
   function sceneProject(base: Project): Project { return { ...base, scene_objects: objects.filter(object => !object.ghost), scene_groups: objectGroups }; }
-  const [dynamicObjectId, setDynamicObjectId] = useState('');
+  const [dynamicObjectId, setDynamicObjectId] = useState('auto');          // 'auto': 선택한(또는 첫) 오브젝트, '': 물체 없음
   const [dynamicReport, setDynamicReport] = useState<DynamicReport | null>(null);
   const dynamicObjects = objects.filter(object => !object.ghost);
   function setDynamic(patch: Partial<DynamicGrasp> | null, message?: string) {
@@ -1684,22 +1685,48 @@ export default function Editor() {
     else editFrame(frameIndex, { dynamic: { ...activeFrame.dynamic!, ...patch } });
     if (message) setMessage(message);
   }
+  // 마지막으로 본 재생 막대 시각: 편집으로 미리보기가 지워졌다 다시 계산되어도 같은 자리로 돌려놓는다
+  const scrubTime = useRef(0);
+  useEffect(() => { if (preview) scrubTime.current = preview.time[sample] ?? 0; }, [preview, sample]);
   function scrubbedClipSample() {
-    if (!project || !preview) return null;
-    return clipSampleIndexAtTime(project.keyframes, frameIndex, preview.time[sample] ?? 0, preview.keyframe_times?.[frameIndex]);
+    if (!project) return null;
+    return clipSampleIndexAtTime(project.keyframes, frameIndex, scrubTime.current, preview?.keyframe_times?.[frameIndex] ?? cardStarts[frameIndex]);
+  }
+  function handMidpoint() {
+    const handles = preview?.states[sample]?.handles ?? state?.handles;
+    const left = handles?.left_hand?.position, right = handles?.right_hand?.position;
+    return left && right ? left.map((value, i) => (value + right[i]) / 2) : null;
   }
   function enableDynamic() {
-    const target = dynamicObjects.find(object => object.id === (dynamicObjectId || selectedObjectId)) ?? dynamicObjects[0];
-    if (!target || !activeFrame?.samples) { setError('동적 파지에 쓸 오브젝트를 먼저 추가하세요.'); return; }
+    if (!activeFrame?.samples) return;
+    const wanted = dynamicObjectId === 'auto' ? selectedObjectId ?? dynamicObjects[0]?.id ?? '' : dynamicObjectId;
+    const chosen = dynamicObjects.find(object => object.id === wanted) ?? null;
     checkpoint();
     const at = scrubbedClipSample() ?? middleSample(activeFrame.samples.length);
-    editFrame(frameIndex, { dynamic: { object_id: target.id, hands: ['left', 'right'], freedom: 'yaw_xyz', waist: 'free',
-      reference_pose: { position: [...target.position], quaternion_xyzw: [...target.quaternion_xyzw] },
+    // 물체가 없으면 두 손의 가운데가 기준점(오프셋 회전의 중심)이 된다
+    const pivot = handMidpoint() ?? [.4, 0, .8];
+    editFrame(frameIndex, { dynamic: { object_id: chosen?.id ?? null, hands: ['left', 'right'], freedom: 'yaw_xyz', waist: 'lock',
+      offset: { position: [0, 0, 0], yaw_deg: 0 },
+      reference_pose: chosen ? { position: [...chosen.position], quaternion_xyzw: [...chosen.quaternion_xyzw] } : { position: pivot, quaternion_xyzw: [0, 0, 0, 1] },
       window: defaultDynamicWindow(activeFrame.samples.length, at) } });
-    setMessage(`"${target.name}"의 지금 위치를 기준으로 지정했습니다. 기준은 영상 속 물체가 있던 자리여야 하니, 손이 물체를 잡는 순간에 물체를 손 사이에 놓은 뒤 "기준 다시 잡기"를 누르세요. 그 뒤 물체를 옮기면 손이 따라옵니다.`);
+    setMessage(chosen
+      ? `"${chosen.name}"의 지금 위치를 기준으로 지정했습니다. 기준은 영상 속 물체가 있던 자리여야 하니, 손이 물체를 잡는 순간에 물체를 손 사이에 놓은 뒤 "기준 다시 잡기"를 누르세요. 그 뒤 물체를 옮기면 손이 따라옵니다.`
+      : '물체 없이 TCP 오프셋만 쓰는 동적 파지를 만들었습니다. 파지 구간에 재생 막대를 두고 손을 원하는 곳으로 옮긴 뒤 "손 위치를 반영"을 누르거나 X/Y/Z를 직접 입력하세요. 허리는 고정되어 있습니다.');
+  }
+  async function captureTcpOffset() {
+    const dynamic = activeFrame?.dynamic, at = scrubbedClipSample();
+    if (!project || !state || !dynamic) return;
+    if (at === null) { setError('재생 막대를 이 클립의 파지 구간 안에 두세요.'); return; }
+    await run(async () => {
+      const result = await api<{ offset: { position: number[]; yaw_deg: number }; hand: string; moved_mm: number }>('dynamic-offset',
+        { project: sceneProject(project), index: frameIndex, sample: at, qpos: state.qpos });
+      checkpoint();
+      setDynamic({ offset: result.offset }, `${result.hand === 'left' ? '왼손' : '오른손'}을 ${result.moved_mm.toFixed(0)}mm 옮긴 위치를 파지 목표로 반영했습니다. 클립 전체의 손 경로가 같은 모양으로 따라옵니다.`);
+    });
   }
   function placeObjectBetweenHands() {
     const dynamic = activeFrame?.dynamic;
+    if (!dynamic?.object_id) { setError('물체를 고른 동적 파지에서만 쓸 수 있습니다.'); return; }
     const states = preview?.states[sample];
     const left = states?.handles?.left_hand?.position, right = states?.handles?.right_hand?.position;
     if (!dynamic || !left || !right) { setError('재생 막대를 클립의 파지 순간에 두고 먼저 재생해 미리보기를 만든 뒤 사용하세요.'); return; }
@@ -1710,8 +1737,16 @@ export default function Editor() {
   }
   function recaptureDynamicReference() {
     const dynamic = activeFrame?.dynamic;
-    const target = objects.find(object => object.id === dynamic?.object_id);
-    if (!dynamic || !target) { setError('기준으로 삼을 오브젝트가 장면에 없습니다.'); return; }
+    if (!dynamic) return;
+    if (!dynamic.object_id) {
+      const pivot = handMidpoint();
+      if (!pivot) { setError('두 손 위치를 알 수 없습니다. 재생 막대를 움직여 보세요.'); return; }
+      checkpoint();
+      setDynamic({ reference_pose: { position: pivot, quaternion_xyzw: [0, 0, 0, 1] } }, '지금 두 손의 가운데를 오프셋 회전의 중심으로 잡았습니다.');
+      return;
+    }
+    const target = objects.find(object => object.id === dynamic.object_id);
+    if (!target) { setError('기준으로 삼을 오브젝트가 장면에 없습니다.'); return; }
     checkpoint();
     setDynamic({ reference_pose: { position: [...target.position], quaternion_xyzw: [...target.quaternion_xyzw] } }, '물체의 지금 위치를 기준으로 다시 잡았습니다.');
   }
@@ -2034,12 +2069,14 @@ export default function Editor() {
             <button className="primary" disabled={disabled || activeClipLength < 2} onClick={convertActiveClip} title="이 클립을 편집 가능한 포즈 키프레임으로 바꿉니다(시작·끝 포함 균등 간격, 양발 고정). 앞뒤 클립과는 자동으로 이어집니다.">키프레임으로 변환</button></div>
           <div className="tool-group dynamic-group"><span className="tool-label">동적 파지</span>
             {!activeFrame?.dynamic ? <>
-              <select aria-label="동적 파지 물체" disabled={disabled || !dynamicObjects.length} value={dynamicObjectId || selectedObjectId || dynamicObjects[0]?.id || ''} onChange={e => setDynamicObjectId(e.target.value)}>
+              <select aria-label="동적 파지 물체" disabled={disabled} value={dynamicObjectId === 'auto' ? (dynamicObjects.some(object => object.id === selectedObjectId) ? selectedObjectId! : dynamicObjects[0]?.id ?? '') : dynamicObjectId} onChange={e => setDynamicObjectId(e.target.value)}>
+                <option value="">(물체 없음 · TCP 오프셋만)</option>
                 {dynamicObjects.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}</select>
-              <button disabled={disabled || !dynamicObjects.length} onClick={enableDynamic} title="이 클립의 손이 선택한 오브젝트를 따라가게 합니다. 지금 물체 위치가 시연 때의 기준 위치로 저장됩니다.">기준 지정</button>
+              <button disabled={disabled} onClick={enableDynamic} title="이 클립의 손 경로를 선택한 오브젝트(또는 TCP 오프셋)에 따라 움직이게 합니다. 오브젝트를 고르면 지금 위치가 시연 때의 기준 위치로 저장됩니다.">기준 지정</button>
             </> : <>
-              <select aria-label="동적 파지 물체" disabled={disabled} value={activeFrame.dynamic.object_id} onChange={e => setDynamic({ object_id: e.target.value })}>
-                {dynamicObjects.some(object => object.id === activeFrame.dynamic!.object_id) ? null : <option value={activeFrame.dynamic.object_id}>(없음) {activeFrame.dynamic.object_id}</option>}
+              <select aria-label="동적 파지 물체" disabled={disabled} value={activeFrame.dynamic.object_id ?? ''} onChange={e => setDynamic({ object_id: e.target.value || null })}>
+                <option value="">(물체 없음 · TCP 오프셋만)</option>
+                {activeFrame.dynamic.object_id && !dynamicObjects.some(object => object.id === activeFrame.dynamic!.object_id) ? <option value={activeFrame.dynamic.object_id}>(없음) {activeFrame.dynamic.object_id}</option> : null}
                 {dynamicObjects.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}</select>
               <span className="dynamic-hands">{(['left', 'right'] as const).map(side => <label key={side} className="dynamic-hand" title={`${side === 'left' ? '왼손' : '오른손'}이 물체를 따라갑니다`}>
                 <input type="checkbox" disabled={disabled} checked={activeFrame.dynamic!.hands.includes(side)} onChange={e => {
@@ -2052,10 +2089,18 @@ export default function Editor() {
                   onChange={e => setDynamic({ window: setDynamicWindowValue(activeFrame.dynamic!.window, key, +e.target.value || 0) })}/>
                 <button className="dynamic-set" disabled={disabled || scrubbedClipSample() === null} title="재생 막대의 현재 위치로 지정"
                   onClick={() => { const at = scrubbedClipSample(); if (at !== null) setDynamic({ window: setDynamicWindowValue(activeFrame.dynamic!.window, key, at) }); }}>⌖</button></label>)}
+              <span className="dynamic-offset" title="파지 구간의 손 경로를 이만큼 옮깁니다(월드 좌표, mm). 앞뒤 접근·복귀 구간에서는 서서히 원래 경로로 돌아옵니다.">
+                {(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}
+                  <NumericInput aria-label={`TCP 오프셋 ${axis} (mm)`} step="1" disabled={disabled} value={Math.round((activeFrame.dynamic!.offset?.position[i] ?? 0) * 1000)}
+                    onChange={e => { const position = [...(activeFrame.dynamic!.offset?.position ?? [0, 0, 0])]; position[i] = (+e.target.value || 0) / 1000; setDynamic({ offset: { position, yaw_deg: activeFrame.dynamic!.offset?.yaw_deg ?? 0 } }); }}/></label>)}
+                <label>회전°<NumericInput aria-label="TCP 오프셋 회전 (도)" step="1" disabled={disabled} value={activeFrame.dynamic.offset?.yaw_deg ?? 0}
+                  onChange={e => setDynamic({ offset: { position: activeFrame.dynamic!.offset?.position ?? [0, 0, 0], yaw_deg: +e.target.value || 0 } })}/></label>
+              </span>
+              <button disabled={disabled} onClick={() => void captureTcpOffset()} title="재생 막대를 파지 구간에 두고 손(TCP)을 원하는 곳으로 옮긴 뒤 누르면, 그 이동량을 파지 목표 오프셋으로 저장합니다">손 위치를 반영</button>
               <label className="dynamic-hand" title="켜면 허리를 고정하고 팔로만 물체를 향합니다"><input type="checkbox" disabled={disabled} checked={activeFrame.dynamic.waist === 'lock'} onChange={e => setDynamic({ waist: e.target.checked ? 'lock' : 'free' })}/>허리 고정</label>
               <label className="dynamic-hand" title="켜면 물체가 기울어진 만큼 손도 기울입니다(기본은 이동과 수직축 회전만)"><input type="checkbox" disabled={disabled} checked={activeFrame.dynamic.freedom === 'full6d'} onChange={e => setDynamic({ freedom: e.target.checked ? 'full6d' : 'yaw_xyz' })}/>기울기</label>
-              <button disabled={disabled} onClick={placeObjectBetweenHands} title="재생 막대 위치에서 두 손의 가운데로 물체를 옮깁니다">손 사이에 놓기</button>
-              <button disabled={disabled} onClick={recaptureDynamicReference} title="물체의 지금 위치를 시연 때의 기준 위치로 다시 저장합니다">기준 다시 잡기</button>
+              {activeFrame.dynamic.object_id && <button disabled={disabled} onClick={placeObjectBetweenHands} title="재생 막대 위치에서 두 손의 가운데로 물체를 옮깁니다">손 사이에 놓기</button>}
+              <button disabled={disabled} onClick={recaptureDynamicReference} title="물체가 있다면 그 지금 위치를, 없다면 두 손의 가운데를 기준점으로 다시 저장합니다">기준 다시 잡기</button>
               <span className={`dynamic-chip ${dynamicReport?.status ?? 'pending'}`} title="물체 위치에 맞춘 손 경로의 도달 판정">{dynamicStatusText(dynamicReport)}</span>
               <button disabled={disabled} onClick={() => setDynamic(null, '동적 파지를 해제했습니다. 클립은 원본 동작을 재생합니다.')}>해제</button>
             </>}

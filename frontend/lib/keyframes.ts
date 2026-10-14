@@ -76,10 +76,14 @@ export const DYNAMIC_WINDOW_KEYS = ['ramp_in_start', 'hold_start', 'hold_end', '
  * The window numbers are clip sample numbers (they may lie outside the clip after a split, which keeps the weights).
  */
 export type DynamicGrasp = {
-  object_id: string;
+  /** The scene object the hands follow, or null to move the grip by `offset` alone. */
+  object_id: string | null;
+  /** Where the object was when the motion was recorded (or, without an object, the point the yaw offset turns about). */
   reference_pose: { position: number[]; quaternion_xyzw: number[] };
   hands: ('left' | 'right')[];
   window: DynamicWindow;
+  /** Extra world-frame shift (m) and turn about the reference position (deg) of the grip, on top of the object's move. */
+  offset?: { position: number[]; yaw_deg: number };
   freedom?: 'yaw_xyz' | 'full6d';
   waist?: 'free' | 'lock';
   max_shift_m?: number;
@@ -87,7 +91,7 @@ export type DynamicGrasp = {
 
 export type DynamicReport = {
   index: number; status: 'ok' | 'approx' | 'unreachable' | 'too_far' | 'missing_object' | 'unchanged';
-  object_id: string; shift_mm?: number; max_position_error_mm?: number; max_angle_error_deg?: number; max_shift_mm?: number;
+  object_id: string | null; shift_mm?: number; max_position_error_mm?: number; max_angle_error_deg?: number; max_shift_mm?: number;
 };
 
 export type Keyframe = {
@@ -232,7 +236,7 @@ function mergeDynamic(first: Keyframe, second: Keyframe, offset: number): Dynami
   }
   const same = a!.object_id === b!.object_id && JSON.stringify(a!.reference_pose) === JSON.stringify(b!.reference_pose)
     && JSON.stringify(a!.hands) === JSON.stringify(b!.hands) && a!.freedom === b!.freedom && a!.waist === b!.waist
-    && a!.max_shift_m === b!.max_shift_m && DYNAMIC_WINDOW_KEYS.every(key => b!.window[key] + offset === a!.window[key]);
+    && a!.max_shift_m === b!.max_shift_m && JSON.stringify(a!.offset) === JSON.stringify(b!.offset) && DYNAMIC_WINDOW_KEYS.every(key => b!.window[key] + offset === a!.window[key]);
   if (!same) throw new Error('두 클립의 동적 파지 설정이 달라 합칠 수 없습니다. 한쪽을 해제하거나 같은 설정으로 맞춰 주세요.');
   return a;
 }

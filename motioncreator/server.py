@@ -532,6 +532,26 @@ def export_lerobot(payload: ProjectInput):
     return checked(run)
 
 
+class DynamicOffsetInput(BaseModel):
+    project: dict
+    index: int = Field(ge=0)
+    sample: int = Field(ge=0)
+    qpos: list[float]
+
+
+@app.post('/api/dynamic-offset')
+def dynamic_offset(payload: DynamicOffsetInput):
+    """The TCP offset that carries a dynamic clip's grip to where the edited pose has its hands."""
+    def run():
+        from .dynamic_clip import capture_tcp_offset
+        validate_project(robot, payload.project)
+        frames = payload.project['keyframes']
+        if payload.index >= len(frames) or not frames[payload.index].get('dynamic'):
+            raise ValueError('Selected keyframe is not a dynamic clip')
+        return capture_tcp_offset(robot, payload.project, payload.index, payload.sample, payload.qpos)
+    return checked(run)
+
+
 @app.post('/api/preview')
 def preview(payload: ProjectInput):
     def run():
