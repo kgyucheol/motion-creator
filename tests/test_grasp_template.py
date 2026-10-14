@@ -39,9 +39,10 @@ def test_the_object_at_the_demonstrated_place_reproduces_the_demonstration(robot
     assert [clip['name'] for clip in clips] == [phase['name'] for phase in template['phases']]
     assert {report['method'] for report in reports} == {'delta', 'cartesian'}
     assert all(report['status'] in ('ok', 'approx') for report in reports)
-    for clip, phase in zip(clips[:4], template['phases'][:4]):          # up to and including the grasp
+    for clip, phase in zip(clips, template['phases']):                  # every phase ends where the demonstration did
         a, b = _hand_poses(robot, np.array(phase['end'])), _hand_poses(robot, np.array(clip['samples'][-1]))
         assert max(np.linalg.norm(a[h][0] - b[h][0]) for h in HANDS) < 2e-3
+    assert len(clips) == 8
     assert np.allclose(clips[-1]['samples'][-1][ARM_WAIST_COLUMNS], np.array(template['phases'][-1]['end'])[ARM_WAIST_COLUMNS], atol=1e-6)
 
 
@@ -62,10 +63,10 @@ def test_clips_chain_without_jumps_and_stay_inside_the_limits(robot, template, c
             robot.validate_q(sample)
 
 
-@pytest.mark.parametrize('shift', [(.0, .0, .04), (-.05, 0., 0.), (.05, 0., 0.), (0., .04, 0.)])
+@pytest.mark.parametrize('shift', [(.0, .0, .04), (-.05, 0., 0.), (.05, 0., 0.), (0., .04, 0.), (0., 0., -.06)])
 def test_nearby_objects_are_reached_by_the_approach(robot, template, centre, shift):
     clips, reports = generate_motion(robot, template, centre + shift)
-    assert reports[2]['final_position_error_mm'] < 15
+    assert reports[2]['final_position_error_mm'] < 15 and reports[5]['final_position_error_mm'] < 15
     reached = _hand_poses(robot, np.array(clips[2]['samples'][-1]))
     middle = (reached['left_hand'][0] + reached['right_hand'][0]) / 2
     assert np.linalg.norm(middle - (centre + shift)) < .02
@@ -78,18 +79,18 @@ def test_out_of_reach_objects_are_reported_not_raised(robot, template, centre):
 
 def test_a_joint_phase_that_would_break_a_limit_falls_back_to_the_hands(robot, template, centre):
     _, reports = generate_motion(robot, template, centre + [0., 0., .08])
-    grasp = reports[3]
+    grasp = reports[4]                      # pulling the load to the body
     assert grasp['method'] == 'cartesian' and grasp['fallback'] == 'joint limit' and grasp['status'] != 'unreachable'
 
 
 def test_carry_goes_to_a_coordinate_not_an_offset(robot, template, centre):
     target = np.array([.34, 0., 1.0])
     clips, reports = generate_motion(robot, template, centre, carry_target=target)
-    reached = _hand_poses(robot, np.array(clips[4]['samples'][-1]))
+    reached = _hand_poses(robot, np.array(clips[5]['samples'][-1]))
     assert np.linalg.norm((reached['left_hand'][0] + reached['right_hand'][0]) / 2 - target) < .015
     far = generate_motion(robot, template, centre + [.04, 0., 0.])[0]
     default = np.array(template['carry']['target'])
-    got = _hand_poses(robot, np.array(far[4]['samples'][-1]))
+    got = _hand_poses(robot, np.array(far[5]['samples'][-1]))
     assert np.linalg.norm((got['left_hand'][0] + got['right_hand'][0]) / 2 - default) < .03
 
 
@@ -115,4 +116,4 @@ def test_endpoint_generates_the_clips(template, centre):
     response = TestClient(app).post('/api/grasp-template/generate', json={'object_position': centre.tolist()})
     assert response.status_code == 200
     body = response.json()
-    assert len(body['keyframes']) == 7 and len(body['reports']) == 7
+    assert len(body['keyframes']) == 8 and len(body['reports']) == 8

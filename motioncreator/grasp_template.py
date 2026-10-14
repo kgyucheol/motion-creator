@@ -21,7 +21,10 @@ from .robot import FEET, Robot
 FORMAT = 'motioncreator.grasp_template.v1'
 CURVE_POINTS = 61
 GRID_SECONDS = .1
-DEFAULT_METHODS = ('delta', 'delta', 'cartesian', 'delta', 'cartesian', 'delta', 'delta')
+# Phases in playing order: at rest, spread arms, go to the object, grasp, pull toward the body, take it to the
+# target, release, return. A phase that has a coordinate to reach is cartesian; one that is an action is a joint delta.
+DEFAULT_METHODS = ('delta', 'delta', 'cartesian', 'delta', 'delta', 'cartesian', 'delta', 'delta')
+OBJECT_PHASE, CONTACT_PHASE, CARRY_PHASE = 2, 3, 5
 HANDS = ('left_hand', 'right_hand')
 DEFAULT_HAND_SPEED_MPS = .15
 LIMIT_FALLBACK_DEG = .5
@@ -78,8 +81,12 @@ def _mid(poses):
     return (poses['left_hand'][0] + poses['right_hand'][0]) / 2
 
 
-def extract_template(robot: Robot, clips, methods=DEFAULT_METHODS):
-    """Template from demonstration clips (keyframes with `samples`), one clip per phase, in playing order."""
+def extract_template(robot: Robot, clips, methods=DEFAULT_METHODS, object_phase=OBJECT_PHASE, contact_phase=CONTACT_PHASE,
+                     carry_phase=CARRY_PHASE):
+    """Template from demonstration clips (keyframes with `samples`), one clip per phase, in playing order.
+
+    The hands close on the object at the end of `contact_phase`; `object_phase` ends in front of it and
+    `carry_phase` ends at the place the object is taken to."""
     clips = list(clips)
     if len(clips) != len(methods):
         raise ValueError(f'The template needs {len(methods)} clips, one per phase')
@@ -99,19 +106,22 @@ def extract_template(robot: Robot, clips, methods=DEFAULT_METHODS):
                       'drot_xyzw': Rotation.from_matrix(tcp_end[hand][1] @ tcp_start[hand][1].T).as_quat().tolist()} for hand in HANDS}
         phases.append({'tcp': tcp, 'name': clip['name'], 'duration': float(clip['duration']), 'method': method, 'settle': False,
                        'delta': (sym - sym[0])[:, ARM_WAIST_COLUMNS].tolist(), 'start': sym[0].tolist(), 'end': sym[-1].tolist()})
-    phases[2]['goal'], phases[4]['goal'] = 'object', 'carry'     # where the two cartesian phases take the hands
+    phases[object_phase]['goal'], phases[carry_phase]['goal'] = 'object', 'carry'     # where the two cartesian phases take the hands
     phases[-1]['settle'] = True      # the last phase ends in the demonstrated rest pose whatever happened before
     first = np.asarray(phases[0]['start'])
     template = {'format': FORMAT, 'phases': phases, 'start_pose': first.tolist(),
                 'recording_asymmetry_deg_rms': mirrors, 'max_boundary_gap_rad': joint_gap}
 
-    contact = _hand_poses(robot, np.asarray(phases[2]['end']))
+    contact = _hand_poses(robot, np.asarray(phases[contact_phase]['end']))
     centre = _mid(contact)
-    template['contact'] = {'mid': centre.tolist(), 'hands': {
-        hand: {'position': (contact[hand][0] - centre).tolist(), 'quaternion_xyzw': Rotation.from_matrix(contact[hand][1]).as_quat().tolist()}
+    stand_off = _hand_poses(robot, np.asarray(phases[object_phase]['end']))
+    template['contact'] = {'mid': centre.tolist(), 'stand_off': {
+        hand: {'position': (stand_off[hand][0] - centre).tolist(), 'quaternion_xyzw': Rotation.from_matrix(stand_off[hand][1]).as_quat().tolist()}
         for hand in HANDS}}
-    before, after = _hand_poses(robot, np.asarray(phases[4]['start'])), _hand_poses(robot, np.asarray(phases[4]['end']))
-    template['carry'] = {'target': _mid(after).tolist(), 'delta': (_mid(after) - _mid(before)).tolist()}
+    placed = _hand_poses(robot, np.asarray(phases[carry_phase]['end']))
+    template['carry'] = {'target': _mid(placed).tolist(), 'hands': {
+        hand: {'position': (placed[hand][0] - _mid(placed)).tolist(), 'quaternion_xyzw': Rotation.from_matrix(placed[hand][1]).as_quat().tolist()}
+        for hand in HANDS}}
     return template
 
 
@@ -191,7 +201,7 @@ def _object_goals(template, position, yaw_deg):
     turn = Rotation.from_euler('z', yaw_deg, degrees=True)
     centre = np.asarray(position, dtype=float)
     return {hand: (centre + turn.apply(spec['position']), (turn * Rotation.from_quat(spec['quaternion_xyzw'])).as_matrix())
-            for hand, spec in template['contact']['hands'].items()}
+            for hand, spec in template['contact']['stand_off'].items()}
 
 
 def generate_motion(robot: Robot, template, object_position, object_yaw_deg=0., fps=30, carry_target=None,
@@ -232,8 +242,10 @@ def generate_motion(robot: Robot, template, object_position, object_yaw_deg=0., 
                          for hand, spec in phase['tcp'].items()}
             else:
                 # a coordinate, not an offset from the object: where the load is taken to does not depend on where it was picked up
-                shift = np.asarray(carry_target if carry_target is not None else template['carry']['target'], dtype=float) - _mid(now)
-                goals = {hand: (now[hand][0] + shift, now[hand][1]) for hand in HANDS}
+                target = np.asarray(carry_target if carry_target is not None else template['carry']['target'], dtype=float)
+                # the demonstrated hand spacing and orientation at the place: the arms end in the demonstrated configuration
+                goals = {hand: (target + np.asarray(spec['position']), Rotation.from_quat(spec['quaternion_xyzw']).as_matrix())
+                         for hand, spec in template['carry']['hands'].items()}
             travel = max(float(np.linalg.norm(goals[hand][0] - now[hand][0])) for hand in HANDS)
             duration = max(duration, travel / hand_speed_mps)
             count = count_for(duration, fps)
