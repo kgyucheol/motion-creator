@@ -108,6 +108,7 @@ export default function Editor() {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<RobotScene | null>(null);
   const file = useRef<HTMLInputElement>(null);
+  const addClipInput = useRef<HTMLInputElement>(null);
   const assetFile = useRef<HTMLInputElement>(null);
   const [state, setState] = useState<PoseState | null>(null);
   const [project, setProject] = useState<Project | null>(null);
@@ -1115,6 +1116,43 @@ export default function Editor() {
     await loadProject(await response.json() as Project, true);
     setMessage(`${source.name}의 모션 프레임을 ${fps} FPS 키프레임으로 불러왔습니다. 맵(씬 오브젝트)은 그대로 유지했습니다.`);
   }
+  // 열려 있는 프로젝트는 그대로 두고, 가져온 LeRobot 모션을 클립으로 키프레임 목록 끝에 덧붙인다.
+  async function addClipFiles(sources: File[]) {
+    if (!project) return;
+    let keyframes = project.keyframes;
+    const added: string[] = [];
+    for (const source of sources) {
+      let importName = source.name;
+      if (source.name.toLowerCase().endsWith('.json')) {
+        const parsed = JSON.parse(await source.text()) as { info?: unknown; data?: unknown; text?: { goal?: unknown }; format?: unknown };
+        if (!(Array.isArray(parsed.data) && parsed.info)) throw new Error(`${source.name}은 LeRobot 에피소드(data.json)가 아닙니다. 프로젝트나 맵 파일은 "열기"로 불러오세요.`);
+        const goal = typeof parsed.text?.goal === 'string' ? parsed.text.goal.trim().replace(/[\\/]/g, '_') : '';
+        if (goal) importName = `${goal}.json`;
+      }
+      const response = await fetch(`/api/import-motion?filename=${encodeURIComponent(importName)}&fps=${fps}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: source,
+      });
+      if (!response.ok) {
+        const failure = await response.json().catch(() => ({})) as { detail?: unknown };
+        throw new Error(typeof failure.detail === 'string' ? failure.detail : `${source.name} 불러오기 실패 (${response.status})`);
+      }
+      const imported = await response.json() as Project;
+      const clips = imported.keyframes.filter(frame => frame.samples).map(frame => ({ ...frame, name: imported.name || frame.name }));
+      if (keyframes.length + clips.length > 100) throw new Error('키프레임은 최대 100개입니다.');
+      for (const clip of clips) {
+        let name = clip.name, number = 2;
+        while (keyframes.some(frame => frame.name === name)) name = `${clip.name} (${number++})`;
+        keyframes = [...keyframes, { ...clip, name }];
+        added.push(name);
+      }
+    }
+    if (!added.length) return;
+    checkpoint();
+    const next = { ...project, keyframes };
+    current.current.project = next;
+    setProject(next); setFrameIndex(keyframes.length - added.length); setTransitionSelection([]); invalidate();
+    setMessage(`클립 ${added.length}개를 목록 끝에 추가했습니다: ${added.join(', ')}. 앞 항목에서 새 클립으로는 자동으로 이어지며, 이동 시간은 앞 카드의 "다음 카드까지"에서 바꿀 수 있습니다.`);
+  }
   function saveSceneFile() {
     const scene: SceneFile = { format: SCENE_FORMAT, scene_objects: objects.filter(object => !object.ghost), scene_groups: objectGroups };
     const link = document.createElement('a');
@@ -1749,8 +1787,9 @@ export default function Editor() {
     <header className="topbar">
       <div className="brand"><span className="brand-icon"><Move3d size={23}/></span><div>MOTION<span>CREATOR</span></div><select aria-label="로봇 모델" title="이 서버의 모델을 변경합니다. 현재 모션은 모델별로 자동 보관됩니다." disabled={disabled} value={modelId} onChange={event => void switchModel(event.target.value)}><option value="g1">G1 · 기본 손</option><option value="g1-tools">G1 그리퍼 · 툴 교환</option></select>{modelId === 'g1-tools' && tools && (['left', 'right'] as const).map((side, index) => <select key={side} className="tool-select" aria-label={side === 'left' ? '왼손 툴' : '오른손 툴'} title={`${side === 'left' ? '왼손' : '오른손'}에 끼울 툴을 고릅니다. 현재 모션은 유지되고 서버가 모델을 다시 만듭니다.`} disabled={disabled} value={tools[index]} onChange={event => void switchTool(side, event.target.value)}>{toolOptions.map(option => <option key={option.id} value={option.id}>{side === 'left' ? '왼 ' : '오른 '}{option.label}</option>)}</select>)}</div>
       <div className="project-title"><span className="status-dot"/>{project ? <div className="project-name-editor"><input aria-label="프로젝트 이름" title="이름을 바꾸고 Enter를 누르면 저장된 파일 이름도 바뀝니다(기존 파일 유지). 비우면 키프레임과 생성일자로 자동 이름을 만듭니다." placeholder={automaticProjectName(project)} maxLength={80} value={project.name} onFocus={e => { nameOnFocus.current = project.name; e.currentTarget.select(); }} onBlur={() => void renameSavedProject()} onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setProject({ ...project, name: nameOnFocus.current, name_mode: nameOnFocus.current.trim() ? 'manual' : 'auto' }); e.currentTarget.blur(); } }} onChange={e => setProject({ ...project, name: e.target.value, name_mode: e.target.value.trim() ? 'manual' : 'auto' })}/>{!project.name.trim() && <small>AUTO · {automaticProjectName(project)}</small>}</div> : '연결 중'}</div>
-      <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button className="wbc-link" onClick={() => location.assign('/controller')}>Task Controller</button><button className="wbc-link" onClick={() => location.assign('/cylinder-lab.html')}>Cylinder Lab</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button><button role="menuitem" onClick={() => { setSaveMenuOpen(false); saveSceneFile(); }}><Boxes size={15}/><span><b>맵만 저장</b><small>씬 오브젝트·그룹만 별도 파일로</small></span></button></div>}</div></div>
+      <div className="top-actions"><button className="wbc-link" onClick={() => location.assign('/decoupled-wbc')}>Decoupled WBC</button><button className="wbc-link" onClick={() => location.assign('/controller')}>Task Controller</button><button className="wbc-link" onClick={() => location.assign('/cylinder-lab.html')}>Cylinder Lab</button><button disabled={disabled} onClick={() => file.current?.click()}><FolderOpen size={16}/> 열기</button><button disabled={disabled || !project} onClick={() => addClipInput.current?.click()} title="지금 작업을 유지한 채 LeRobot data.json을 클립으로 목록 끝에 추가합니다"><Plus size={16}/> 클립 추가</button><div className="save-split" onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setSaveMenuOpen(false); }} onKeyDown={event => { if (event.key === 'Escape') setSaveMenuOpen(false); }}><button className="primary save-main" disabled={disabled} onClick={() => exportProject()}><Save size={16}/> 모션 저장</button><button className="primary save-toggle" aria-label="저장 옵션" aria-haspopup="menu" aria-expanded={saveMenuOpen} disabled={disabled} onClick={() => setSaveMenuOpen(open => !open)}><ChevronDown size={14}/></button>{saveMenuOpen && <div className="save-dropdown" role="menu"><button role="menuitem" onClick={() => { setSaveMenuOpen(false); exportProject(true); }}><Save size={15}/><span><b>복사본으로 저장</b><small>새 프로젝트 ID와 폴더 생성</small></span></button><button role="menuitem" onClick={() => { setSaveMenuOpen(false); saveSceneFile(); }}><Boxes size={15}/><span><b>맵만 저장</b><small>씬 오브젝트·그룹만 별도 파일로</small></span></button></div>}</div></div>
       {replayOpen && project && <ReplayPanel fps={fps} frameNames={project.keyframes.map(frame => frame.name)} onClose={() => setReplayOpen(false)} getProject={() => sceneProject(current.current.project ?? project)}/>}
+      <input ref={addClipInput} type="file" accept=".json,.npz,.csv" multiple hidden onChange={e => { const sources = Array.from(e.target.files ?? []); if (sources.length) void run(() => addClipFiles(sources)); e.target.value = ''; }}/>
       <input ref={file} type="file" accept=".json,.npz,.csv" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => openFile(source)); e.target.value = ''; }}/>
       <input ref={assetFile} type="file" accept=".blend,.glb" hidden onChange={e => { const source = e.target.files?.[0]; if (source) void run(() => importSceneAsset(source)); e.target.value = ''; }}/>
     </header>
