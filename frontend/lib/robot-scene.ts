@@ -60,6 +60,23 @@ const HEAD_CAMERA_VIEW_FRAME = new THREE.Quaternion().setFromRotationMatrix(
 export function headCameraViewQuaternion(linkQuaternion: number[]) {
   return new THREE.Quaternion().fromArray(linkQuaternion).multiply(HEAD_CAMERA_VIEW_FRAME);
 }
+/** 가상 헤드 카메라 보정값. offset은 d435_link 축(앞, 왼쪽, 위) 기준 mm, rotation은 같은 축 기준 (롤, 피치, 요) 도. */
+export type HeadCameraAdjust = { offset: [number, number, number]; rotation: [number, number, number] };
+export const NO_HEAD_CAMERA_ADJUST: HeadCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
+/** d435_link 자세에 보정값을 적용한 가상 카메라(및 점군)의 월드 위치와 three 카메라 방향. */
+export function adjustedHeadCameraPose(linkPosition: number[], linkQuaternion: number[], adjust: HeadCameraAdjust = NO_HEAD_CAMERA_ADJUST) {
+  const link = new THREE.Quaternion().fromArray(linkQuaternion);
+  const [forward, left, up] = adjust.offset;
+  const position = new THREE.Vector3(forward, left, up).multiplyScalar(.001).applyQuaternion(link).add(new THREE.Vector3().fromArray(linkPosition));
+  const [roll, pitch, yaw] = adjust.rotation.map(value => THREE.MathUtils.degToRad(value));
+  const correction = new THREE.Quaternion().setFromEuler(new THREE.Euler(roll, pitch, yaw, 'ZYX'));
+  return { position, quaternion: link.multiply(correction).multiply(HEAD_CAMERA_VIEW_FRAME) };
+}
+/** D435 컬러 스트림(848×480)의 정렬된 내부 파라미터(fx, fy)에서 계산한 화각. 실제 영상과 가상 카메라를 맞출 때 쓴다. */
+export const D435_COLOR_FOV = {
+  horizontal: THREE.MathUtils.radToDeg(2 * Math.atan(848 / (2 * 608.126))),
+  vertical: THREE.MathUtils.radToDeg(2 * Math.atan(480 / (2 * 608.878))),
+};
 export function verticalFovForHorizontal(horizontalDegrees: number, aspect: number) {
   return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(horizontalDegrees / 2)) / aspect));
 }
@@ -107,6 +124,10 @@ export class RobotScene {
   headCameraAvailable = false;
   headCameraSource: 'sim' | 'real' | 'compare' = 'sim';
   headCameraSplit = 50;
+  headCameraCompareStyle: 'split' | 'blend' = 'split';
+  headCameraBlend = 50;
+  headCameraGuides = false;
+  headCameraAdjust: HeadCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
   private cloud!: PointCloudLayer;
   private headCameraStatusTimer: number | null = null;
   renderer: THREE.WebGLRenderer;
@@ -171,7 +192,7 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><img class="head-camera-feed" alt="실제 HEAD CAM 영상" hidden><div class="head-camera-resize" role="separator" aria-label="PiP 크기 조절" title="이동 모드에서 드래그해 크기 조절"></div><b>HEAD CAM · SIM</b><button class="head-camera-move-button" type="button" aria-label="PiP 이동 시작" aria-pressed="false" title="PiP 위치 이동">⤧</button><div id="head-camera-settings" class="head-camera-controls" hidden><label class="head-camera-cloud" title="로봇 D435 깊이로 만든 3D 점군을 장면에 표시"><input type="checkbox" class="head-camera-cloud-toggle" aria-label="3D 포인트 클라우드 표시"><span>3D 포인트 클라우드</span><small></small></label><div class="head-camera-source" role="group" aria-label="PiP 카메라 소스"><button type="button" data-source="sim" aria-pressed="true">가상 카메라</button><button type="button" data-source="real" aria-pressed="false" title="로봇 D435 영상 (teleimager ZMQ)">실제 카메라</button><button type="button" data-source="compare" aria-pressed="false" title="실제 영상(왼쪽)과 가상 카메라(오른쪽)를 한 화면에서 비교">비교</button></div><label class="head-camera-split" hidden><span>분할</span><input type="range" min="0" max="100" step="1" value="50" aria-label="비교 분할 위치"><output>50%</output></label><div class="head-camera-controls-title"><strong>PiP 카메라 화각 (°)</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><span>가로</span><input type="range" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 수치"></label><label><span>세로</span><input type="range" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 수치"></label></div>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><img class="head-camera-feed" alt="실제 HEAD CAM 영상" hidden><div class="head-camera-resize" role="separator" aria-label="PiP 크기 조절" title="이동 모드에서 드래그해 크기 조절"></div><div class="head-camera-guides" hidden></div><b>HEAD CAM · SIM</b><button class="head-camera-move-button" type="button" aria-label="PiP 이동 시작" aria-pressed="false" title="PiP 위치 이동">⤧</button><div id="head-camera-settings" class="head-camera-controls" hidden><label class="head-camera-cloud" title="로봇 D435 깊이로 만든 3D 점군을 장면에 표시"><input type="checkbox" class="head-camera-cloud-toggle" aria-label="3D 포인트 클라우드 표시"><span>3D 포인트 클라우드</span><small></small></label><div class="head-camera-source" role="group" aria-label="PiP 카메라 소스"><button type="button" data-source="sim" aria-pressed="true">가상 카메라</button><button type="button" data-source="real" aria-pressed="false" title="로봇 D435 영상 (teleimager ZMQ)">실제 카메라</button><button type="button" data-source="compare" aria-pressed="false" title="실제 영상(왼쪽)과 가상 카메라(오른쪽)를 한 화면에서 비교">비교</button></div><div class="head-camera-compare" hidden><div class="head-camera-aspects head-camera-styles" role="group" aria-label="비교 방식"><button type="button" data-style="split" aria-pressed="true" title="경계선 왼쪽은 실제, 오른쪽은 가상">분할</button><button type="button" data-style="blend" aria-pressed="false" title="실제 영상을 가상 렌더 위에 반투명하게 겹침">겹치기</button></div><label class="head-camera-split"><span>분할</span><input type="range" min="0" max="100" step="1" value="50" aria-label="비교 분할 위치"><output>50%</output></label><label class="head-camera-blend" hidden><span>투명도</span><input type="range" min="0" max="100" step="1" value="50" aria-label="실제 영상 불투명도"><output>50%</output></label><label class="head-camera-guides-toggle"><input type="checkbox" aria-label="가이드선 표시"><span>가이드선 (중앙 십자·3분할)</span></label></div><details class="head-camera-adjust"><summary>가상 카메라 정렬 보정</summary><div class="head-camera-adjust-rows"></div><div class="head-camera-adjust-actions"><button type="button" data-action="reset">초기화</button><button type="button" data-action="copy" title="현재 보정값과 화각을 클립보드에 JSON으로 복사">값 복사</button></div></details><div class="head-camera-controls-title"><strong>PiP 카메라 화각 (°)</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><span>가로</span><input type="range" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 수치"></label><label><span>세로</span><input type="range" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 수치"></label></div>';
     const moveButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-move-button')!;
     moveButton.addEventListener('click', () => {
       this.headCameraMoving = !this.headCameraMoving;
@@ -225,8 +246,9 @@ export class RobotScene {
       settings.hidden = !settings.hidden;
       settingsButton.setAttribute('aria-expanded', String(!settings.hidden));
     });
-    const [horizontalRange, verticalRange] = this.headCameraOverlay.querySelectorAll<HTMLInputElement>('input[type="range"]');
-    const [horizontalValue, verticalValue] = this.headCameraOverlay.querySelectorAll<HTMLInputElement>('input[inputmode="decimal"]');
+    const fovInput = (label: string) => this.headCameraOverlay.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!;
+    const horizontalRange = fovInput('PiP 가로 화각 슬라이더'), verticalRange = fovInput('PiP 세로 화각 슬라이더');
+    const horizontalValue = fovInput('PiP 가로 화각 수치'), verticalValue = fovInput('PiP 세로 화각 수치');
     const aspectButtons = this.headCameraOverlay.querySelectorAll<HTMLButtonElement>('.head-camera-aspects button');
     const showFovs = () => {
       horizontalRange.value = String(this.headCameraHorizontalFov);
@@ -234,6 +256,11 @@ export class RobotScene {
       horizontalValue.value = String(Number(this.headCameraHorizontalFov.toFixed(2)));
       verticalValue.value = String(Number(this.headCameraVerticalFov.toFixed(2)));
       this.dirty = true;
+    };
+    this.syncHeadCameraFovControls = () => {
+      showFovs();
+      const choice = this.headCameraAspect === 4 / 3 ? '4:3' : this.headCameraAspect === 16 / 9 ? '16:9' : 'free';
+      aspectButtons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.aspect === choice)));
     };
     const setAspect = (choice: string) => {
       this.headCameraAspect = choice === '4:3' ? 4 / 3 : choice === '16:9' ? 16 / 9 : null;
@@ -280,6 +307,7 @@ export class RobotScene {
         this.setHeadCameraSource(button.dataset.source === 'real' ? 'real' : button.dataset.source === 'compare' ? 'compare' : 'sim');
         this.saveEditorViewSettings();
       }));
+    this.setupHeadCameraCompareControls();
     const splitRange = this.headCameraOverlay.querySelector<HTMLInputElement>('.head-camera-split input')!;
     splitRange.addEventListener('input', () => this.setHeadCameraSplit(Number(splitRange.value)));
     splitRange.addEventListener('change', () => this.saveEditorViewSettings());
@@ -476,8 +504,9 @@ export class RobotScene {
     try {
       window.localStorage.setItem(this.editorSettingsKey, JSON.stringify({
         camera: { position: this.camera.position.toArray(), target: this.orbit.target.toArray() },
-        pip: { position: this.headCameraPosition, width: this.headCameraWidth, horizontalFov: this.headCameraHorizontalFov,
-          verticalFov: this.headCameraVerticalFov, aspect: this.headCameraAspect, source: this.headCameraSource, split: this.headCameraSplit, cloud: this.cloud.running },
+        pip: { position: this.headCameraPosition, width: this.headCameraWidth, horizontalFov: (this.preCompareView ?? { horizontalFov: this.headCameraHorizontalFov }).horizontalFov,
+          verticalFov: (this.preCompareView ?? { verticalFov: this.headCameraVerticalFov }).verticalFov, aspect: this.preCompareView ? this.preCompareView.aspect : this.headCameraAspect, source: this.headCameraSource, split: this.headCameraSplit,
+          compareStyle: this.headCameraCompareStyle, blend: this.headCameraBlend, guides: this.headCameraGuides, adjust: this.headCameraAdjust, cloud: this.cloud.running },
       }));
     } catch { /* 에디터 설정 저장이 불가능해도 편집은 계속합니다. */ }
   }
@@ -500,19 +529,122 @@ export class RobotScene {
       if (Number.isFinite(pip?.horizontalFov) && pip.horizontalFov >= 1 && pip.horizontalFov <= 120) this.headCameraHorizontalFov = pip.horizontalFov;
       if (Number.isFinite(pip?.verticalFov) && pip.verticalFov >= 1 && pip.verticalFov <= 120) this.headCameraVerticalFov = pip.verticalFov;
       if (pip?.aspect === null || pip?.aspect === 4 / 3 || pip?.aspect === 16 / 9) this.headCameraAspect = pip.aspect;
-      const [horizontalRange, verticalRange] = this.headCameraOverlay.querySelectorAll<HTMLInputElement>('input[type="range"]');
-      const [horizontalValue, verticalValue] = this.headCameraOverlay.querySelectorAll<HTMLInputElement>('input[inputmode="decimal"]');
-      horizontalRange.value = String(this.headCameraHorizontalFov);
-      verticalRange.value = String(this.headCameraVerticalFov);
-      horizontalValue.value = String(Number(this.headCameraHorizontalFov.toFixed(2)));
-      verticalValue.value = String(Number(this.headCameraVerticalFov.toFixed(2)));
+      this.syncHeadCameraFovControls();
       if (Number.isFinite(pip?.split) && pip.split >= 0 && pip.split <= 100) this.setHeadCameraSplit(pip.split);
+      if (Number.isFinite(pip?.blend) && pip.blend >= 0 && pip.blend <= 100) this.setHeadCameraBlend(pip.blend);
+      if (pip?.compareStyle === 'blend') this.setHeadCameraCompareStyle('blend');
+      if (pip?.guides === true) this.setHeadCameraGuides(true);
+      const adjustment = pip?.adjust;
+      if (vector(adjustment?.offset) && vector(adjustment?.rotation)) {
+        this.headCameraAdjust = { offset: [...adjustment.offset] as [number, number, number], rotation: [...adjustment.rotation] as [number, number, number] };
+        this.refreshHeadCameraAdjust();
+      }
       if (pip?.source === 'real' || pip?.source === 'compare') this.setHeadCameraSource(pip.source);
       if (pip?.cloud === true) this.setPointCloudEnabled(true);
       const choice = this.headCameraAspect === 4 / 3 ? '4:3' : this.headCameraAspect === 16 / 9 ? '16:9' : 'free';
       this.headCameraOverlay.querySelectorAll<HTMLButtonElement>('.head-camera-aspects button').forEach(button =>
         button.setAttribute('aria-pressed', String(button.dataset.aspect === choice)));
     } catch { /* 손상된 로컬 설정은 기본값으로 시작합니다. */ }
+  }
+
+  private setupHeadCameraCompareControls() {
+    const overlay = this.headCameraOverlay;
+    const rows = overlay.querySelector<HTMLDivElement>('.head-camera-adjust-rows')!;
+    const specs = [
+      { group: 'offset', index: 0, label: '앞', unit: 'mm', limit: 100, step: .5, hint: '렌즈를 d435_link 기준 앞(+)/뒤(−)로' },
+      { group: 'offset', index: 1, label: '왼쪽', unit: 'mm', limit: 100, step: .5, hint: '왼쪽(+)/오른쪽(−)' },
+      { group: 'offset', index: 2, label: '위', unit: 'mm', limit: 100, step: .5, hint: '위(+)/아래(−)' },
+      { group: 'rotation', index: 0, label: '롤', unit: '°', limit: 10, step: .05, hint: '앞 축 기준 기울기: 왼쪽이 올라가면 +' },
+      { group: 'rotation', index: 1, label: '피치', unit: '°', limit: 10, step: .05, hint: '시선을 아래로 숙이면 +' },
+      { group: 'rotation', index: 2, label: '요', unit: '°', limit: 10, step: .05, hint: '시선을 왼쪽으로 돌리면 +' },
+    ] as const;
+    const refresh: Array<() => void> = [];
+    for (const spec of specs) {
+      const row = document.createElement('label');
+      row.title = spec.hint;
+      row.innerHTML = `<span>${spec.label}</span><input type="range" min="${-spec.limit}" max="${spec.limit}" step="${spec.step}" value="0" aria-label="${spec.label} 보정 슬라이더"><input type="text" inputmode="decimal" value="0" aria-label="${spec.label} 보정 수치"><small>${spec.unit}</small>`;
+      const [range, text] = row.querySelectorAll<HTMLInputElement>('input');
+      const show = () => {
+        const value = this.headCameraAdjust[spec.group][spec.index];
+        range.value = String(value);
+        text.value = String(Number(value.toFixed(2)));
+      };
+      const apply = (value: number) => {
+        if (!Number.isFinite(value)) { show(); return; }
+        this.headCameraAdjust[spec.group][spec.index] = Math.min(spec.limit * 5, Math.max(-spec.limit * 5, value));
+        show();
+        this.applyHeadCameraPose();
+      };
+      range.addEventListener('input', () => apply(Number(range.value)));
+      range.addEventListener('change', () => this.saveEditorViewSettings());
+      text.addEventListener('change', () => { apply(text.value.trim() ? Number(text.value) : NaN); this.saveEditorViewSettings(); });
+      refresh.push(show);
+      rows.appendChild(row);
+    }
+    this.refreshHeadCameraAdjust = () => refresh.forEach(show => show());
+    overlay.querySelector<HTMLButtonElement>('[data-action="reset"]')!.addEventListener('click', () => {
+      this.headCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
+      this.refreshHeadCameraAdjust();
+      this.applyHeadCameraPose();
+      this.saveEditorViewSettings();
+    });
+    overlay.querySelector<HTMLButtonElement>('[data-action="copy"]')!.addEventListener('click', () => {
+      const text = JSON.stringify({ offset_mm: this.headCameraAdjust.offset, rotation_deg: this.headCameraAdjust.rotation,
+        horizontal_fov: this.headCameraHorizontalFov, vertical_fov: this.headCameraVerticalFov });
+      navigator.clipboard?.writeText(text).catch(() => {});
+    });
+    overlay.querySelectorAll<HTMLButtonElement>('.head-camera-styles button').forEach(button =>
+      button.addEventListener('click', () => {
+        this.setHeadCameraCompareStyle(button.dataset.style === 'blend' ? 'blend' : 'split');
+        this.saveEditorViewSettings();
+      }));
+    const blend = overlay.querySelector<HTMLInputElement>('.head-camera-blend input')!;
+    blend.addEventListener('input', () => this.setHeadCameraBlend(Number(blend.value)));
+    blend.addEventListener('change', () => this.saveEditorViewSettings());
+    const guides = overlay.querySelector<HTMLInputElement>('.head-camera-guides-toggle input')!;
+    guides.addEventListener('change', () => { this.setHeadCameraGuides(guides.checked); this.saveEditorViewSettings(); });
+  }
+
+  refreshHeadCameraAdjust: () => void = () => {};
+  syncHeadCameraFovControls: () => void = () => {};
+  /** 비교 모드에 들어가기 전 사용자의 PiP 화각/비율. 비교 모드에서는 실제 D435 RGB 값으로 고정된다. */
+  private preCompareView: { horizontalFov: number; verticalFov: number; aspect: number | null } | null = null;
+
+  /** 마지막 d435_link 자세에 현재 보정값을 적용해 가상 카메라와 점군을 갱신한다. */
+  private applyHeadCameraPose() {
+    const head = this.state?.cameras?.head;
+    if (head) {
+      const pose = adjustedHeadCameraPose(head.position, head.quaternion, this.headCameraAdjust);
+      this.headCamera.position.copy(pose.position);
+      this.headCamera.quaternion.copy(pose.quaternion);
+    }
+    this.placeCloud();
+    this.dirty = true;
+  }
+
+  setHeadCameraCompareStyle(style: 'split' | 'blend') {
+    this.headCameraCompareStyle = style;
+    this.headCameraOverlay.classList.toggle('blend', style === 'blend');
+    this.headCameraOverlay.querySelectorAll<HTMLButtonElement>('.head-camera-styles button').forEach(button =>
+      button.setAttribute('aria-pressed', String(button.dataset.style === style)));
+    this.headCameraOverlay.querySelector<HTMLElement>('.head-camera-split')!.hidden = style !== 'split';
+    this.headCameraOverlay.querySelector<HTMLElement>('.head-camera-blend')!.hidden = style !== 'blend';
+    this.dirty = true;
+  }
+
+  setHeadCameraBlend(percent: number) {
+    this.headCameraBlend = THREE.MathUtils.clamp(Math.round(percent), 0, 100);
+    this.headCameraOverlay.style.setProperty('--blend', String(this.headCameraBlend / 100));
+    this.headCameraOverlay.querySelector<HTMLInputElement>('.head-camera-blend input')!.value = String(this.headCameraBlend);
+    this.headCameraOverlay.querySelector<HTMLOutputElement>('.head-camera-blend output')!.value = `${this.headCameraBlend}%`;
+    this.dirty = true;
+  }
+
+  setHeadCameraGuides(on: boolean) {
+    this.headCameraGuides = on;
+    this.headCameraOverlay.querySelector<HTMLElement>('.head-camera-guides')!.hidden = !on;
+    this.headCameraOverlay.querySelector<HTMLInputElement>('.head-camera-guides-toggle input')!.checked = on;
+    this.dirty = true;
   }
 
   /** 비교 모드에서 실제 영상이 차지하는 왼쪽 비율(%). 나머지 오른쪽은 가상 카메라 렌더가 보인다. */
@@ -525,7 +657,18 @@ export class RobotScene {
   }
 
   setHeadCameraSource(source: 'sim' | 'real' | 'compare') {
+    const wasCompare = this.headCameraSource === 'compare';
     this.headCameraSource = source;
+    if (source === 'compare' && !wasCompare) {
+      this.preCompareView = { horizontalFov: this.headCameraHorizontalFov, verticalFov: this.headCameraVerticalFov, aspect: this.headCameraAspect };
+      this.headCameraHorizontalFov = D435_COLOR_FOV.horizontal;
+      this.headCameraVerticalFov = D435_COLOR_FOV.vertical;
+      this.headCameraAspect = 16 / 9;
+    } else if (source !== 'compare' && wasCompare && this.preCompareView) {
+      ({ horizontalFov: this.headCameraHorizontalFov, verticalFov: this.headCameraVerticalFov, aspect: this.headCameraAspect } = this.preCompareView);
+      this.preCompareView = null;
+    }
+    this.syncHeadCameraFovControls();
     const real = source === 'real';
     const live = source !== 'sim';
     const prefix = source === 'compare' ? 'HEAD CAM · 비교' : 'HEAD CAM · REAL';
@@ -533,11 +676,12 @@ export class RobotScene {
     const label = this.headCameraOverlay.querySelector<HTMLElement>('b')!;
     this.headCameraOverlay.classList.toggle('real', real);
     this.headCameraOverlay.classList.toggle('compare', source === 'compare');
-    this.headCameraOverlay.querySelector<HTMLElement>('.head-camera-split')!.hidden = source !== 'compare';
+    this.headCameraOverlay.querySelector<HTMLElement>('.head-camera-compare')!.hidden = source !== 'compare';
     this.headCameraOverlay.style.setProperty('--split', `${this.headCameraSplit}%`);
     this.headCameraOverlay.querySelectorAll<HTMLButtonElement>('.head-camera-source button').forEach(button =>
       button.setAttribute('aria-pressed', String(button.dataset.source === source)));
-    this.headCameraOverlay.querySelectorAll<HTMLInputElement | HTMLButtonElement>('.head-camera-controls input:not(.head-camera-cloud-toggle):not(.head-camera-split input), .head-camera-controls-title button').forEach(control => { control.disabled = real; });
+    this.headCameraOverlay.querySelectorAll<HTMLInputElement | HTMLButtonElement>('.head-camera-controls input:not(.head-camera-cloud-toggle):not(.head-camera-compare input):not(.head-camera-adjust input), .head-camera-controls-title button').forEach(control => { control.disabled = real || source === 'compare'; });
+    this.headCameraOverlay.querySelectorAll<HTMLButtonElement>('.head-camera-aspects:not(.head-camera-styles) button').forEach(button => { button.disabled = source === 'compare'; });
     if (this.headCameraStatusTimer !== null) { window.clearInterval(this.headCameraStatusTimer); this.headCameraStatusTimer = null; }
     if (!live) {
       feed.hidden = true;
@@ -570,7 +714,7 @@ export class RobotScene {
 
   private placeCloud() {
     const head = this.state?.cameras?.head;
-    if (head) this.cloud.place(head.position, this.headCamera.quaternion);
+    if (head) this.cloud.place(this.headCamera.position.toArray(), this.headCamera.quaternion);
     this.cloud.points.visible = this.cloud.running && !!head;
   }
 
@@ -779,11 +923,7 @@ export class RobotScene {
     const headCamera = state.cameras?.head;
     this.headCameraAvailable = !!headCamera;
     this.headCameraOverlay.hidden = !headCamera;
-    if (headCamera) {
-      this.headCamera.position.fromArray(headCamera.position);
-      this.headCamera.quaternion.copy(headCameraViewQuaternion(headCamera.quaternion));
-    }
-    this.placeCloud();
+    this.applyHeadCameraPose();
     for (const [id, pose] of Object.entries(state.geoms)) {
       const obj = this.geoms[id];
       if (obj) { obj.position.fromArray(pose.position); obj.quaternion.fromArray(pose.quaternion); }

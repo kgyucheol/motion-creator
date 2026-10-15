@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, adjustedHeadCameraPose, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, isJointPairSelection, mirrorFrameHandle, mirroredJointSign, pairedJointTargets, translatedTargets } from '../lib/pose-transforms.ts';
 
 test('a symmetric hinge pair supports one active ring and mirrored axis deltas', () => {
@@ -781,8 +781,8 @@ test('PiP source switch streams the real head camera and releases it when switch
   const overlay = {
     classList: { toggle(name, on) { attributes.set(`class:${name}`, on); } },
     style: { setProperty() {} },
-    querySelector: selector => selector === '.head-camera-feed' ? feed : selector === '.head-camera-split' ? split : label,
-    querySelectorAll: selector => selector.includes('.head-camera-source') ? sources : controls,
+    querySelector: selector => selector === '.head-camera-feed' ? feed : selector === '.head-camera-compare' ? split : label,
+    querySelectorAll: selector => selector.includes('.head-camera-source') ? sources : selector.includes('.head-camera-aspects') ? [{ disabled: false }] : controls,
   };
   const timers = [];
   const previous = { window: globalThis.window, fetch: globalThis.fetch };
@@ -793,6 +793,8 @@ test('PiP source switch streams the real head camera and releases it when switch
     viewer.headCameraOverlay = overlay;
     viewer.headCameraStatusTimer = null;
     viewer.headCameraSplit = 50;
+    viewer.syncHeadCameraFovControls = () => {};
+    Object.assign(viewer, { headCameraHorizontalFov: 60, headCameraVerticalFov: 35, headCameraAspect: 4 / 3 });
     viewer.setHeadCameraSource('real');
     assert.equal(feed.src, '/api/head-camera/stream');
     assert.equal(feed.hidden, false);
@@ -806,9 +808,12 @@ test('PiP source switch streams the real head camera and releases it when switch
     assert.equal(attributes.get('class:compare'), true);
     assert.equal(attributes.get('compare'), 'true');
     assert.equal(split.hidden, false);
-    assert.equal(controls[0].disabled, false);
+    assert.equal(controls[0].disabled, true);
+    assert.ok(Math.abs(viewer.headCameraHorizontalFov - 69.77) < .01 && Math.abs(viewer.headCameraVerticalFov - 43.03) < .01);
+    assert.equal(viewer.headCameraAspect, 16 / 9);
     viewer.setHeadCameraSource('sim');
     assert.equal(split.hidden, true);
+    assert.deepEqual([viewer.headCameraHorizontalFov, viewer.headCameraVerticalFov, viewer.headCameraAspect], [60, 35, 4 / 3]);
     assert.equal(feed.src, '');
     assert.equal(feed.hidden, true);
     assert.equal(label.textContent, 'HEAD CAM · SIM');
@@ -834,4 +839,19 @@ test('PiP width can be resized within sensible bounds and keeps its aspect', () 
   viewer.headCameraWidth = 5000;
   const tall = viewer.headCameraRect(1200, 200);
   assert.ok(tall.top + tall.height <= 200);
+});
+
+test('the head camera adjustment moves the lens in link axes and turns the view about the link axes', () => {
+  const identity = [0, 0, 0, 1];
+  const none = adjustedHeadCameraPose([1, 2, 3], identity);
+  assert.deepEqual(none.position.toArray(), [1, 2, 3]);
+  assert.ok(none.quaternion.angleTo(headCameraViewQuaternion(identity)) < 1e-9);
+  const yawed = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2).toArray();
+  const moved = adjustedHeadCameraPose([0, 0, 0], yawed, { offset: [10, 30, 20], rotation: [0, 0, 0] });
+  [-0.03, 0.01, 0.02].forEach((value, axis) => assert.ok(Math.abs(moved.position.getComponent(axis) - value) < 1e-9));
+  const forwardOf = quaternion => new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion);
+  const down = adjustedHeadCameraPose([0, 0, 0], identity, { offset: [0, 0, 0], rotation: [0, 5, 0] });
+  assert.ok(forwardOf(down.quaternion).z < 0 && Math.abs(forwardOf(down.quaternion).z + Math.sin(5 * Math.PI / 180)) < 1e-9);
+  const left = adjustedHeadCameraPose([0, 0, 0], identity, { offset: [0, 0, 0], rotation: [0, 0, 5] });
+  assert.ok(forwardOf(left.quaternion).y > 0);
 });
