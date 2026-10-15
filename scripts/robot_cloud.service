@@ -1,0 +1,18 @@
+[Unit]
+Description=RealSense color JPEG + point cloud publisher (replaces teleimager for the head camera)
+After=network.target
+Conflicts=teleimager.service
+
+[Service]
+Type=simple
+User=unitree
+WorkingDirectory=/home/unitree/robot_cloud
+CPUAffinity=0 1 2
+ExecStart=/home/unitree/miniconda3/envs/teleimager/bin/python /home/unitree/robot_cloud/robot_cloud_publisher.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
