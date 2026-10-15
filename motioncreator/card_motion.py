@@ -11,12 +11,14 @@ Cards are resolved in order. What is carried from card to card is the *offset* (
 waist and arm joints at the card's end, so a retargeted card pulls every following `delta` card with it.
 """
 import numpy as np
-from scipy.spatial.transform import Rotation
+from scipy.spatial.transform import Rotation, Slerp
 
 from .dynamic_clip import (APPROX_DEG, APPROX_MM, ARM_WAIST_COLUMNS, DEFAULT_MAX_SHIFT_M, FREEDOM, HANDS, OK_DEG, OK_MM,
                            RELAXATIONS, WAIST_MODES, _level, object_delta, scene_object_pose)
 from .robot import FEET, Robot
 
+SEARCH_STEPS = 7
+REACH_MM, REACH_DEG = 10., 5.        # a hand this close to its goal counts as having reached it; past that the move stops short
 MODES = ('recorded', 'delta', 'cartesian')
 TARGET_KINDS = ('object', 'point')
 COLUMNS = slice(ARM_WAIST_COLUMNS.start, ARM_WAIST_COLUMNS.stop)
@@ -139,6 +141,44 @@ def _solve_end(robot: Robot, end_q, spec, goals):
     return result, position_error, angle_error
 
 
+def _scaled_goals(base, goals, fraction):
+    """The goals a fraction of the way from where the recorded hands are to the real goals (position and orientation)."""
+    scaled = {}
+    for hand, (position, rotation) in goals.items():
+        start_position, start_matrix = base['hands'][hand]
+        start = Rotation.from_matrix(start_matrix)
+        scaled[hand] = (start_position + fraction * (position - start_position),
+                        Slerp([0., 1.], Rotation.concatenate([start, rotation]))([fraction])[0])
+    return scaled
+
+
+def _reach(robot: Robot, end_q, spec, goals, base):
+    """Solve the end of a cartesian card, going only as far toward the goals as the arms can really reach.
+
+    Returns (q, position error mm, angle error deg, fraction): `fraction` is how much of the requested move was made.
+    The move is capped at `max_shift_m`; beyond that or beyond what the arms reach (hands within REACH_MM / REACH_DEG of
+    the goal), the largest part of the move that still meets that is used."""
+    shift = base['shift_mm'] / 1000
+    cap = min(1., spec['max_shift_m'] / shift) if shift > 1e-9 else 1.
+
+    def attempt(fraction):
+        return _solve_end(robot, end_q, spec, goals if fraction >= 1. else _scaled_goals(base, goals, fraction))
+    def reached(trial):
+        return trial[1] < REACH_MM and trial[2] < REACH_DEG
+    result = attempt(cap)
+    if reached(result) or (cap >= 1. and _level(result[1], result[2]) != 'unreachable'):
+        return (*result, cap)
+    best, low, high = (np.array(end_q, dtype=float), 0., 0.), 0., cap          # no move at all is always reachable
+    for _ in range(SEARCH_STEPS):
+        middle = (low + high) / 2
+        trial = attempt(middle)
+        if reached(trial):
+            best, low = trial, middle
+        else:
+            high = middle
+    return (*best, low)
+
+
 def resolve_project_motions(robot: Robot, project, advise=True):
     """Apply every card's motion mode. Returns (project, {card index: report}); the input project is not modified.
 
@@ -166,17 +206,19 @@ def resolve_project_motions(robot: Robot, project, advise=True):
             exit_offset = np.zeros_like(offset)
             if failure:
                 report = failure
-            elif base['shift_mm'] / 1000 > spec['max_shift_m']:
-                report = _report('too_far', index, mode, shift_mm=base['shift_mm'], max_shift_mm=spec['max_shift_m'] * 1000)
             elif base['shift_mm'] < 1e-3 and base['rotation_deg'] < 1e-4 and not np.any(spec['offset']['position']) \
                     and not spec['offset']['yaw_deg']:
                 report = _report('unchanged', index, mode, shift_mm=0., rotation_deg=0.)
             else:
-                solved, position_error, angle_error = _solve_end(robot, end, spec, goals)
+                solved, position_error, angle_error, fraction = _reach(robot, end, spec, goals, base)
                 exit_offset = solved[COLUMNS] - end[COLUMNS]
-                report = _report(_level(position_error, angle_error), index, mode, shift_mm=base['shift_mm'],
-                                 rotation_deg=base['rotation_deg'], max_position_error_mm=position_error, max_angle_error_deg=angle_error)
-                if report['status'] == 'unreachable' and broken is None:
+                status = 'partial' if fraction < 1. else _level(position_error, angle_error)
+                report = _report(status, index, mode, shift_mm=base['shift_mm'], rotation_deg=base['rotation_deg'],
+                                 max_position_error_mm=position_error, max_angle_error_deg=angle_error)
+                if fraction < 1.:
+                    report.update(reached_fraction=fraction, reached_shift_mm=fraction * base['shift_mm'],
+                                  max_shift_mm=spec['max_shift_m'] * 1000)
+                if status in ('unreachable', 'partial') and broken is None:
                     broken = index
         if report is None:
             report = _report('ok', index, mode)
@@ -209,8 +251,7 @@ def resolve_project_motions(robot: Robot, project, advise=True):
     return {**project, 'keyframes': resolved}, reports
 
 
-FLAGGED = ('limit', 'unreachable')
-SEARCH_STEPS = 7
+FLAGGED = ('limit', 'unreachable', 'partial')
 
 
 def _flagged(reports):

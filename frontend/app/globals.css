@@ -99,7 +99,7 @@
 .dynamic-set{padding:1px 5px}
 .dynamic-chip{font-size:11px;padding:2px 8px;border-radius:10px;border:1px solid #2b3846;color:#c4d2de;white-space:nowrap}
 .dynamic-chip.ok{border-color:#2f8f5b;color:#7fe0a8}
-.dynamic-chip.approx{border-color:#a9892f;color:#f0d36b}
+.dynamic-chip.approx,.dynamic-chip.partial{border-color:#a9892f;color:#f0d36b}
 .dynamic-chip.unreachable,.dynamic-chip.too_far,.dynamic-chip.missing_object{border-color:#b04a4a;color:#ff9a9a}
 
 .replay-backdrop{position:fixed;inset:0;background:rgba(5,9,13,.72);z-index:60;display:flex;align-items:center;justify-content:center;padding:16px}

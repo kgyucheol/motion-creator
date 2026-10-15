@@ -80,10 +80,10 @@ def test_a_point_target_moves_the_hands_to_the_coordinate(robot, project):
 
 def test_unreachable_far_and_missing_objects_are_reported_not_raised(robot, project):
     _, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), [.12, 0., 0.]))
-    assert reports[2]['status'] == 'unreachable'
+    assert reports[2]['status'] == 'partial'
     assert reports[3].get('after_unreachable') == 2
     _, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), [.5, 0., 0.]))
-    assert reports[2]['status'] == 'too_far'
+    assert reports[2]['status'] == 'partial' and reports[2]['reached_shift_mm'] <= reports[2]['max_shift_mm'] + 1e-6
     project['scene_objects'] = []
     _, reports = resolve_project_motions(robot, project)
     assert reports[2]['status'] == 'missing_object'
@@ -156,8 +156,8 @@ def test_a_flagged_card_reports_how_far_the_target_can_move_the_same_way(robot):
     safe = np.array(flagged['safe_shift_mm'])
     assert 0 < flagged['safe_fraction'] < 1 and safe[0] < -20 and abs(safe[1]) < 1 and abs(safe[2]) < 1     # backwards only, less than asked
     within, beyond = (move_cube(copy.deepcopy(mirror), safe * f / 1000) for f in (.98, 1.15))
-    assert not [r for r in resolve_project_motions(robot, within)[1].values() if r['status'] in ('limit', 'unreachable')]
-    assert [r for r in resolve_project_motions(robot, beyond)[1].values() if r['status'] in ('limit', 'unreachable')]
+    assert not [r for r in resolve_project_motions(robot, within)[1].values() if r['status'] in ('limit', 'unreachable', 'partial')]
+    assert [r for r in resolve_project_motions(robot, beyond)[1].values() if r['status'] in ('limit', 'unreachable', 'partial')]
 
 
 def test_a_move_that_is_fine_gets_no_advice_and_costs_no_search(robot):
@@ -170,9 +170,8 @@ def test_a_point_target_gets_advice_too(robot):
     mirror = json.loads((EXAMPLE.parent / 'pick_cards_right_mirrored.project.json').read_text())
     mirror['keyframes'][5]['motion']['target']['point'] = [.9, 0., 1.0]        # far beyond the arms' reach
     _, reports = resolve_project_motions(robot, mirror)
-    assert reports[5]['status'] in ('unreachable', 'too_far')
-    if reports[5]['status'] == 'unreachable':
-        assert reports[5]['caused_by'] == 5 and reports[5]['safe_fraction'] < 1
+    assert reports[5]['status'] in ('unreachable', 'partial')
+    assert reports[5]['caused_by'] == 5 and reports[5]['safe_fraction'] < 1
 
 
 @pytest.mark.parametrize('name', ['pick_all_keyframes', 'pick_all_keyframes_smooth'])
@@ -189,4 +188,18 @@ def test_the_all_keyframe_examples_have_no_clips_play_smoothly_and_keep_the_leng
     modes = [(frame.get('motion') or {}).get('mode') for frame in project['keyframes']]
     assert 'cartesian' in modes and 'delta' in modes
     resolved, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), [.03, 0., .03]))
-    assert not [report for report in reports.values() if report['status'] in ('limit', 'unreachable', 'too_far')]
+    assert not [report for report in reports.values() if report['status'] in ('limit', 'unreachable', 'partial')]
+
+
+def test_a_cube_beyond_reach_is_followed_as_far_as_the_arms_go(robot, project):
+    """The hands end as close to the grasp point as they can reach, in the direction of the cube, not left at the recording."""
+    shift = np.array([.12, 0., 0.])
+    resolved, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), shift))
+    report = reports[2]
+    assert report['status'] == 'partial' and 0 < report['reached_fraction'] < 1
+    assert report['max_position_error_mm'] < 10                                          # what it reaches, it reaches properly
+    recorded, moved = mid(robot, project['keyframes'][2]['qpos']), mid(robot, resolved['keyframes'][2]['qpos'])
+    forward = (moved - recorded) @ shift / np.linalg.norm(shift)
+    assert forward > .5 * report['reached_fraction'] * np.linalg.norm(shift)             # it did move toward the cube
+    assert abs(forward - report['reached_shift_mm'] / 1000) < .02                         # and by the reported amount
+    assert reports[2]['reached_shift_mm'] < reports[2]['shift_mm']

@@ -1811,6 +1811,7 @@ export default function Editor() {
       case 'unchanged': return report.mode === 'cartesian' ? '기준 위치 그대로' : `이어서 이동${report.offset_deg ? ` · 관절 차이 ${report.offset_deg.toFixed(0)}°` : ''}`;
       case 'ok': return report.mode === 'cartesian' ? `도달${error}` : `이어서 이동${note}`;
       case 'approx': return `근사${error}`;
+      case 'partial': return `한도까지 이동 · 요청 ${(report.shift_mm ?? 0).toFixed(0)}mm 중 ${(report.reached_shift_mm ?? 0).toFixed(0)}mm${error}${note}`;
       case 'unreachable': return `도달 불가${error}`;
       case 'limit': return `관절 한계에 걸림 · ${(report.clamped_deg ?? 0).toFixed(0)}°`;
       case 'too_far': return `너무 멂 · ${(report.shift_mm ?? 0).toFixed(0)}mm (한도 ${(report.max_shift_mm ?? 0).toFixed(0)}mm)`;
