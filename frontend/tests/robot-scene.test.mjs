@@ -775,11 +775,13 @@ test('PiP source switch streams the real head camera and releases it when switch
   const attributes = new Map();
   const feed = { hidden: true, src: '', removeAttribute(name) { if (name === 'src') this.src = ''; } };
   const label = { textContent: 'HEAD CAM · SIM' };
-  const sources = ['sim', 'real'].map(source => ({ dataset: { source }, setAttribute: (name, value) => attributes.set(source, value) }));
+  const split = { hidden: true };
+  const sources = ['sim', 'real', 'compare'].map(source => ({ dataset: { source }, setAttribute: (name, value) => attributes.set(source, value) }));
   const controls = [{ disabled: false }];
   const overlay = {
-    classList: { toggle(name, on) { attributes.set(name, on); } },
-    querySelector: selector => selector === '.head-camera-feed' ? feed : label,
+    classList: { toggle(name, on) { attributes.set(`class:${name}`, on); } },
+    style: { setProperty() {} },
+    querySelector: selector => selector === '.head-camera-feed' ? feed : selector === '.head-camera-split' ? split : label,
     querySelectorAll: selector => selector.includes('.head-camera-source') ? sources : controls,
   };
   const timers = [];
@@ -790,13 +792,23 @@ test('PiP source switch streams the real head camera and releases it when switch
     const viewer = Object.create(RobotScene.prototype);
     viewer.headCameraOverlay = overlay;
     viewer.headCameraStatusTimer = null;
+    viewer.headCameraSplit = 50;
     viewer.setHeadCameraSource('real');
     assert.equal(feed.src, '/api/head-camera/stream');
     assert.equal(feed.hidden, false);
     assert.equal(attributes.get('real'), 'true');
     assert.equal(attributes.get('sim'), 'false');
     assert.equal(controls[0].disabled, true);
+    assert.equal(split.hidden, true);
+    viewer.setHeadCameraSource('compare');
+    assert.equal(feed.src, '/api/head-camera/stream');
+    assert.equal(feed.hidden, false);
+    assert.equal(attributes.get('class:compare'), true);
+    assert.equal(attributes.get('compare'), 'true');
+    assert.equal(split.hidden, false);
+    assert.equal(controls[0].disabled, false);
     viewer.setHeadCameraSource('sim');
+    assert.equal(split.hidden, true);
     assert.equal(feed.src, '');
     assert.equal(feed.hidden, true);
     assert.equal(label.textContent, 'HEAD CAM · SIM');
