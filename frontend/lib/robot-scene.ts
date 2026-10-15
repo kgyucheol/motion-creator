@@ -192,7 +192,7 @@ export class RobotScene {
     host.appendChild(this.renderer.domElement);
     this.headCameraOverlay = document.createElement('div');
     this.headCameraOverlay.className = 'head-camera-overlay';
-    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><img class="head-camera-feed" alt="실제 HEAD CAM 영상" hidden><div class="head-camera-resize" role="separator" aria-label="PiP 크기 조절" title="이동 모드에서 드래그해 크기 조절"></div><div class="head-camera-guides" hidden></div><b>HEAD CAM · SIM</b><button class="head-camera-move-button" type="button" aria-label="PiP 이동 시작" aria-pressed="false" title="PiP 위치 이동">⤧</button><div id="head-camera-settings" class="head-camera-controls" hidden><label class="head-camera-cloud" title="로봇 D435 깊이로 만든 3D 점군을 장면에 표시"><input type="checkbox" class="head-camera-cloud-toggle" aria-label="3D 포인트 클라우드 표시"><span>3D 포인트 클라우드</span><small></small></label><div class="head-camera-source" role="group" aria-label="PiP 카메라 소스"><button type="button" data-source="sim" aria-pressed="true">가상 카메라</button><button type="button" data-source="real" aria-pressed="false" title="로봇 D435 영상 (teleimager ZMQ)">실제 카메라</button><button type="button" data-source="compare" aria-pressed="false" title="실제 영상(왼쪽)과 가상 카메라(오른쪽)를 한 화면에서 비교">비교</button></div><div class="head-camera-compare" hidden><div class="head-camera-aspects head-camera-styles" role="group" aria-label="비교 방식"><button type="button" data-style="split" aria-pressed="true" title="경계선 왼쪽은 실제, 오른쪽은 가상">분할</button><button type="button" data-style="blend" aria-pressed="false" title="실제 영상을 가상 렌더 위에 반투명하게 겹침">겹치기</button></div><label class="head-camera-split"><span>분할</span><input type="range" min="0" max="100" step="1" value="50" aria-label="비교 분할 위치"><output>50%</output></label><label class="head-camera-blend" hidden><span>투명도</span><input type="range" min="0" max="100" step="1" value="50" aria-label="실제 영상 불투명도"><output>50%</output></label><label class="head-camera-guides-toggle"><input type="checkbox" aria-label="가이드선 표시"><span>가이드선 (중앙 십자·3분할)</span></label></div><details class="head-camera-adjust"><summary>가상 카메라 정렬 보정</summary><div class="head-camera-adjust-rows"></div><div class="head-camera-adjust-actions"><button type="button" data-action="reset">초기화</button><button type="button" data-action="copy" title="현재 보정값과 화각을 클립보드에 JSON으로 복사">값 복사</button></div></details><div class="head-camera-controls-title"><strong>PiP 카메라 화각 (°)</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><span>가로</span><input type="range" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 수치"></label><label><span>세로</span><input type="range" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 수치"></label></div>';
+    this.headCameraOverlay.innerHTML = '<button class="head-camera-settings-button" type="button" aria-label="PiP 카메라 설정" aria-expanded="false" aria-controls="head-camera-settings">⚙</button><img class="head-camera-feed" alt="실제 HEAD CAM 영상" hidden><div class="head-camera-resize" role="separator" aria-label="PiP 크기 조절" title="이동 모드에서 드래그해 크기 조절"></div><div class="head-camera-guides" hidden></div><b>HEAD CAM · SIM</b><button class="head-camera-move-button" type="button" aria-label="PiP 이동 시작" aria-pressed="false" title="PiP 위치 이동">⤧</button><div id="head-camera-settings" class="head-camera-controls" hidden><label class="head-camera-cloud" title="로봇 D435 깊이로 만든 3D 점군을 장면에 표시"><input type="checkbox" class="head-camera-cloud-toggle" aria-label="3D 포인트 클라우드 표시"><span>3D 포인트 클라우드</span><small></small></label><div class="head-camera-source" role="group" aria-label="PiP 카메라 소스"><button type="button" data-source="sim" aria-pressed="true">가상 카메라</button><button type="button" data-source="real" aria-pressed="false" title="로봇 D435 영상 (teleimager ZMQ)">실제 카메라</button><button type="button" data-source="compare" aria-pressed="false" title="실제 영상(왼쪽)과 가상 카메라(오른쪽)를 한 화면에서 비교">비교</button></div><div class="head-camera-compare" hidden><div class="head-camera-aspects head-camera-styles" role="group" aria-label="비교 방식"><button type="button" data-style="split" aria-pressed="true" title="경계선 왼쪽은 실제, 오른쪽은 가상">분할</button><button type="button" data-style="blend" aria-pressed="false" title="실제 영상을 가상 렌더 위에 반투명하게 겹침">겹치기</button></div><label class="head-camera-split"><span>분할</span><input type="range" min="0" max="100" step="1" value="50" aria-label="비교 분할 위치"><output>50%</output></label><label class="head-camera-blend" hidden><span>투명도</span><input type="range" min="0" max="100" step="1" value="50" aria-label="실제 영상 불투명도"><output>50%</output></label><label class="head-camera-guides-toggle"><input type="checkbox" aria-label="가이드선 표시"><span>가이드선 (중앙 십자·3분할)</span></label></div><details class="head-camera-adjust"><summary>포인트클라우드 기준점 보정 (d435_link 기준)</summary><div class="head-camera-adjust-rows"></div><div class="head-camera-adjust-actions"><button type="button" data-action="reset">초기화</button><button type="button" data-action="copy" title="점군 기준점 보정값과 화각을 클립보드에 JSON으로 복사">값 복사</button></div></details><div class="head-camera-controls-title"><strong>PiP 카메라 화각 (°)</strong><button type="button" aria-label="D435 RGB 화각으로 초기화" title="D435 RGB · 가로 69° / 세로 42°">↺</button></div><div class="head-camera-aspects" role="group" aria-label="PiP 화면 비율"><button type="button" data-aspect="free" aria-pressed="true">자유</button><button type="button" data-aspect="4:3" aria-pressed="false">4:3</button><button type="button" data-aspect="16:9" aria-pressed="false">16:9</button></div><label><span>가로</span><input type="range" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="69" aria-label="PiP 가로 화각 수치"></label><label><span>세로</span><input type="range" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 슬라이더"><input type="text" inputmode="decimal" min="1" max="120" step="0.01" value="42" aria-label="PiP 세로 화각 수치"></label></div>';
     const moveButton = this.headCameraOverlay.querySelector<HTMLButtonElement>('.head-camera-move-button')!;
     moveButton.addEventListener('click', () => {
       this.headCameraMoving = !this.headCameraMoving;
@@ -551,12 +551,12 @@ export class RobotScene {
     const overlay = this.headCameraOverlay;
     const rows = overlay.querySelector<HTMLDivElement>('.head-camera-adjust-rows')!;
     const specs = [
-      { group: 'offset', index: 0, label: '앞', unit: 'mm', limit: 100, step: .5, hint: '렌즈를 d435_link 기준 앞(+)/뒤(−)로' },
-      { group: 'offset', index: 1, label: '왼쪽', unit: 'mm', limit: 100, step: .5, hint: '왼쪽(+)/오른쪽(−)' },
-      { group: 'offset', index: 2, label: '위', unit: 'mm', limit: 100, step: .5, hint: '위(+)/아래(−)' },
-      { group: 'rotation', index: 0, label: '롤', unit: '°', limit: 10, step: .05, hint: '앞 축 기준 기울기: 왼쪽이 올라가면 +' },
-      { group: 'rotation', index: 1, label: '피치', unit: '°', limit: 10, step: .05, hint: '시선을 아래로 숙이면 +' },
-      { group: 'rotation', index: 2, label: '요', unit: '°', limit: 10, step: .05, hint: '시선을 왼쪽으로 돌리면 +' },
+      { group: 'offset', index: 0, label: '앞', unit: 'mm', limit: 100, step: .5, hint: '점군 기준점을 d435_link 기준 앞(+)/뒤(−)로' },
+      { group: 'offset', index: 1, label: '왼쪽', unit: 'mm', limit: 100, step: .5, hint: '기준점을 왼쪽(+)/오른쪽(−)으로' },
+      { group: 'offset', index: 2, label: '위', unit: 'mm', limit: 100, step: .5, hint: '기준점을 위(+)/아래(−)로' },
+      { group: 'rotation', index: 0, label: '롤', unit: '°', limit: 10, step: .05, hint: '점군을 앞 축 기준으로 기울임: 왼쪽이 올라가면 +' },
+      { group: 'rotation', index: 1, label: '피치', unit: '°', limit: 10, step: .05, hint: '점군의 시선 방향을 아래로 숙이면 +' },
+      { group: 'rotation', index: 2, label: '요', unit: '°', limit: 10, step: .05, hint: '점군의 시선 방향을 왼쪽으로 돌리면 +' },
     ] as const;
     const refresh: Array<() => void> = [];
     for (const spec of specs) {
@@ -610,11 +610,11 @@ export class RobotScene {
   /** 비교 모드에 들어가기 전 사용자의 PiP 화각/비율. 비교 모드에서는 실제 D435 RGB 값으로 고정된다. */
   private preCompareView: { horizontalFov: number; verticalFov: number; aspect: number | null } | null = null;
 
-  /** 마지막 d435_link 자세에 현재 보정값을 적용해 가상 카메라와 점군을 갱신한다. */
+  /** 마지막 d435_link 자세로 가상 카메라를 놓고, 보정값을 적용한 기준점에 점군을 놓는다. */
   private applyHeadCameraPose() {
     const head = this.state?.cameras?.head;
     if (head) {
-      const pose = adjustedHeadCameraPose(head.position, head.quaternion, this.headCameraAdjust);
+      const pose = adjustedHeadCameraPose(head.position, head.quaternion);     // 가상 카메라는 d435_link 그대로 둔다
       this.headCamera.position.copy(pose.position);
       this.headCamera.quaternion.copy(pose.quaternion);
     }
@@ -714,7 +714,11 @@ export class RobotScene {
 
   private placeCloud() {
     const head = this.state?.cameras?.head;
-    if (head) this.cloud.place(this.headCamera.position.toArray(), this.headCamera.quaternion);
+    if (head) {
+      // 점군의 기준점만 d435_link에서 보정값만큼 옮긴다. 보정값은 링크 기준 실제 컬러 렌즈의 위치/자세 추정치다.
+      const pose = adjustedHeadCameraPose(head.position, head.quaternion, this.headCameraAdjust);
+      this.cloud.place(pose.position.toArray(), pose.quaternion);
+    }
     this.cloud.points.visible = this.cloud.running && !!head;
   }
 

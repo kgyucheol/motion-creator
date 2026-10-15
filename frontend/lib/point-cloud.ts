@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 /**
  * 컬러 렌즈 광학 중심의 d435_link 원점 기준 위치. link 프레임(x 앞, y 왼쪽, z 위)의 미터 값이다.
- * 장면에서는 PiP의 "가상 카메라 정렬 보정"이 가상 카메라와 점군에 같은 오프셋을 적용하므로 이 기본값은 0이다.
+ * 장면에서는 PiP의 "포인트클라우드 기준점 보정"이 점군에만 오프셋을 적용하므로 이 기본값은 0이다.
  */
 export const HEAD_CAMERA_LENS_OFFSET: [number, number, number] = [0, 0, 0];
 
