@@ -551,7 +551,7 @@ export class RobotScene {
     const overlay = this.headCameraOverlay;
     const rows = overlay.querySelector<HTMLDivElement>('.head-camera-adjust-rows')!;
     const specs = [
-      { group: 'offset', index: 0, label: '앞', unit: 'mm', limit: 100, step: .5, hint: '점군 기준점을 d435_link 기준 앞(+)/뒤(−)로' },
+      { group: 'offset', index: 0, label: '앞뒤', unit: 'mm', limit: 100, step: .5, hint: '점군 기준점을 d435_link 앞(+)/뒤(−)로: +는 카메라에서 멀어져 작게, −는 가까워져 크게 보임' },
       { group: 'offset', index: 1, label: '왼쪽', unit: 'mm', limit: 100, step: .5, hint: '기준점을 왼쪽(+)/오른쪽(−)으로' },
       { group: 'offset', index: 2, label: '위', unit: 'mm', limit: 100, step: .5, hint: '기준점을 위(+)/아래(−)로' },
       { group: 'rotation', index: 0, label: '롤', unit: '°', limit: 10, step: .05, hint: '점군을 앞 축 기준으로 기울임: 왼쪽이 올라가면 +' },
