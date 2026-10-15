@@ -2,6 +2,7 @@ import asyncio
 import json
 import numpy as np
 import os
+import struct
 import threading
 import time
 from pathlib import Path
@@ -14,7 +15,7 @@ from pydantic import BaseModel, Field
 from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE, ANGLE_LOCKABLE
 from .motion import new_project, validate_project, compile_motion, rename_project, enable_parallel_compile, project_from_motion_bytes, prepare_saved_project, save_bundle
 from .presets import GroupStore
-from .head_camera import head_camera
+from .head_camera import head_camera, point_cloud
 
 SELECTION_PATH = ROOT / '.motioncreator-server.json'
 
@@ -276,10 +277,10 @@ def head_camera_status():
     return head_camera.status()
 
 
-@app.get('/api/head-camera/stream')
-async def head_camera_stream():
+def streaming_frames(source, wrap):
+    """수신 스레드를 구독해 최신 프레임만 `wrap`으로 감싸 내보내는 StreamingResponse 본문."""
     try:
-        head_camera.acquire()
+        source.acquire()
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -287,15 +288,33 @@ async def head_camera_stream():
         sequence = 0
         try:
             while True:
-                packet = await asyncio.to_thread(head_camera.wait_frame, sequence, 1.0)
+                packet = await asyncio.to_thread(source.wait_frame, sequence, 1.0)
                 if packet is None:
                     continue
-                sequence, jpeg = packet
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n' % len(jpeg)) + jpeg + b'\r\n'
+                sequence, payload = packet
+                yield wrap(payload)
         finally:
-            head_camera.release()
+            source.release()
 
-    return StreamingResponse(frames(), media_type='multipart/x-mixed-replace; boundary=frame', headers={'Cache-Control': 'no-store'})
+    return frames()
+
+
+@app.get('/api/head-camera/stream')
+async def head_camera_stream():
+    wrap = lambda jpeg: (b'--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n' % len(jpeg)) + jpeg + b'\r\n'
+    return StreamingResponse(streaming_frames(head_camera, wrap), media_type='multipart/x-mixed-replace; boundary=frame', headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/api/head-camera/cloud/status')
+def point_cloud_status():
+    return point_cloud.status()
+
+
+@app.get('/api/head-camera/cloud/stream')
+async def point_cloud_stream():
+    """포인트 클라우드 메시지를 `uint32 길이 + 본문` 단위로 이어 보낸다."""
+    wrap = lambda message: struct.pack('<I', len(message)) + message
+    return StreamingResponse(streaming_frames(point_cloud, wrap), media_type='application/octet-stream', headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/api/init')

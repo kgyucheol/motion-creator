@@ -4,6 +4,7 @@ import threading
 import time
 
 DEFAULT_ENDPOINT = 'tcp://192.168.123.164:55555'
+DEFAULT_CLOUD_ENDPOINT = 'tcp://192.168.123.164:55557'
 POLL_MS = 300
 FPS_WINDOW = 2.0
 
@@ -28,8 +29,12 @@ def head_camera_endpoint():
     return os.environ.get('MOTIONCREATOR_HEAD_CAMERA_ENDPOINT') or DEFAULT_ENDPOINT
 
 
+def point_cloud_endpoint():
+    return os.environ.get('MOTIONCREATOR_POINT_CLOUD_ENDPOINT') or DEFAULT_CLOUD_ENDPOINT
+
+
 class HeadCameraStream:
-    """teleimager ZMQ PUB 스트림(JPEG 바이트)을 구독해 최신 프레임만 유지한다. 시청자가 있을 때만 연결한다."""
+    """ZMQ PUB 스트림(teleimager JPEG 바이트, 또는 포인트 클라우드 메시지)을 구독해 최신 메시지만 유지한다. 시청자가 있을 때만 연결한다."""
 
     def __init__(self, endpoint=None, clock=time.monotonic):
         self.endpoint = endpoint or head_camera_endpoint()
@@ -117,3 +122,4 @@ class HeadCameraStream:
 
 
 head_camera = HeadCameraStream()
+point_cloud = HeadCameraStream(point_cloud_endpoint())

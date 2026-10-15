@@ -107,3 +107,11 @@ def test_status_reports_receive_rate():
     finally:
         stop.set()
         thread.join(2)
+
+
+def test_point_cloud_endpoint_can_be_overridden(monkeypatch):
+    from motioncreator.head_camera import DEFAULT_CLOUD_ENDPOINT, point_cloud_endpoint
+    monkeypatch.delenv('MOTIONCREATOR_POINT_CLOUD_ENDPOINT', raising=False)
+    assert point_cloud_endpoint() == DEFAULT_CLOUD_ENDPOINT
+    monkeypatch.setenv('MOTIONCREATOR_POINT_CLOUD_ENDPOINT', 'tcp://127.0.0.1:1')
+    assert point_cloud_endpoint() == 'tcp://127.0.0.1:1'
