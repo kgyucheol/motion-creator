@@ -111,3 +111,21 @@ def test_a_path_survives_the_card_motion_modes(robot):
     moved['scene_objects'][0]['position'][0] += .03
     motion = compile_motion(robot, moved, 30)
     assert abs(motion['time'][-1] - compile_motion(robot, project, 30)['time'][-1]) < 1e-9
+
+
+def test_a_smooth_connection_that_overshoots_a_joint_limit_still_compiles_with_a_straight_move(robot):
+    """The Hermite blend can leave the joint range next to a keyframe at the limit; that must not reject the whole motion."""
+    joint = robot.model.joint('left_elbow_joint').qposadr[0]
+    index = list(robot.q_indices).index(joint)
+    base = robot.home.copy()
+    low, high = base.copy(), base.copy()
+    low[joint] = robot.upper[index] - .6
+    high[joint] = robot.upper[index]
+    project = new_project(robot, 'overshoot')
+    pins = ['left_foot', 'right_foot']
+    cards = [{'name': name, 'duration': 1., 'qpos': list(q), 'pins': pins, 'angle_pins': []} for name, q in (('a', low), ('b', high), ('c', high))]
+    cards[1]['generated_transition'] = True
+    cards[1]['path'] = {'kind': 'linear'}
+    project['keyframes'] = cards
+    compiled = compile_motion(robot, project, 30)
+    assert np.all(np.asarray(compiled['qpos'])[:, joint] <= robot.upper[index] + 1e-7)

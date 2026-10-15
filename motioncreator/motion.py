@@ -802,6 +802,8 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
             h01, h11 = -2*u**3 + 3*u**2, u**3 - u**2
             s = float(np.clip(h01 + h10*start_slope + h11*end_slope, 0., 1.))
             q = h00*qa + h10*duration*start_velocity + h01*qb + h11*duration*end_velocity
+            # The cubic can overshoot between keyframes sitting at a joint limit; the IK below rejects such an anchor.
+            q[robot.q_indices] = np.clip(q[robot.q_indices], robot.lower, robot.upper)
         else:
             s = u*u*u*(10 + u*(-15 + 6*u))  # quintic easing, zero endpoint velocity/acceleration
             q = (1-s)*qa + s*qb
