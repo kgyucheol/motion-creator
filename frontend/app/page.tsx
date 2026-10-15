@@ -161,6 +161,7 @@ export default function Editor() {
   const [mode, setMode] = useState('elastic');
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [mirror, setMirror] = useState(false);
+  const [showMotionAdvanced, setShowMotionAdvanced] = useState(false);
   const [space, setSpace] = useState<'world' | 'local'>('world');
   const [rotation, setRotation] = useState([0, 0, 0]);
   const [jointDraft, setJointDraft] = useState<number[]>([]);
@@ -1748,6 +1749,27 @@ export default function Editor() {
       setMotion({ ...common, target: { kind: 'point', point } }, '두 손 가운데의 좌표가 목표입니다. X/Y/Z를 바꾸면 이 카드의 끝 지점이 그 좌표로 이동합니다.');
     });
   }
+  /** 포즈 카드: 물체 연결 켜기/끄기. 켜면 장면의 물체(선택한 것, 없으면 첫 번째)의 지금 위치가 기준이 된다. */
+  async function togglePoseObjectLink(on: boolean) {
+    if (!on) { await chooseMotionMode('recorded'); return; }
+    if (!motionObjects.length) { setError('장면에 오브젝트가 없습니다. 먼저 물체를 추가하세요.'); return; }
+    await chooseMotionMode('cartesian');
+  }
+  /** 이 카드 뒤의 카드들(다음 물체 연결 카드 전까지)이 이 카드의 이동을 이어받게 하거나 끈다. */
+  function toggleFollowLater(on: boolean) {
+    if (!project) return;
+    checkpoint();
+    let stopped = false;
+    const keyframes = project.keyframes.map((item, i) => {
+      if (i <= frameIndex || stopped) return item;
+      if (item.motion?.mode === 'cartesian') { stopped = true; return item; }
+      if (on && !item.motion) return { ...item, motion: { mode: 'delta' as const } };
+      if (!on && item.motion?.mode === 'delta') { const { motion: _drop, ...rest } = item; return rest; }
+      return item;
+    });
+    setProject({ ...project, keyframes }); invalidate();
+    setMessage(on ? '뒤 카드들이 이 카드가 만든 이동을 이어받습니다(다음 물체 연결 카드 전까지).' : '뒤 카드들의 이어받기를 껐습니다.');
+  }
   function patchMotion(patch: Partial<CardMotion>) { if (activeFrame?.motion) setMotion({ ...activeFrame.motion, ...patch }); }
   async function chooseTargetKind(kind: 'object' | 'point') {
     const motion = activeFrame?.motion;
@@ -2167,13 +2189,16 @@ export default function Editor() {
           <button disabled={disabled || poseDirty || !project!.keyframes[frameIndex + 1] || !!project!.keyframes[frameIndex + 1]?.samples} onClick={mergeActiveIntoNextPose}
             title="이 카드의 자세를 없애고 바로 다음 키프레임 하나로 합칩니다. 남는 것은 다음 키프레임(이름·동작 방식 포함)이고, 걸리는 시간은 두 구간의 합입니다.">다음 키프레임에 합치기</button>
         </div>}
-        <div className="tool-group dynamic-group"><span className="tool-label">동작 방식</span>
-          <select aria-label="카드 동작 방식" disabled={disabled} value={activeFrame.motion?.mode ?? 'recorded'} onChange={e => void chooseMotionMode(e.target.value as CardMotion['mode'])}
+        <div className="tool-group dynamic-group"><span className="tool-label">{activeIsClip ? '동작 방식' : '물체'}</span>
+          {!activeIsClip && <label className="dynamic-hand" title="켜면 이 카드의 끝 자세가 선택한 물체를 따라갑니다. 물체를 옮기면 손이 그 위치로 갑니다."><input type="checkbox" disabled={disabled} checked={activeFrame.motion?.mode === 'cartesian'} onChange={e => void togglePoseObjectLink(e.target.checked)}/>물체 연결</label>}
+          {!activeIsClip && activeFrame.motion?.mode === 'cartesian' && <label className="dynamic-hand" title="켜면 뒤 카드들이 이 카드가 만든 이동 차이를 그대로 이어받습니다(다음 물체 연결 카드 전까지)."><input type="checkbox" disabled={disabled} checked={project!.keyframes[frameIndex + 1]?.motion?.mode === 'delta'} onChange={e => toggleFollowLater(e.target.checked)}/>뒤 카드도 같이 이동</label>}
+          {!activeIsClip && activeFrame.motion?.mode === 'delta' && <label className="dynamic-hand" title="앞 카드가 만든 이동 차이를 이 카드도 이어받고 있습니다."><input type="checkbox" disabled={disabled} checked onChange={() => { checkpoint(); setMotion(undefined, '이 카드는 더 이상 앞 카드의 이동을 이어받지 않습니다.'); }}/>앞 카드 이동 이어받기</label>}
+          {activeIsClip && <select aria-label="카드 동작 방식" disabled={disabled} value={activeFrame.motion?.mode ?? 'recorded'} onChange={e => void chooseMotionMode(e.target.value as CardMotion['mode'])}
             title="원본 그대로: 녹화된 동작 · 관절 델타: 앞 카드가 끝난 자세에서 이어서 원본의 관절 변화만 더함(동작이 중요한 카드) · 카테시안: 끝 지점을 목표 위치로 옮김(도착 위치가 중요한 카드)">
-            {(['recorded', 'delta', 'cartesian'] as const).map(mode => <option key={mode} value={mode}>{modeLabel[mode]}</option>)}</select>
+            {(['recorded', 'delta', 'cartesian'] as const).map(mode => <option key={mode} value={mode}>{modeLabel[mode]}</option>)}</select>}
           {activeFrame.motion?.mode === 'cartesian' && activeFrame.motion.target && <>
-            <select aria-label="목표 종류" disabled={disabled} value={activeFrame.motion.target.kind} onChange={e => void chooseTargetKind(e.target.value as 'object' | 'point')}>
-              <option value="object">물체 추적</option><option value="point">좌표</option></select>
+            {(activeIsClip || activeFrame.motion.target.kind === 'point') && <select aria-label="목표 종류" disabled={disabled} value={activeFrame.motion.target.kind} onChange={e => void chooseTargetKind(e.target.value as 'object' | 'point')}>
+              <option value="object">물체 추적</option><option value="point">좌표</option></select>}
             {activeFrame.motion.target.kind === 'object' ? <>
               <select aria-label="추적할 물체" disabled={disabled} value={activeFrame.motion.target.object_id} onChange={e => {
                 const object = objects.find(item => item.id === e.target.value);
@@ -2194,6 +2219,8 @@ export default function Editor() {
               <label>회전°<NumericInput aria-label="오프셋 회전 (도)" step="1" disabled={disabled} value={activeFrame.motion.offset?.yaw_deg ?? 0}
                 onChange={e => patchMotion({ offset: { position: activeFrame.motion!.offset?.position ?? [0, 0, 0], yaw_deg: +e.target.value || 0 } })}/></label>
             </span>
+            {!activeIsClip && <button disabled={disabled} aria-pressed={showMotionAdvanced} onClick={() => setShowMotionAdvanced(value => !value)} title="손 선택·허리 고정·기울기·회전 오프셋">{showMotionAdvanced ? '세부 닫기' : '세부'}</button>}
+            {(activeIsClip || showMotionAdvanced) && <>
             <span className="dynamic-hands">{(['left', 'right'] as const).map(side => <label key={side} className="dynamic-hand" title={`${side === 'left' ? '왼손' : '오른손'}을 목표에 맞춥니다`}>
               <input type="checkbox" disabled={disabled} checked={(activeFrame.motion!.hands ?? ['left', 'right']).includes(side)} onChange={e => {
                 const hands = (['left', 'right'] as const).filter(item => item === side ? e.target.checked : (activeFrame.motion!.hands ?? ['left', 'right']).includes(item));
@@ -2201,6 +2228,7 @@ export default function Editor() {
               }}/>{side === 'left' ? '왼손' : '오른손'}</label>)}</span>
             <label className="dynamic-hand" title="켜면 허리를 고정하고 팔로만 목표에 닿습니다"><input type="checkbox" disabled={disabled} checked={activeFrame.motion.waist !== 'free'} onChange={e => patchMotion({ waist: e.target.checked ? 'lock' : 'free' })}/>허리 고정</label>
             <label className="dynamic-hand" title="켜면 물체가 기울어진 만큼 손도 기울입니다(기본은 이동과 수직축 회전만)"><input type="checkbox" disabled={disabled} checked={activeFrame.motion.freedom === 'full6d'} onChange={e => patchMotion({ freedom: e.target.checked ? 'full6d' : 'yaw_xyz' })}/>기울기</label>
+            </>}
           </>}
           {activeFrame.motion && activeFrame.motion.mode !== 'recorded' && <span className={`dynamic-chip ${motionReport?.status ?? 'pending'}`} title="이 카드의 끝 지점 판정">{motionStatusText(motionReport)}</span>}
           {motionAdvice(motionReport) && <span className="motion-advice" role="status">{motionAdvice(motionReport)}</span>}
