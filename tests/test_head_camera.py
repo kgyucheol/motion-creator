@@ -85,3 +85,25 @@ def test_reconnect_after_all_viewers_left_waits_for_a_new_frame():
     finally:
         stop.set()
         thread.join(2)
+
+
+def test_status_reports_receive_rate():
+    endpoint, stop, thread = publisher()
+    stream = HeadCameraStream(endpoint)
+    try:
+        assert stream.status()['fps'] is None
+        stream.acquire()
+        packet = stream.wait_frame(0, 3.0)
+        for _ in range(30):
+            packet = stream.wait_frame(packet[0], 3.0)
+        fps = stream.status()['fps']
+        assert fps is not None and 20 < fps < 120
+        stream.release()
+        for _ in range(50):
+            if stream.status()['fps'] is None:
+                break
+            time.sleep(.05)
+        assert stream.status()['fps'] is None
+    finally:
+        stop.set()
+        thread.join(2)

@@ -1,9 +1,11 @@
+import collections
 import os
 import threading
 import time
 
 DEFAULT_ENDPOINT = 'tcp://192.168.123.164:55555'
 POLL_MS = 300
+FPS_WINDOW = 2.0
 
 
 def jpeg_size(data):
@@ -39,6 +41,7 @@ class HeadCameraStream:
         self._sequence = 0
         self._frame_time = None
         self._size = None
+        self._arrivals = collections.deque()
 
     def acquire(self):
         try:
@@ -70,9 +73,13 @@ class HeadCameraStream:
         with self._condition:
             age = None if self._frame_time is None else self._clock() - self._frame_time
             size = self._size if age is not None else None
+            now = self._clock()
+            recent = [t for t in self._arrivals if now - t <= FPS_WINDOW]
+            fps = (len(recent) - 1) / (recent[-1] - recent[0]) if len(recent) > 1 and recent[-1] > recent[0] else None
             return {'endpoint': self.endpoint, 'viewers': self._viewers,
                     'receiving': age is not None and age < 2.0, 'age': age,
-                    'width': size[0] if size else None, 'height': size[1] if size else None}
+                    'width': size[0] if size else None, 'height': size[1] if size else None,
+                    'fps': fps if age is not None and age < 2.0 else None}
 
     def _run(self):
         import zmq
@@ -89,6 +96,7 @@ class HeadCameraStream:
                         self._frame = None
                         self._frame_time = None
                         self._size = None
+                        self._arrivals.clear()
                         self._thread = None
                         return
                 if not socket.poll(POLL_MS):
@@ -99,6 +107,9 @@ class HeadCameraStream:
                     self._size = jpeg_size(data)
                     self._sequence += 1
                     self._frame_time = self._clock()
+                    self._arrivals.append(self._frame_time)
+                    while self._arrivals and self._frame_time - self._arrivals[0] > FPS_WINDOW:
+                        self._arrivals.popleft()
                     self._condition.notify_all()
         finally:
             socket.close()
