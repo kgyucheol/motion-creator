@@ -562,8 +562,9 @@ export class RobotScene {
     for (const spec of specs) {
       const row = document.createElement('label');
       row.title = spec.hint;
-      row.innerHTML = `<span>${spec.label}</span><input type="range" min="${-spec.limit}" max="${spec.limit}" step="${spec.step}" value="0" aria-label="${spec.label} 보정 슬라이더"><input type="text" inputmode="decimal" value="0" aria-label="${spec.label} 보정 수치"><small>${spec.unit}</small>`;
+      row.innerHTML = `<span>${spec.label}</span><input type="range" min="${-spec.limit}" max="${spec.limit}" step="${spec.step}" value="0" aria-label="${spec.label} 보정 슬라이더"><button type="button" class="head-camera-step" data-direction="-1" aria-label="${spec.label} 감소">−</button><input type="text" inputmode="decimal" value="0" aria-label="${spec.label} 보정 수치"><button type="button" class="head-camera-step" data-direction="1" aria-label="${spec.label} 증가">+</button><small>${spec.unit}</small>`;
       const [range, text] = row.querySelectorAll<HTMLInputElement>('input');
+      const nudge = spec.group === 'offset' ? 1 : .1;
       const show = () => {
         const value = this.headCameraAdjust[spec.group][spec.index];
         range.value = String(value);
@@ -575,6 +576,11 @@ export class RobotScene {
         show();
         this.applyHeadCameraPose();
       };
+      row.querySelectorAll<HTMLButtonElement>('.head-camera-step').forEach(button => button.addEventListener('click', () => {
+        const next = this.headCameraAdjust[spec.group][spec.index] + Number(button.dataset.direction) * nudge;
+        apply(Math.round(next * 100) / 100);
+        this.saveEditorViewSettings();
+      }));
       range.addEventListener('input', () => apply(Number(range.value)));
       range.addEventListener('change', () => this.saveEditorViewSettings());
       text.addEventListener('change', () => { apply(text.value.trim() ? Number(text.value) : NaN); this.saveEditorViewSettings(); });
