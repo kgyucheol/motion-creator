@@ -65,3 +65,23 @@ def test_jpeg_size_reads_the_frame_marker():
     data = b'\xff\xd8' + b'\xff\xe0\x00\x10' + b'JFIF\x00' + bytes(9) + b'\xff\xc0\x00\x11\x08\x01\xe0\x03\x50\x03' + bytes(20)
     assert jpeg_size(data) == (848, 480)
     assert jpeg_size(b'not a jpeg') is None
+
+
+def test_reconnect_after_all_viewers_left_waits_for_a_new_frame():
+    endpoint, stop, thread = publisher()
+    stream = HeadCameraStream(endpoint)
+    try:
+        stream.acquire()
+        first = stream.wait_frame(0, 3.0)
+        stream.release()
+        for _ in range(50):
+            if stream.status()['age'] is None:
+                break
+            time.sleep(.05)
+        stream.acquire()
+        packet = stream.wait_frame(0, 3.0)
+        assert packet is not None and packet[1].startswith(b'jpeg-') and packet[0] > first[0]
+        stream.release()
+    finally:
+        stop.set()
+        thread.join(2)

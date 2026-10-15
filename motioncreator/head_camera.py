@@ -59,7 +59,7 @@ class HeadCameraStream:
         """`after`보다 새로운 프레임이 오면 (순번, JPEG)를 반환하고, 시간 안에 없으면 None."""
         deadline = self._clock() + timeout
         with self._condition:
-            while self._sequence <= after:
+            while self._frame is None or self._sequence <= after:
                 remaining = deadline - self._clock()
                 if remaining <= 0:
                     return None
