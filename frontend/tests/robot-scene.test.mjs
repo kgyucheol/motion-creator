@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, adjustedHeadCameraPose, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, adjustedHeadCameraPose, defaultHeadCameraAdjust, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, isJointPairSelection, mirrorFrameHandle, mirroredJointSign, pairedJointTargets, translatedTargets } from '../lib/pose-transforms.ts';
 
 test('a symmetric hinge pair supports one active ring and mirrored axis deltas', () => {
@@ -854,4 +854,11 @@ test('the head camera adjustment moves the lens in link axes and turns the view 
   assert.ok(forwardOf(down.quaternion).z < 0 && Math.abs(forwardOf(down.quaternion).z + Math.sin(5 * Math.PI / 180)) < 1e-9);
   const left = adjustedHeadCameraPose([0, 0, 0], identity, { offset: [0, 0, 0], rotation: [0, 0, 5] });
   assert.ok(forwardOf(left.quaternion).y > 0);
+});
+
+test('the confirmed point cloud origin adjustment is the default and the reset target', () => {
+  const adjust = defaultHeadCameraAdjust();
+  assert.deepEqual(adjust.offset, [2, -5, -15]);
+  assert.deepEqual(adjust.rotation, [0, 0, 0]);
+  assert.notEqual(defaultHeadCameraAdjust(), adjust);          // callers mutate their own copy
 });

@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 
 /**
- * 컬러 렌즈 광학 중심의 d435_link 원점 기준 위치. link 프레임(x 앞, y 왼쪽, z 위)의 미터 값이다.
- * 장면에서는 PiP의 "포인트클라우드 기준점 보정"이 점군에만 오프셋을 적용하므로 이 기본값은 0이다.
+ * 점군 기준점(컬러 렌즈 광학 중심)의 d435_link 원점 기준 위치. link 프레임(x 앞, y 왼쪽, z 위)의 미터 값이다.
+ * PiP 비교 화면에서 실제 영상과 겹쳐 맞춘 값(앞 2mm, 왼쪽 -5mm, 위 -15mm, 회전 0)이며, "포인트클라우드 기준점 보정"의 기본값이다.
  */
-export const HEAD_CAMERA_LENS_OFFSET: [number, number, number] = [0, 0, 0];
+export const HEAD_CAMERA_LENS_OFFSET: [number, number, number] = [0.002, -0.005, -0.015];
 
 const HEADER_BYTES = 12;
 const MAX_POINTS = 150_000;
@@ -52,7 +52,7 @@ export class LengthPrefixedFramer {
 }
 
 /** 점군(광학 프레임 좌표)을 놓을 월드 자세. `viewQuaternion`은 헤드 카메라의 three 카메라 방향이다. */
-export function cloudPlacement(headPosition: ArrayLike<number>, viewQuaternion: THREE.Quaternion, lensOffset: readonly number[] = HEAD_CAMERA_LENS_OFFSET) {
+export function cloudPlacement(headPosition: ArrayLike<number>, viewQuaternion: THREE.Quaternion, lensOffset: readonly number[] = [0, 0, 0]) {
   const [forward, left, up] = lensOffset;
   const offset = new THREE.Vector3(-left, up, -forward).applyQuaternion(viewQuaternion);
   return {

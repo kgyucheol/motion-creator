@@ -4,7 +4,7 @@ import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { controlKey, controlSelection } from './body-groups.ts';
 import { canMirrorSelection, isJointPairSelection } from './pose-transforms.ts';
-import { PointCloudLayer } from './point-cloud.ts';
+import { HEAD_CAMERA_LENS_OFFSET, PointCloudLayer } from './point-cloud.ts';
 import { normalizedObjectSize, normalizedSceneAsset, type CandidateGraspPoints, type ObjectTransformMode, type SceneObject, type SceneObjectPose } from './scene-objects.ts';
 import type { LabPathPreview, HandSide } from './lab-path-apply.ts';
 
@@ -62,6 +62,8 @@ export function headCameraViewQuaternion(linkQuaternion: number[]) {
 }
 /** 가상 헤드 카메라 보정값. offset은 d435_link 축(앞, 왼쪽, 위) 기준 mm, rotation은 같은 축 기준 (롤, 피치, 요) 도. */
 export type HeadCameraAdjust = { offset: [number, number, number]; rotation: [number, number, number] };
+/** 확정한 점군 기준점 보정(d435_link 기준 mm, 도). 초기값과 "초기화" 버튼이 되돌아가는 값이다. */
+export const defaultHeadCameraAdjust = (): HeadCameraAdjust => ({ offset: HEAD_CAMERA_LENS_OFFSET.map(meters => Math.round(meters * 1000)) as [number, number, number], rotation: [0, 0, 0] });
 export const NO_HEAD_CAMERA_ADJUST: HeadCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
 /** d435_link 자세에 보정값을 적용한 가상 카메라(및 점군)의 월드 위치와 three 카메라 방향. */
 export function adjustedHeadCameraPose(linkPosition: number[], linkQuaternion: number[], adjust: HeadCameraAdjust = NO_HEAD_CAMERA_ADJUST) {
@@ -127,7 +129,7 @@ export class RobotScene {
   headCameraCompareStyle: 'split' | 'blend' = 'split';
   headCameraBlend = 50;
   headCameraGuides = false;
-  headCameraAdjust: HeadCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
+  headCameraAdjust: HeadCameraAdjust = defaultHeadCameraAdjust();
   private cloud!: PointCloudLayer;
   private headCameraStatusTimer: number | null = null;
   renderer: THREE.WebGLRenderer;
@@ -589,7 +591,7 @@ export class RobotScene {
     }
     this.refreshHeadCameraAdjust = () => refresh.forEach(show => show());
     overlay.querySelector<HTMLButtonElement>('[data-action="reset"]')!.addEventListener('click', () => {
-      this.headCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
+      this.headCameraAdjust = defaultHeadCameraAdjust();
       this.refreshHeadCameraAdjust();
       this.applyHeadCameraPose();
       this.saveEditorViewSettings();
