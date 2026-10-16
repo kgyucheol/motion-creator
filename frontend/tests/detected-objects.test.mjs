@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { DEFAULT_CONTAINER_RADIUS, axisEndpoints, parseDetections, segmentPlacement } from '../lib/detected-objects.ts';
+import { DEFAULT_CONTAINER_RADIUS, DetectedObjectsLayer, axisEndpoints, cylinderFromEndpoints, parseDetections, segmentPlacement } from '../lib/detected-objects.ts';
 
 const row = (overrides = {}) => ({
   label: 'ramen_container', confidence: .9, start: [-.3, 0, .49], end: [.3, .05, .43], normal: [0, 0, -1], axis: [1, .08, -.1],
@@ -40,4 +40,26 @@ test('detection messages decode and malformed ones are rejected', () => {
   assert.equal(parseDetections(encode({ ...message([]), frame: 'base' })), null);
   const filtered = parseDetections(encode(message([row(), row({ start: [1, 2] }), row({ width: null })])));
   assert.equal(filtered.objects.length, 1);
+});
+
+test('a scene cylinder from two world points has its Z axis along start to end, its center between them and size [diameter, diameter, length]', () => {
+  const cylinder = cylinderFromEndpoints([1, 0, .5], [1, .6, .5], .065);
+  assert.ok(Math.abs(cylinder.size[0] - .13) < 1e-12 && Math.abs(cylinder.size[2] - .6) < 1e-12);
+  assert.deepEqual(cylinder.position.map(value => Number(value.toFixed(9))), [1, .3, .5]);
+  const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion().fromArray(cylinder.quaternion_xyzw));
+  assert.ok(axis.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-9);
+});
+
+test('the layer reports its rows as world cylinders through the same transform that draws the overlay', () => {
+  const layer = new DetectedObjectsLayer(() => {});
+  assert.deepEqual(layer.worldRows(), []);
+  layer.root.position.set(.1, 0, 1);
+  layer.root.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);   // camera-frame x maps to world y
+  layer.apply(parseDetections(encode(message([row({ start: [-.3, 0, .5], end: [.3, 0, .5], normal: [0, 0, -1], clipped: [false, false] })]))));
+  const [world] = layer.worldRows();
+  assert.equal(world.clipped, false);
+  assert.ok(Math.abs(world.size[2] - .6) < 1e-9);
+  assert.deepEqual(world.position.map(value => Number(value.toFixed(9))), [.1, 0, 1.565]);   // axis is 6.5 cm farther than the ridge
+  const axis = new THREE.Vector3(0, 0, 1).applyQuaternion(new THREE.Quaternion().fromArray(world.quaternion_xyzw));
+  assert.ok(axis.distanceTo(new THREE.Vector3(0, 1, 0)) < 1e-9);
 });

@@ -8,6 +8,14 @@ const RETRY_MS = 1500;
 const CLIPPED_COLOR = 0xffb454;
 const ENDPOINT_COLOR = 0x6bffb8;
 
+/** 월드 좌표의 중심축 양 끝점으로 만든 장면 원통: Z축이 길이 방향이고 size는 [지름, 지름, 길이]. */
+export function cylinderFromEndpoints(start: ArrayLike<number>, end: ArrayLike<number>, radius: number) {
+  const { position, quaternion, length } = segmentPlacement(start, end, new THREE.Vector3(0, 0, 1));
+  return { position: position.toArray(), quaternion_xyzw: quaternion.toArray(), size: [2 * radius, 2 * radius, length] };
+}
+
+export type WorldRow = ReturnType<typeof cylinderFromEndpoints> & { confidence: number; clipped: boolean };
+
 /** 로봇 인식기가 보내는 한 줄(옆으로 누운 컵들)의 눈에 보이는 능선. 좌표는 컬러 카메라 광학 프레임(x 오른쪽, y 아래, z 앞) 미터. */
 export type DetectedRow = {
   label: string; confidence: number;
@@ -36,19 +44,21 @@ export function axisEndpoints(row: Pick<DetectedRow, 'start' | 'end' | 'normal'>
   return { start: shift(row.start), end: shift(row.end) };
 }
 
-/** 두 점 사이에 놓인 Y축 방향 원기둥의 위치와 방향. */
-export function segmentPlacement(start: ArrayLike<number>, end: ArrayLike<number>) {
+/** 두 점 사이에 놓인 원기둥의 위치와 방향. `restAxis`는 회전 전 원기둥의 길이 방향(three 기본 Y, 장면 오브젝트는 Z). */
+export function segmentPlacement(start: ArrayLike<number>, end: ArrayLike<number>, restAxis = new THREE.Vector3(0, 1, 0)) {
   const from = new THREE.Vector3().fromArray(start as number[]);
   const to = new THREE.Vector3().fromArray(end as number[]);
   const direction = to.clone().sub(from);
   const length = direction.length();
-  const quaternion = length > 0 ? new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.divideScalar(length)) : new THREE.Quaternion();
+  const quaternion = length > 0 ? new THREE.Quaternion().setFromUnitVectors(restAxis, direction.divideScalar(length)) : new THREE.Quaternion();
   return { position: from.add(to).multiplyScalar(.5), quaternion, length };
 }
 
 /** 로봇이 인식한 용기 줄을 점군과 같은 프레임에 그린다: 중심축 선분, 양끝 점, 반지름을 보여주는 와이어 원통. */
 export class DetectedObjectsLayer {
   readonly root = new THREE.Group();
+  /** 보이는 줄 수가 바뀔 때마다 호출된다(추가 버튼 활성화용). */
+  onRows: (count: number) => void = () => {};
   private radius = DEFAULT_CONTAINER_RADIUS;
   private message: DetectionMessage | null = null;
   private abort: AbortController | null = null;
@@ -67,6 +77,17 @@ export class DetectedObjectsLayer {
     this.root.position.copy(placement.position);
     this.root.quaternion.copy(placement.quaternion);
     this.onChange();
+  }
+
+  /** 지금 보이는 줄들을 월드 좌표의 원통으로 변환한다(점군과 같은 변환). 줄이 없으면 빈 배열. */
+  worldRows(): WorldRow[] {
+    if (!this.message) return [];
+    this.root.updateWorldMatrix(true, false);
+    return this.message.objects.map(row => {
+      const { start, end } = axisEndpoints(row, this.radius);
+      const world = [start, end].map(point => this.root.localToWorld(new THREE.Vector3().fromArray(point)).toArray());
+      return { ...cylinderFromEndpoints(world[0], world[1], this.radius), confidence: row.confidence, clipped: row.clipped[0] || row.clipped[1] };
+    });
   }
 
   setRadius(radius: number) {
@@ -88,6 +109,7 @@ export class DetectedObjectsLayer {
     this.abort = null;
     if (this.retry !== null) { window.clearTimeout(this.retry); this.retry = null; }
     this.message = null;
+    this.onRows(0);
     this.root.visible = false;
     this.clear();
     this.onStatus('');
@@ -116,7 +138,7 @@ export class DetectedObjectsLayer {
     this.retry = window.setTimeout(() => { this.retry = null; this.start(); }, RETRY_MS);
   }
 
-  private apply(message: DetectionMessage | null) {
+  apply(message: DetectionMessage | null) {
     if (!message) return;
     this.message = message;
     this.redraw();
@@ -158,6 +180,7 @@ export class DetectedObjectsLayer {
         this.root.add(ball);
       });
     }
+    this.onRows(message.objects.length);
     this.onStatus(`${message.objects.length}줄 · 추론 ${Math.round(message.inference_ms)}ms`);
     this.onChange();
   }

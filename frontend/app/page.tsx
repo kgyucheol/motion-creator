@@ -10,6 +10,7 @@ import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyho
 import { ReplayPanel } from './ReplayPanel';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
+import type { WorldRow } from '../lib/detected-objects';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, mergeIntoNextPose, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, clipSampleIndexAtTime, convertClipToPoses, defaultDynamicWindow, setDynamicWindowValue, DYNAMIC_WINDOW_KEYS, type DynamicGrasp, type DynamicReport, type CardMotion, type MotionReport, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
 import { buildLabPathPreview, readLabToolPaths, toolPoseAtKeyPoint, withLabLateralOffsets, type LabLateralOffsets, type LabPathPreview, type HandSide } from '../lib/lab-path-apply';
@@ -448,6 +449,22 @@ export default function Editor() {
     commitObjects([...current.current.objects, object]);
     selectObject(object.id);
   }
+  function addDetectedRows(rows: WorldRow[]) {
+    if (!rows.length) { setError('인식된 줄이 없습니다. 용기 인식을 켜고 줄이 보일 때 다시 눌러 주세요.'); return; }
+    const existing = current.current.objects;
+    if (existing.length + rows.length > 32) { setError(`장면 오브젝트는 최대 32개입니다. ${rows.length}개를 추가할 수 없습니다.`); return; }
+    checkpoint();
+    const created = rows.map((row, index) => ({
+      ...createSceneObject(existing.length + index + 1, 'cylinder'),
+      name: `인식 줄 ${existing.length + index + 1}${row.clipped ? ' (잘림)' : ''}`,
+      position: row.position, quaternion_xyzw: row.quaternion_xyzw, size: row.size,
+      placement: { prevent_overlap: false, surface_snap: false, ground_lock: false },
+    }));
+    commitObjects([...existing, ...created], false);
+    selectObject(created[0].id);
+    const clipped = rows.filter(row => row.clipped).length;
+    setMessage(`인식된 줄 ${rows.length}개를 원통으로 추가했습니다(지름 ${(rows[0].size[0] * 100).toFixed(1)}cm).${clipped ? ` ${clipped}개는 화각 밖으로 이어져 실제 길이보다 짧을 수 있습니다.` : ''}`);
+  }
   function removeObject(id: string) {
     const { objects: remaining, removedIds } = removeSceneObjectSubtree(current.current.objects, id);
     if (!removedIds.size) return;
@@ -697,6 +714,7 @@ export default function Editor() {
           jointAngle: (key, angle) => actions.current.jointAngle(key, angle),
           history: redo => actions.current.history(redo),
           selectObject,
+          addDetectedRows,
           deleteObject: removeObject,
           objectTransformBegin: () => { objectDragCheckpointed.current = false; },
           transformObject: (id, patch) => {
