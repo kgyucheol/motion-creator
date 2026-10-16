@@ -113,4 +113,7 @@ def test_the_waist_stays_put_when_the_arms_reach_and_bends_forward_only_when_the
     far, far_reports = resolve_project_motions(robot, with_ends(copy.deepcopy(project), cylinder(np.add(cube['position'], [.2, 0, 0]), .5)))
     bend = waist_pitch_deg(robot, far['keyframes'][2]['qpos']) - recorded
     assert far_reports[2]['status'] in ('ok', 'approx') and far_reports[2]['max_position_error_mm'] < 20
+    errors = far_reports[2]['hand_errors_mm']                          # reached - goal per TCP, world x y z in mm
+    assert set(errors) == {'left_hand', 'right_hand'} and all(len(v) == 3 for v in errors.values())
+    assert max(np.linalg.norm(v) for v in errors.values()) <= far_reports[2]['max_position_error_mm'] + 1e-6
     assert 3 < bend <= 30                                              # leaned forward, within the joint limit

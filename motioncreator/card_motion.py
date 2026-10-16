@@ -169,7 +169,7 @@ def _row_end_goals(spec, hands, project, index):
 
 
 ROW_RELAXATIONS = (*RELAXATIONS, (.02, 400))       # row-end grasps may straighten the elbows freely: last, nearly no posture preference
-WAIST_PITCH_STEPS_DEG = (5., 10., 15., 20., 25.)    # forward bend tried, smallest first, only when the arms alone do not reach
+WAIST_PITCH_STEPS_DEG = (5., 10., 15., 20., 25., 29.)    # forward bend tried, smallest first, only when the arms alone do not reach (the joint stops at 29.8°)
 
 
 def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=None):
@@ -209,7 +209,7 @@ def _solve_end(robot: Robot, end_q, spec, goals, coarse=False):
     """The waist and arm joints that put the hands on `goals`, starting from the recorded end. Returns (q, errors).
 
     A row-end grasp first tries with the waist as the card asks (locked by default) and the elbows free to straighten;
-    only when the hands still miss does it bend the waist forward, as little as possible (5° steps; `coarse`, used while
+    only when the hands still miss does it bend the waist forward, as little as possible (5° steps up to 29°; `coarse`, used while
     searching how far the hands can go, tries only the largest bends to stay fast)."""
     target = spec.get('target') or {}
     if not (target.get('kind') == 'object' and target.get('ends')):
@@ -300,6 +300,8 @@ def resolve_project_motions(robot: Robot, project, advise=True):
                 status = 'partial' if fraction < 1. else _level(position_error, angle_error)
                 report = _report(status, index, mode, shift_mm=base['shift_mm'], rotation_deg=base['rotation_deg'],
                                  max_position_error_mm=position_error, max_angle_error_deg=angle_error)
+                achieved = robot.data(solved)
+                report['hand_errors_mm'] = {hand: ((robot.point(achieved, hand)[0] - goal[0]) * 1000).tolist() for hand, goal in goals.items()}
                 if fraction < 1.:
                     report.update(reached_fraction=fraction, reached_shift_mm=fraction * base['shift_mm'],
                                   max_shift_mm=spec['max_shift_m'] * 1000)

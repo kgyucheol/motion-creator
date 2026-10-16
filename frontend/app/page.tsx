@@ -1845,13 +1845,14 @@ export default function Editor() {
   function motionStatusText(report: MotionReport | null) {
     if (!report) return '미리보기를 만들면 표시됩니다';
     const error = report.max_position_error_mm !== undefined ? ` · ${report.max_position_error_mm.toFixed(1)}mm` : '';
+    const perHand = report.hand_errors_mm ? ` · 오차(도달−목표) ${(['left_hand', 'right_hand'] as const).flatMap(hand => { const e = report.hand_errors_mm![hand]; return e ? [`${hand === 'left_hand' ? '좌' : '우'} x${e[0].toFixed(0)} y${e[1].toFixed(0)} z${e[2].toFixed(0)}`] : []; }).join(' / ')}mm` : '';
     const note = report.after_unreachable !== undefined ? ` · ${report.after_unreachable + 1}번 카드가 도달하지 못한 영향` : '';
     switch (report.status) {
       case 'unchanged': return report.mode === 'cartesian' ? '기준 위치 그대로' : `이어서 이동${report.offset_deg ? ` · 관절 차이 ${report.offset_deg.toFixed(0)}°` : ''}`;
-      case 'ok': return report.mode === 'cartesian' ? `도달${error}` : `이어서 이동${note}`;
-      case 'approx': return `근사${error}`;
-      case 'partial': return `한도까지 이동 · 요청 ${(report.shift_mm ?? 0).toFixed(0)}mm 중 ${(report.reached_shift_mm ?? 0).toFixed(0)}mm${error}${note}`;
-      case 'unreachable': return `도달 불가${error}`;
+      case 'ok': return report.mode === 'cartesian' ? `도달${error}${perHand}` : `이어서 이동${note}`;
+      case 'approx': return `근사${error}${perHand}`;
+      case 'partial': return `한도까지 이동 · 요청 ${(report.shift_mm ?? 0).toFixed(0)}mm 중 ${(report.reached_shift_mm ?? 0).toFixed(0)}mm${error}${perHand}${note}`;
+      case 'unreachable': return `도달 불가${error}${perHand}`;
       case 'limit': return `관절 한계에 걸림 · ${(report.clamped_deg ?? 0).toFixed(0)}°`;
       case 'too_far': return `너무 멂 · ${(report.shift_mm ?? 0).toFixed(0)}mm (한도 ${(report.max_shift_mm ?? 0).toFixed(0)}mm)`;
       case 'not_a_row': return '가로로 누운 줄이 아님';
