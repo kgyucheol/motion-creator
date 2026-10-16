@@ -8,7 +8,7 @@ if [[ $EUID -ne 0 ]]; then
   echo 'sudo 로 실행하세요.' >&2
   exit 1
 fi
-pkill -f '^/home/unitree/robot_cloud/venv/bin/python robot_object_detector.py' || true
+pkill -f '^(\./|/home/unitree/robot_cloud/)venv/bin/python (/home/unitree/robot_cloud/)?robot_object_detector.py' || true
 sleep 1
 install -m 644 "$directory/robot_objects.service" /etc/systemd/system/robot-objects.service
 systemctl daemon-reload

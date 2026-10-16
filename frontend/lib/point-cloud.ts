@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 
 /**
- * 점군 기준점의 d435_link 원점 기준 추가 오프셋. link 프레임(x 앞, y 왼쪽, z 위)의 미터 값이다.
- * 컬러 렌즈 위치(앞 2mm, 왼쪽 -5mm, 위 -15mm)는 이미 URDF의 d435_joint에 반영되어 있으므로 기본값은 0이고,
- * PiP의 "포인트클라우드 기준점 보정"은 그 URDF 값에서 남은 차이를 맞출 때만 쓴다.
+ * 점군 기준점의 d435_link 원점 기준 오프셋. link 프레임(x 앞, y 왼쪽, z 위)의 미터 값이다.
+ * PiP 비교 화면에서 실제 영상과 겹쳐 맞춘 값(앞 2mm, 왼쪽 -5mm, 위 -16mm, 회전 0)이 기본값이다.
+ * 이 값은 물리적인 렌즈 위치가 아니라, 가상 카메라가 컬러 영상의 광학 중심(cx 428.9, cy 256.1)이 아닌 화면 중앙을 쓰는
+ * 차이(0.47m 거리에서 약 -4mm, -12mm)를 대부분 보상한다. 그래서 URDF의 d435_joint에는 반영하지 않는다.
  */
-export const HEAD_CAMERA_LENS_OFFSET: [number, number, number] = [0, 0, 0];
+export const HEAD_CAMERA_LENS_OFFSET: [number, number, number] = [0.002, -0.005, -0.016];
 
 const HEADER_BYTES = 12;
 const MAX_POINTS = 150_000;
