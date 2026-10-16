@@ -62,6 +62,8 @@ export function headCameraViewQuaternion(linkQuaternion: number[]) {
 }
 /** 가상 헤드 카메라 보정값. offset은 d435_link 축(앞, 왼쪽, 위) 기준 mm, rotation은 같은 축 기준 (롤, 피치, 요) 도. */
 export type HeadCameraAdjust = { offset: [number, number, number]; rotation: [number, number, number] };
+/** 저장된 보정값이 기준으로 삼은 URDF 렌즈 위치의 버전. 값이 바뀌면 옛 저장값은 무시된다. */
+const ADJUST_BASE = 'urdf-lens-1';
 /** 확정한 점군 기준점 보정(d435_link 기준 mm, 도). 초기값과 "초기화" 버튼이 되돌아가는 값이다. */
 export const defaultHeadCameraAdjust = (): HeadCameraAdjust => ({ offset: HEAD_CAMERA_LENS_OFFSET.map(meters => Math.round(meters * 1000)) as [number, number, number], rotation: [0, 0, 0] });
 export const NO_HEAD_CAMERA_ADJUST: HeadCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
@@ -508,7 +510,7 @@ export class RobotScene {
         camera: { position: this.camera.position.toArray(), target: this.orbit.target.toArray() },
         pip: { position: this.headCameraPosition, width: this.headCameraWidth, horizontalFov: (this.preCompareView ?? { horizontalFov: this.headCameraHorizontalFov }).horizontalFov,
           verticalFov: (this.preCompareView ?? { verticalFov: this.headCameraVerticalFov }).verticalFov, aspect: this.preCompareView ? this.preCompareView.aspect : this.headCameraAspect, source: this.headCameraSource, split: this.headCameraSplit,
-          compareStyle: this.headCameraCompareStyle, blend: this.headCameraBlend, guides: this.headCameraGuides, adjust: this.headCameraAdjust, cloud: this.cloud.running },
+          compareStyle: this.headCameraCompareStyle, blend: this.headCameraBlend, guides: this.headCameraGuides, adjust: this.headCameraAdjust, adjustBase: ADJUST_BASE, cloud: this.cloud.running },
       }));
     } catch { /* 에디터 설정 저장이 불가능해도 편집은 계속합니다. */ }
   }
@@ -536,7 +538,8 @@ export class RobotScene {
       if (Number.isFinite(pip?.blend) && pip.blend >= 0 && pip.blend <= 100) this.setHeadCameraBlend(pip.blend);
       if (pip?.compareStyle === 'blend') this.setHeadCameraCompareStyle('blend');
       if (pip?.guides === true) this.setHeadCameraGuides(true);
-      const adjustment = pip?.adjust;
+      // 렌즈 위치가 URDF에 반영되기 전에 저장된 보정값은 같은 오프셋을 한 번 더 더하게 되므로 버린다.
+      const adjustment = pip?.adjustBase === ADJUST_BASE ? pip?.adjust : undefined;
       if (vector(adjustment?.offset) && vector(adjustment?.rotation)) {
         this.headCameraAdjust = { offset: [...adjustment.offset] as [number, number, number], rotation: [...adjustment.rotation] as [number, number, number] };
         this.refreshHeadCameraAdjust();
