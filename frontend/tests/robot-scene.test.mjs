@@ -794,6 +794,7 @@ test('PiP source switch streams the real head camera and releases it when switch
     viewer.headCameraStatusTimer = null;
     viewer.headCameraSplit = 50;
     viewer.syncHeadCameraFovControls = () => {};
+    viewer.headCameraIntrinsics = { ...D435_COLOR_INTRINSICS };
     Object.assign(viewer, { headCameraHorizontalFov: 60, headCameraVerticalFov: 35, headCameraAspect: 4 / 3 });
     viewer.setHeadCameraSource('real');
     assert.equal(feed.src, '/api/head-camera/stream');
@@ -876,4 +877,13 @@ test('with the real intrinsics a cloud point lands on the pixel it came from', (
   const { elements } = camera.projectionMatrix;
   assert.ok(elements[8] !== 0 && elements[9] !== 0);                                         // the optical center is off the image center
   assert.equal(centered.projectionMatrix.elements[8], 0);
+});
+
+test('editing the virtual camera intrinsics changes the compare FOV and the aspect it locks to', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  Object.assign(viewer, { headCameraSource: 'compare', headCameraIntrinsics: { ...D435_COLOR_INTRINSICS, width: 640, height: 480, fx: 600, fy: 600 }, syncHeadCameraFovControls() {} });
+  viewer.applyIntrinsicsToControls();
+  assert.ok(Math.abs(viewer.headCameraHorizontalFov - 2 * Math.atan(320 / 600) * 180 / Math.PI) < 1e-9);
+  assert.equal(viewer.headCameraAspect, 640 / 480);
+  assert.equal(viewer.dirty, true);
 });
