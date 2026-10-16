@@ -810,7 +810,7 @@ test('PiP source switch streams the real head camera and releases it when switch
     assert.equal(split.hidden, false);
     assert.equal(controls[0].disabled, true);
     assert.ok(Math.abs(viewer.headCameraHorizontalFov - 69.77) < .01 && Math.abs(viewer.headCameraVerticalFov - 43.03) < .01);
-    assert.equal(viewer.headCameraAspect, 16 / 9);
+    assert.equal(viewer.headCameraAspect, 848 / 480);                                  // the real image's own aspect
     viewer.setHeadCameraSource('sim');
     assert.equal(split.hidden, true);
     assert.deepEqual([viewer.headCameraHorizontalFov, viewer.headCameraVerticalFov, viewer.headCameraAspect], [60, 35, 4 / 3]);
@@ -873,6 +873,7 @@ test('with the real intrinsics a cloud point lands on the pixel it came from', (
     assert.ok(Math.abs((ndc.x + 1) / 2 * k.width - u) < 1e-6 && Math.abs((1 - ndc.y) / 2 * k.height - v) < 1e-6, `${u},${v}`);
   }
   const centered = new THREE.PerspectiveCamera(42, k.width / k.height, .03, 20);
-  const [, , centerX, , , , centerY] = camera.projectionMatrix.elements;
-  assert.ok(centerX !== 0 && centerY !== 0 && centered.projectionMatrix.elements[8] === 0);     // the optical center is off the image center
+  const { elements } = camera.projectionMatrix;
+  assert.ok(elements[8] !== 0 && elements[9] !== 0);                                         // the optical center is off the image center
+  assert.equal(centered.projectionMatrix.elements[8], 0);
 });
