@@ -83,3 +83,18 @@ def test_a_row_that_is_not_lying_is_reported_and_a_bad_reference_is_rejected(rob
     spec['target']['ends'] = {'reference': {**box([0, 0, 1]), 'shape': 'sphere'}}
     with pytest.raises(ValueError):
         validate_motion(spec)
+
+
+def test_tcp_placement_ignores_the_recorded_distance_and_uses_inward_lateral_and_up_from_each_end():
+    hands = {'left_hand': (np.array([.3, .27, .9]), np.eye(3)), 'right_hand': (np.array([.3, -.27, .9]), np.eye(3))}
+    row = row_of(cylinder([.5, .1, 1.0], .7, yaw_deg=60))
+    goals, _ = row_goals(row_of(box([.3, 0, .9])), row, hands, tcp=(.03, .01, .04))
+    axis, center = row[1], row[0]
+    lateral = np.cross([0, 0, 1.], axis)
+    for hand, sign in (('left_hand', 1), ('right_hand', -1)):
+        expected = center + sign * axis * (.35 - .03) + lateral * .01 + [0, 0, .04]
+        assert np.allclose(goals[hand][0], expected, atol=1e-9)
+    with pytest.raises(ValueError):
+        validate_ends_tcp = copy.deepcopy(json.loads(EXAMPLE.read_text())['keyframes'][2]['motion'])
+        validate_ends_tcp['target']['ends'] = {'reference': box([0, 0, 1]), 'tcp': {'inward_m': 2, 'lateral_m': 0, 'up_m': 0}}
+        validate_motion(validate_ends_tcp)

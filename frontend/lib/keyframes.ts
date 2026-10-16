@@ -99,7 +99,9 @@ export type CardMotion = {
   mode: 'recorded' | 'delta' | 'cartesian';
   target?: { kind: 'object'; object_id: string; reference_pose: { position: number[]; quaternion_xyzw: number[] };
     /** 양끝 파지: 원본 자세를 만들 때 쓴 물체(가로로 누운 박스·원통). 손은 이 물체의 끝에서 놓인 자리를 새 줄의 같은 쪽 끝에 유지한다. */
-    ends?: { reference: { shape: 'box' | 'open_box' | 'cylinder'; size: number[]; position: number[]; quaternion_xyzw: number[] } } } | { kind: 'point'; point: number[] };
+    ends?: { reference: { shape: 'box' | 'open_box' | 'cylinder'; size: number[]; position: number[]; quaternion_xyzw: number[] };
+      /** 지정하면 녹화된 거리 대신, 각 손의 TCP를 줄 끝에서 안쪽·옆(+는 로봇 쪽)·위로 이만큼(m) 떨어진 점에 둔다. */
+      tcp?: { inward_m: number; lateral_m: number; up_m: number } } } | { kind: 'point'; point: number[] };
   hands?: ('left' | 'right')[];
   offset?: { position: number[]; yaw_deg: number };
   freedom?: 'yaw_xyz' | 'full6d';

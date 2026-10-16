@@ -97,8 +97,15 @@ def _validate_ends(spec):
         raise ValueError('Row-end reference orientation must be a normalised xyzw quaternion')
     if row_of({'shape': reference['shape'], 'size': size, 'position': position, 'quaternion_xyzw': quaternion}) is None:
         raise ValueError('Row-end reference must lie roughly horizontal')
-    return {'reference': {'shape': reference['shape'], 'size': size.tolist(), 'position': position.tolist(),
-                          'quaternion_xyzw': quaternion.tolist()}}
+    out = {'reference': {'shape': reference['shape'], 'size': size.tolist(), 'position': position.tolist(),
+                         'quaternion_xyzw': quaternion.tolist()}}
+    if spec.get('tcp') is not None:
+        tcp = spec['tcp']
+        values = [tcp.get(key) for key in ('inward_m', 'lateral_m', 'up_m')] if isinstance(tcp, dict) else []
+        if len(values) != 3 or not all(isinstance(v, (int, float)) and not isinstance(v, bool) and np.isfinite(v) and abs(v) <= .5 for v in values):
+            raise ValueError('Row-end TCP placement needs inward, lateral and up within 0.5 m')
+        out['tcp'] = dict(zip(('inward_m', 'lateral_m', 'up_m'), map(float, values)))
+    return out
 
 
 def _smooth(u):
@@ -151,7 +158,8 @@ def _row_end_goals(spec, hands, project, index):
     if row is None:
         return None, None, _report('not_a_row', index, 'cartesian')
     reference = row_of(target['ends']['reference'])
-    goals, _ = row_goals(reference, row, {hand: (position, matrix) for hand, (position, matrix) in hands.items()})
+    tcp = target['ends'].get('tcp')
+    goals, _ = row_goals(reference, row, hands, None if tcp is None else (tcp['inward_m'], tcp['lateral_m'], tcp['up_m']))
     offset = spec['offset']
     turn = Rotation.from_euler('z', offset['yaw_deg'], degrees=True)
     goals = {hand: (position + np.asarray(offset['position']), turn * rotation) for hand, (position, rotation) in goals.items()}

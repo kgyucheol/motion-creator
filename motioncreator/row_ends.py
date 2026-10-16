@@ -38,11 +38,15 @@ def heading_deg(axis):
     return float(np.degrees(np.arctan2(axis[1], axis[0])))
 
 
-def row_goals(reference, row, hands):
+def row_goals(reference, row, hands, tcp=None):
     """Goals {hand: (position, Rotation)} that put each hand at its recorded place relative to its end of `row`.
 
     `reference` and `row` are `row_of` results; `hands` maps a hand name to its recorded (position, rotation matrix).
-    Also returns {hand: (end sign, offset in the reference row frame with x counted outward from the end)}."""
+    Also returns {hand: (end sign, offset in the row frame with x counted outward from the end)}.
+
+    With `tcp` = (inward, lateral, up) in meters the recorded distance is ignored: each hand's TCP goes to that point
+    measured from the end of its row (inward along the axis, lateral along the row y axis, up), and the recorded
+    hand only decides which end it takes and its orientation."""
     ref_center, ref_axis, ref_length = reference
     center, axis, length = row
     ref_frame, frame = row_frame(ref_axis), row_frame(axis)
@@ -50,8 +54,11 @@ def row_goals(reference, row, hands):
     goals, relations = {}, {}
     for hand, (position, matrix) in hands.items():
         end = 1. if (position - ref_center) @ ref_axis >= 0 else -1.
-        offset = ref_frame.T @ (position - (ref_center + end * ref_axis * ref_length / 2))
-        offset[0] *= end
+        if tcp is None:
+            offset = ref_frame.T @ (position - (ref_center + end * ref_axis * ref_length / 2))
+            offset[0] *= end
+        else:
+            offset = np.array([-tcp[0], tcp[1], tcp[2]])
         target = center + end * axis * length / 2 + frame @ np.array([end * offset[0], offset[1], offset[2]])
         goals[hand] = (target, turn * Rotation.from_matrix(matrix))
         relations[hand] = (end, offset)

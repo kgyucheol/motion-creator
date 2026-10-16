@@ -18,6 +18,7 @@ import { authoredSignature, labGroupRange, labSourceSignature, legacyLabRange } 
 import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
+type ObjectTarget = Extract<NonNullable<NonNullable<Keyframe['motion']>['target']>, { kind: 'object' }>;
 const SCENE_FORMAT = 'motioncreator.scene.v1';
 /** 인식한 라면 용기 한 줄: 한 묶음 약 800g, 안이 빈 얇은 벽(3mm). 충돌은 벽이 손가락을 막지 않도록 축 위의 가는 선(6mm)으로 둔다. */
 const ROW_MASS_KG = .8, ROW_WALL_M = .003, ROW_LINE_M = .006;
@@ -1813,6 +1814,12 @@ export default function Editor() {
     patchMotion({ target: { ...target, ends: { reference: { shape: object.shape as 'box' | 'open_box' | 'cylinder', size: [...object.size], position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } } });
     setMessage(`"${object.name}"을 손 위치의 기준 물체로 저장했습니다. 이제 다른 줄을 고르면 손이 그 줄의 양 끝으로 갑니다.`);
   }
+  function setRowEndTcp(tcp: { inward_m: number; lateral_m: number; up_m: number } | undefined) {
+    const target = activeFrame?.motion?.target;
+    if (target?.kind !== 'object' || !target.ends) return;
+    const { tcp: _old, ...ends } = target.ends;
+    patchMotion({ target: { ...target, ends: tcp ? { ...ends, tcp } : ends } });
+  }
   function recaptureMotionReference() {
     const target = activeFrame?.motion?.target;
     if (target?.kind !== 'object') return;
@@ -2243,6 +2250,13 @@ export default function Editor() {
               <button disabled={disabled} onClick={recaptureMotionReference} title="물체의 지금 위치를 녹화 때의 위치로 다시 저장합니다. 이 위치에서는 카드가 원본 그대로입니다.">기준 다시 잡기</button>
               <label className="dynamic-hand" title="켜면 손이 고른 줄의 양 끝으로 갑니다. 켜는 순간 선택된 물체(원본 자세를 만든 가로 박스·원통)가 기준으로 저장되고, 각 손은 그 물체의 끝에서 놓인 거리(바깥쪽 오프셋 포함)를 새 줄의 같은 쪽 끝에 그대로 유지합니다. 줄의 길이와 방향이 달라도 따라갑니다. 추가로 더할 오프셋은 아래 오프셋 칸에 넣습니다.">
                 <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.target.ends} onChange={e => toggleRowEnds(e.target.checked)}/>양끝 파지</label>
+              {activeFrame.motion.target.ends && <label className="dynamic-hand" title="켜면 녹화된 손 거리 대신 아래 값으로 각 손의 TCP 위치를 정합니다. 줄의 양 끝점(중심축)에서 안쪽·옆·위로 떨어진 점입니다.">
+                <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.target.ends.tcp} onChange={e => setRowEndTcp(e.target.checked ? { inward_m: 0, lateral_m: 0, up_m: 0 } : undefined)}/>TCP 기준</label>}
+              {activeFrame.motion.target.ends?.tcp && <span className="dynamic-offset" title="각 손의 TCP가 줄 끝점에서 얼마나 떨어질지(mm). 안쪽은 줄 가운데 방향, 옆은 +가 로봇 쪽, 위는 +z입니다.">
+                {([['inward_m', '안쪽'], ['lateral_m', '옆'], ['up_m', '위']] as const).map(([key, label]) => <label key={key}>{label}
+                  <NumericInput aria-label={`TCP ${label} (mm)`} step="1" disabled={disabled} value={Math.round(((activeFrame.motion!.target as ObjectTarget).ends!.tcp![key]) * 1000)}
+                    onChange={e => setRowEndTcp({ ...(activeFrame.motion!.target as ObjectTarget).ends!.tcp!, [key]: (+e.target.value || 0) / 1000 })}/></label>)}
+              </span>}
             </> : <span className="dynamic-offset" title="두 손(TCP) 가운데가 도착할 월드 좌표(mm)입니다. 손 간격과 방향은 녹화 그대로입니다.">
               {(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}
                 <NumericInput aria-label={`목표 ${axis} (mm)`} step="1" disabled={disabled} value={Math.round(((activeFrame.motion!.target as { point: number[] }).point[i]) * 1000)}
