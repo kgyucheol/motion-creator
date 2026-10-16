@@ -115,3 +115,14 @@ def test_point_cloud_endpoint_can_be_overridden(monkeypatch):
     assert point_cloud_endpoint() == DEFAULT_CLOUD_ENDPOINT
     monkeypatch.setenv('MOTIONCREATOR_POINT_CLOUD_ENDPOINT', 'tcp://127.0.0.1:1')
     assert point_cloud_endpoint() == 'tcp://127.0.0.1:1'
+
+
+def test_status_treats_a_slow_publisher_as_live_only_within_its_stale_window():
+    now = [100.0]
+    stream = HeadCameraStream('tcp://127.0.0.1:9', clock=lambda: now[0], stale_after=6.0)
+    stream._frame, stream._frame_time, stream._arrivals = b'{}', 100.0, [100.0]
+    now[0] = 104.0
+    assert stream.status()['receiving'] is True
+    now[0] = 107.0
+    assert stream.status()['receiving'] is False
+    assert HeadCameraStream('tcp://127.0.0.1:9', clock=lambda: now[0]).status()['receiving'] is False

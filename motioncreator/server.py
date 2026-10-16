@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from .robot import Robot, ROOT, FEET, HANDLES, ROTATABLE, ANGLE_LOCKABLE
 from .motion import new_project, validate_project, compile_motion, rename_project, enable_parallel_compile, project_from_motion_bytes, prepare_saved_project, save_bundle
 from .presets import GroupStore
-from .head_camera import head_camera, point_cloud
+from .head_camera import detected_objects, head_camera, point_cloud
 
 SELECTION_PATH = ROOT / '.motioncreator-server.json'
 
@@ -315,6 +315,18 @@ async def point_cloud_stream():
     """포인트 클라우드 메시지를 `uint32 길이 + 본문` 단위로 이어 보낸다."""
     wrap = lambda message: struct.pack('<I', len(message)) + message
     return StreamingResponse(streaming_frames(point_cloud, wrap), media_type='application/octet-stream', headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/api/head-camera/objects/status')
+def detected_objects_status():
+    return detected_objects.status()
+
+
+@app.get('/api/head-camera/objects/stream')
+async def detected_objects_stream():
+    """로봇이 인식한 용기 줄(JSON)을 `uint32 길이 + 본문` 단위로 이어 보낸다."""
+    wrap = lambda message: struct.pack('<I', len(message)) + message
+    return StreamingResponse(streaming_frames(detected_objects, wrap), media_type='application/octet-stream', headers={'Cache-Control': 'no-store'})
 
 
 @app.get('/api/init')

@@ -5,6 +5,7 @@ import time
 
 DEFAULT_ENDPOINT = 'tcp://192.168.123.164:55555'
 DEFAULT_CLOUD_ENDPOINT = 'tcp://192.168.123.164:55557'
+DEFAULT_OBJECTS_ENDPOINT = 'tcp://192.168.123.164:55558'
 POLL_MS = 300
 FPS_WINDOW = 2.0
 
@@ -33,11 +34,16 @@ def point_cloud_endpoint():
     return os.environ.get('MOTIONCREATOR_POINT_CLOUD_ENDPOINT') or DEFAULT_CLOUD_ENDPOINT
 
 
-class HeadCameraStream:
-    """ZMQ PUB 스트림(teleimager JPEG 바이트, 또는 포인트 클라우드 메시지)을 구독해 최신 메시지만 유지한다. 시청자가 있을 때만 연결한다."""
+def objects_endpoint():
+    return os.environ.get('MOTIONCREATOR_OBJECTS_ENDPOINT') or DEFAULT_OBJECTS_ENDPOINT
 
-    def __init__(self, endpoint=None, clock=time.monotonic):
+
+class HeadCameraStream:
+    """ZMQ PUB 스트림(teleimager JPEG 바이트, 포인트 클라우드 메시지, 물체 인식 JSON)을 구독해 최신 메시지만 유지한다. 시청자가 있을 때만 연결한다."""
+
+    def __init__(self, endpoint=None, clock=time.monotonic, stale_after=2.0):
         self.endpoint = endpoint or head_camera_endpoint()
+        self._stale_after = stale_after
         self._clock = clock
         self._condition = threading.Condition()
         self._viewers = 0
@@ -82,9 +88,9 @@ class HeadCameraStream:
             recent = [t for t in self._arrivals if now - t <= FPS_WINDOW]
             fps = (len(recent) - 1) / (recent[-1] - recent[0]) if len(recent) > 1 and recent[-1] > recent[0] else None
             return {'endpoint': self.endpoint, 'viewers': self._viewers,
-                    'receiving': age is not None and age < 2.0, 'age': age,
+                    'receiving': age is not None and age < self._stale_after, 'age': age,
                     'width': size[0] if size else None, 'height': size[1] if size else None,
-                    'fps': fps if age is not None and age < 2.0 else None}
+                    'fps': fps if age is not None and age < self._stale_after else None}
 
     def _run(self):
         import zmq
@@ -123,3 +129,5 @@ class HeadCameraStream:
 
 head_camera = HeadCameraStream()
 point_cloud = HeadCameraStream(point_cloud_endpoint())
+# 로봇의 물체 인식기는 추론에 약 1초가 걸려 1~2초에 한 번 게시하므로 신호 없음 판정을 늘린다.
+detected_objects = HeadCameraStream(objects_endpoint(), stale_after=6.0)
