@@ -66,7 +66,7 @@ def validate_motion(spec):
     freedom, waist = spec.get('freedom', 'yaw_xyz'), spec.get('waist', 'lock')
     if freedom not in FREEDOM or waist not in WAIST_MODES:
         raise ValueError('Unknown card motion freedom or waist mode')
-    shift = float(spec.get('max_shift_m', DEFAULT_MAX_SHIFT_M))
+    shift = float(spec.get('max_shift_m', 1. if target.get('ends') else DEFAULT_MAX_SHIFT_M))     # a row-end grasp moves to a different row, not a nudge
     if not np.isfinite(shift) or not .01 <= shift <= 2:
         raise ValueError('Maximum target shift must be 0.01–2 m')
     offset = spec.get('offset') or {}
@@ -168,15 +168,26 @@ def _row_end_goals(spec, hands, project, index):
     return goals, {'shift_mm': shift * 1000, 'rotation_deg': angle, 'hands': hands}, None
 
 
-def _solve_end(robot: Robot, end_q, spec, goals):
-    """The waist and arm joints that put the hands on `goals`, starting from the recorded end. Returns (q, errors)."""
+ROW_RELAXATIONS = (*RELAXATIONS, (.02, 400))       # row-end grasps may straighten the elbows freely: last, nearly no posture preference
+WAIST_PITCH_STEPS_DEG = (5., 10., 15., 20., 25.)    # forward bend tried, smallest first, only when the arms alone do not reach
+
+
+def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=None):
+    """One IK solve from the recorded end. With `waist_pitch_deg` the waist is released and its pitch aimed at the recorded value plus that bend."""
     targets = {hand: goal[0] for hand, goal in goals.items()}
     orientations = {hand: goal[1].as_quat() for hand, goal in goals.items()}
-    lock = ['pelvis', 'waist'] if spec['waist'] == 'lock' else ['pelvis']
+    locked = spec['waist'] == 'lock' and waist_pitch_deg is None
+    lock = ['pelvis', 'waist'] if locked else ['pelvis']
+    waist_joints = {}
+    if waist_pitch_deg is not None:
+        for name in ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'):
+            waist_joints[name] = float(end_q[7 + robot.names.index(name)])
+        waist_joints['waist_pitch_joint'] = min(waist_joints['waist_pitch_joint'] + np.radians(waist_pitch_deg),
+                                                float(robot.upper[7 + robot.names.index('waist_pitch_joint')]) - 1e-3)
     best, initial = None, end_q
-    for posture_weight, evaluations in RELAXATIONS:
+    for posture_weight, evaluations in relaxations:
         candidate, info = robot.solve(initial, end_q, pins=(*FEET, 'pelvis'), angle_pins=lock, mode='free', resistance=0.,
-                                      selected_targets=targets, orientation_targets=orientations,
+                                      selected_targets=targets, orientation_targets=orientations, joint_targets=waist_joints or None,
                                       posture_reference=end_q, posture_weight=posture_weight, max_nfev=evaluations)
         if best is None or info['target_error_mm'] < best[1]['target_error_mm']:
             best = (candidate, info)
@@ -192,6 +203,27 @@ def _solve_end(robot: Robot, end_q, spec, goals):
         position_error = max(position_error, float(np.linalg.norm(position - goal[0])) * 1000)
         angle_error = max(angle_error, float(np.degrees((Rotation.from_matrix(matrix) * goal[1].inv()).magnitude())))
     return result, position_error, angle_error
+
+
+def _solve_end(robot: Robot, end_q, spec, goals, coarse=False):
+    """The waist and arm joints that put the hands on `goals`, starting from the recorded end. Returns (q, errors).
+
+    A row-end grasp first tries with the waist as the card asks (locked by default) and the elbows free to straighten;
+    only when the hands still miss does it bend the waist forward, as little as possible (5° steps; `coarse`, used while
+    searching how far the hands can go, tries only the largest bends to stay fast)."""
+    target = spec.get('target') or {}
+    if not (target.get('kind') == 'object' and target.get('ends')):
+        return _solve_once(robot, end_q, spec, goals, RELAXATIONS)
+    best = _solve_once(robot, end_q, spec, goals, ROW_RELAXATIONS)
+    if best[1] < REACH_MM and best[2] < REACH_DEG:
+        return best
+    for bend in WAIST_PITCH_STEPS_DEG[-1:] if coarse else WAIST_PITCH_STEPS_DEG:
+        trial = _solve_once(robot, end_q, spec, goals, ROW_RELAXATIONS, bend)
+        if trial[1] < REACH_MM and trial[2] < REACH_DEG:
+            return trial
+        if trial[1] < best[1]:
+            best = trial
+    return best
 
 
 def _scaled_goals(base, goals, fraction):
@@ -215,7 +247,7 @@ def _reach(robot: Robot, end_q, spec, goals, base):
     cap = min(1., spec['max_shift_m'] / shift) if shift > 1e-9 else 1.
 
     def attempt(fraction):
-        return _solve_end(robot, end_q, spec, goals if fraction >= 1. else _scaled_goals(base, goals, fraction))
+        return _solve_end(robot, end_q, spec, goals if fraction >= 1. else _scaled_goals(base, goals, fraction), coarse=fraction < 1.)
     def reached(trial):
         return trial[1] < REACH_MM and trial[2] < REACH_DEG
     result = attempt(cap)

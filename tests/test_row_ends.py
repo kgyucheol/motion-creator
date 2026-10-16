@@ -98,3 +98,19 @@ def test_tcp_placement_ignores_the_recorded_distance_and_uses_inward_lateral_and
         validate_ends_tcp = copy.deepcopy(json.loads(EXAMPLE.read_text())['keyframes'][2]['motion'])
         validate_ends_tcp['target']['ends'] = {'reference': box([0, 0, 1]), 'tcp': {'inward_m': 2, 'lateral_m': 0, 'up_m': 0}}
         validate_motion(validate_ends_tcp)
+
+
+def waist_pitch_deg(robot, q):
+    return float(np.degrees(q[7 + robot.names.index('waist_pitch_joint')]))
+
+
+def test_the_waist_stays_put_when_the_arms_reach_and_bends_forward_only_when_they_do_not(robot):
+    project = json.loads(EXAMPLE.read_text())
+    cube = project['scene_objects'][0]
+    recorded = waist_pitch_deg(robot, project['keyframes'][2]['qpos'])
+    near, near_reports = resolve_project_motions(robot, with_ends(copy.deepcopy(project), cylinder(np.add(cube['position'], [.03, 0, 0]), .5)))
+    assert near_reports[2]['status'] in ('ok', 'approx') and abs(waist_pitch_deg(robot, near['keyframes'][2]['qpos']) - recorded) < .5
+    far, far_reports = resolve_project_motions(robot, with_ends(copy.deepcopy(project), cylinder(np.add(cube['position'], [.2, 0, 0]), .5)))
+    bend = waist_pitch_deg(robot, far['keyframes'][2]['qpos']) - recorded
+    assert far_reports[2]['status'] in ('ok', 'approx') and far_reports[2]['max_position_error_mm'] < 20
+    assert 3 < bend <= 30                                              # leaned forward, within the joint limit
