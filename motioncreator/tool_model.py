@@ -24,6 +24,9 @@ TOOLS = {
     'end_support': {'label': '받침 (기본)', 'native': 'left', 'kind': 'legacy'},
     # The stock G1 hand (rubber hand), authored for the left wrist and swapped for the real right mesh on the right.
     'rubber_hand': {'label': 'G1 기본 손 (rubber hand)', 'native': 'left', 'kind': 'rubber'},
+    # The same hand with the TCP on its longest (middle) fingertip, 5 mm inside the tip, for hooking things with the fingers.
+    # The point is in the hand link frame of the left hand (the mesh reaches x = 0.1318 m there); the right hand mirrors y.
+    'rubber_hand_tip': {'label': 'G1 기본 손 (중지 끝 TCP)', 'native': 'left', 'kind': 'rubber', 'tcp': [.1268, -.036, .007]},
     'nse_scoop': {'label': 'NSE 주걱', 'native': 'left', 'kind': 'nse', 'urdf': 'nse_left_scoop.urdf'},
     'nse_spatula': {'label': 'NSE 스패출러', 'native': 'right', 'kind': 'nse', 'urdf': 'nse_right_spatula.urdf'},
 }
@@ -129,7 +132,7 @@ def _tool_template(tool, source):
         mount = ET.fromstring(
             f'<joint name="{native}_rubber_hand_joint" type="fixed"><parent link="{native}_wrist_yaw_link"/>'
             f'<child link="{native}_rubber_hand"/><origin xyz="{FLANGE_X} 0.003 0" rpy="0 0 0"/></joint>')
-        return [link], [mount], f'{native}_rubber_hand_joint', f'{native}_rubber_hand', [.055 - FLANGE_X, -.003, 0]
+        return [link], [mount], f'{native}_rubber_hand_joint', f'{native}_rubber_hand', spec.get('tcp', [.055 - FLANGE_X, -.003, 0])
     if spec['kind'] == 'legacy':
         prefix = f'{native}_{tool}'
         links = [copy.deepcopy(link) for link in source.findall('link') if link.get('name') in (f'{prefix}_link', f'{prefix}_tcp')]

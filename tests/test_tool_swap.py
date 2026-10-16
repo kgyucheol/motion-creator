@@ -46,7 +46,8 @@ def test_parse_tools_rejects_unknown_ids():
 
 @pytest.mark.parametrize('tools', [('nse_scoop', 'nse_spatula'), ('nse_spatula', 'nse_scoop'), ('scoop', 'scoop'),
                                    ('end_support', 'scoop'), ('nse_scoop', 'end_support'),
-                                   ('rubber_hand', 'rubber_hand'), ('rubber_hand', 'nse_spatula')])
+                                   ('rubber_hand', 'rubber_hand'), ('rubber_hand', 'nse_spatula'),
+                                   ('rubber_hand_tip', 'rubber_hand_tip')])
 def test_any_tool_pair_keeps_the_joint_layout_and_supports_ik(tools):
     stock = Robot('g1-tools', DEFAULT_TOOLS)
     robot = Robot('g1-tools', tools)
@@ -127,3 +128,21 @@ def test_rubber_hand_tool_matches_the_stock_g1_hand():
         np.testing.assert_allclose(hands.point(hands.data(hands.home), f'{side}_hand')[0],
                                    base.point(base.data(base.home), f'{side}_hand')[0], atol=2e-5)
     assert hands.model.nq == base.model.nq
+
+
+def test_rubber_hand_tip_puts_the_tcp_five_millimetres_inside_the_middle_fingertip_of_both_hands():
+    palm, tip = Robot('g1-tools', ('rubber_hand', 'rubber_hand')), Robot('g1-tools', ('rubber_hand_tip', 'rubber_hand_tip'))
+    mesh = trimesh.load(tool_model.G1_MESHES / 'left_rubber_hand.STL')
+    farthest = mesh.vertices[mesh.vertices[:, 0] > mesh.vertices[:, 0].max() - 1e-4]
+    for side, mirror in (('left', 1.), ('right', -1.)):
+        offset = np.asarray(tip.handles[f'{side}_hand'][1])
+        assert abs(offset[0] - (mesh.vertices[:, 0].max() - .005)) < 5e-4
+        assert np.linalg.norm((offset * [1, mirror, 1])[1:] - farthest[:, 1:].mean(axis=0)) < 8e-3      # on the fingertip, not beside it
+        assert offset[1] * mirror < 0
+        # same joints and mesh as the palm model: the two TCPs differ only by the offset along the hand
+        d_palm, d_tip = palm.data(palm.home), tip.data(tip.home)
+        palm_point, rotation = palm.point(d_palm, f'{side}_hand')
+        tip_point, _ = tip.point(d_tip, f'{side}_hand')
+        local = rotation.T @ (tip_point - palm_point)
+        assert abs(local[0] - (offset[0] - np.asarray(palm.handles[f'{side}_hand'][1])[0])) < 1e-6
+    assert palm.fingerprint == tip.fingerprint
