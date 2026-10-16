@@ -856,9 +856,9 @@ test('the head camera adjustment moves the lens in link axes and turns the view 
   assert.ok(forwardOf(left.quaternion).y > 0);
 });
 
-test('the confirmed point cloud origin adjustment is the default and the reset target', () => {
+test('the point cloud origin adjustment starts from zero because the URDF already carries the lens position', () => {
   const adjust = defaultHeadCameraAdjust();
-  assert.deepEqual(adjust.offset, [2, -5, -15]);
+  assert.deepEqual(adjust.offset, [0, 0, 0]);
   assert.deepEqual(adjust.rotation, [0, 0, 0]);
   assert.notEqual(defaultHeadCameraAdjust(), adjust);          // callers mutate their own copy
 });

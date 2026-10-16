@@ -566,8 +566,10 @@
 
   <!-- d435 -->
   <link name="d435_link"/>
+  <!-- d435_link origin is the color lens optical center. It is the original mount xyz (0.0576235 0.01753 0.42987) moved by (2, -5, -15) mm
+       along the link axes (forward, left, up), found by overlaying the RealSense point cloud on the RGB image in the editor PiP compare view. -->
   <joint name="d435_joint" type="fixed">
-    <origin xyz="0.0576235 0.01753 0.42987" rpy="0 0.8307767239493009 0"/>
+    <origin xyz="0.04789527 0.01253 0.4182786" rpy="0 0.8307767239493009 0"/>
     <parent link="torso_link"/>
     <child link="d435_link"/>
   </joint>
