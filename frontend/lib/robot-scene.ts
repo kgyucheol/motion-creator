@@ -64,7 +64,7 @@ export function headCameraViewQuaternion(linkQuaternion: number[]) {
 /** 가상 헤드 카메라 보정값. offset은 d435_link 축(앞, 왼쪽, 위) 기준 mm, rotation은 같은 축 기준 (롤, 피치, 요) 도. */
 export type HeadCameraAdjust = { offset: [number, number, number]; rotation: [number, number, number] };
 /** 저장된 보정값이 기준으로 삼은 기본값의 버전. 기준이 바뀌면 옛 저장값은 무시된다. (URDF는 원래 장착 위치 그대로) */
-const ADJUST_BASE = 'urdf-original-1';
+const ADJUST_BASE = 'urdf-original-2';
 /** 확정한 점군 기준점 보정(d435_link 기준 mm, 도). 초기값과 "초기화" 버튼이 되돌아가는 값이다. */
 export const defaultHeadCameraAdjust = (): HeadCameraAdjust => ({ offset: HEAD_CAMERA_LENS_OFFSET.map(meters => Math.round(meters * 1000)) as [number, number, number], rotation: [0, 0, 0] });
 export const NO_HEAD_CAMERA_ADJUST: HeadCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
@@ -77,11 +77,20 @@ export function adjustedHeadCameraPose(linkPosition: number[], linkQuaternion: n
   const correction = new THREE.Quaternion().setFromEuler(new THREE.Euler(roll, pitch, yaw, 'ZYX'));
   return { position, quaternion: link.multiply(correction).multiply(HEAD_CAMERA_VIEW_FRAME) };
 }
-/** D435 컬러 스트림(848×480)의 정렬된 내부 파라미터(fx, fy)에서 계산한 화각. 실제 영상과 가상 카메라를 맞출 때 쓴다. */
+/** D435 컬러 스트림(848×480)의 정렬된 내부 파라미터. 비교 모드의 가상 카메라가 실제 영상과 같은 투영을 쓰도록 한다. 카메라 모델이 바뀌면 이 값만 바꾼다. */
+export const D435_COLOR_INTRINSICS = { width: 848, height: 480, fx: 608.126, fy: 608.878, cx: 428.874, cy: 256.104 };
 export const D435_COLOR_FOV = {
-  horizontal: THREE.MathUtils.radToDeg(2 * Math.atan(848 / (2 * 608.126))),
-  vertical: THREE.MathUtils.radToDeg(2 * Math.atan(480 / (2 * 608.878))),
+  horizontal: THREE.MathUtils.radToDeg(2 * Math.atan(D435_COLOR_INTRINSICS.width / (2 * D435_COLOR_INTRINSICS.fx))),
+  vertical: THREE.MathUtils.radToDeg(2 * Math.atan(D435_COLOR_INTRINSICS.height / (2 * D435_COLOR_INTRINSICS.fy))),
 };
+/** 핀홀 내부 파라미터(광학 중심 포함)로 투영 행렬을 만든다. 광학 중심이 화면 중앙에서 벗어나면 비대칭 절두체가 된다. */
+export function setPerspectiveIntrinsics(camera: THREE.PerspectiveCamera, k: typeof D435_COLOR_INTRINSICS) {
+  const left = -camera.near * k.cx / k.fx, right = camera.near * (k.width - k.cx) / k.fx;
+  const top = camera.near * k.cy / k.fy, bottom = -camera.near * (k.height - k.cy) / k.fy;
+  camera.fov = THREE.MathUtils.radToDeg(Math.atan(k.cy / k.fy) + Math.atan((k.height - k.cy) / k.fy));
+  camera.projectionMatrix.makePerspective(left, right, top, bottom, camera.near, camera.far);
+  camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+}
 export function verticalFovForHorizontal(horizontalDegrees: number, aspect: number) {
   return THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(horizontalDegrees / 2)) / aspect));
 }
@@ -690,7 +699,7 @@ export class RobotScene {
       this.preCompareView = { horizontalFov: this.headCameraHorizontalFov, verticalFov: this.headCameraVerticalFov, aspect: this.headCameraAspect };
       this.headCameraHorizontalFov = D435_COLOR_FOV.horizontal;
       this.headCameraVerticalFov = D435_COLOR_FOV.vertical;
-      this.headCameraAspect = 16 / 9;
+      this.headCameraAspect = D435_COLOR_INTRINSICS.width / D435_COLOR_INTRINSICS.height;
     } else if (source !== 'compare' && wasCompare && this.preCompareView) {
       ({ horizontalFov: this.headCameraHorizontalFov, verticalFov: this.headCameraVerticalFov, aspect: this.headCameraAspect } = this.preCompareView);
       this.preCompareView = null;
@@ -776,7 +785,8 @@ export class RobotScene {
   private renderHeadCamera(width: number, height: number) {
     const rect = this.headCameraRect(width, height);
     this.headCamera.aspect = rect.width / rect.height;
-    setPerspectiveFovs(this.headCamera, this.headCameraHorizontalFov, this.headCameraVerticalFov);
+    if (this.headCameraSource === 'compare') setPerspectiveIntrinsics(this.headCamera, D435_COLOR_INTRINSICS);
+    else setPerspectiveFovs(this.headCamera, this.headCameraHorizontalFov, this.headCameraVerticalFov);
     this.headCameraOverlay.style.width = `${rect.width}px`;
     this.headCameraOverlay.style.height = `${rect.height}px`;
     this.headCameraOverlay.style.right = `${rect.right}px`;

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, adjustedHeadCameraPose, defaultHeadCameraAdjust, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, D435_COLOR_INTRINSICS, setPerspectiveIntrinsics, adjustedHeadCameraPose, defaultHeadCameraAdjust, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, isJointPairSelection, mirrorFrameHandle, mirroredJointSign, pairedJointTargets, translatedTargets } from '../lib/pose-transforms.ts';
 
 test('a symmetric hinge pair supports one active ring and mirrored axis deltas', () => {
@@ -856,9 +856,23 @@ test('the head camera adjustment moves the lens in link axes and turns the view 
   assert.ok(forwardOf(left.quaternion).y > 0);
 });
 
-test('the point cloud origin adjustment defaults to the values confirmed in the compare view', () => {
+test('the point cloud origin adjustment defaults to zero because the compare view uses the real intrinsics', () => {
   const adjust = defaultHeadCameraAdjust();
-  assert.deepEqual(adjust.offset, [2, -5, -16]);
+  assert.deepEqual(adjust.offset, [0, 0, 0]);
   assert.deepEqual(adjust.rotation, [0, 0, 0]);
   assert.notEqual(defaultHeadCameraAdjust(), adjust);          // callers mutate their own copy
+});
+
+test('with the real intrinsics a cloud point lands on the pixel it came from', () => {
+  const k = D435_COLOR_INTRINSICS;
+  const camera = new THREE.PerspectiveCamera(42, k.width / k.height, .03, 20);
+  setPerspectiveIntrinsics(camera, k);
+  for (const [u, v, z] of [[0, 0, .5], [848, 480, .5], [428.874, 256.104, 1], [100, 400, .47], [700, 60, 2.5]]) {
+    const optical = [(u - k.cx) * z / k.fx, (v - k.cy) * z / k.fy, z];
+    const ndc = new THREE.Vector3(optical[0], -optical[1], -optical[2]).applyMatrix4(camera.projectionMatrix);   // optical -> three camera view axes
+    assert.ok(Math.abs((ndc.x + 1) / 2 * k.width - u) < 1e-6 && Math.abs((1 - ndc.y) / 2 * k.height - v) < 1e-6, `${u},${v}`);
+  }
+  const centered = new THREE.PerspectiveCamera(42, k.width / k.height, .03, 20);
+  const [, , centerX, , , , centerY] = camera.projectionMatrix.elements;
+  assert.ok(centerX !== 0 && centerY !== 0 && centered.projectionMatrix.elements[8] === 0);     // the optical center is off the image center
 });
