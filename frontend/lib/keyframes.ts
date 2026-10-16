@@ -97,7 +97,9 @@ export type DynamicReport = {
 /** How a card moves relative to the card before it (see motioncreator/card_motion.py). */
 export type CardMotion = {
   mode: 'recorded' | 'delta' | 'cartesian';
-  target?: { kind: 'object'; object_id: string; reference_pose: { position: number[]; quaternion_xyzw: number[] } } | { kind: 'point'; point: number[] };
+  target?: { kind: 'object'; object_id: string; reference_pose: { position: number[]; quaternion_xyzw: number[] };
+    /** 양끝 파지: 원본 자세를 만들 때 쓴 물체(가로로 누운 박스·원통). 손은 이 물체의 끝에서 놓인 자리를 새 줄의 같은 쪽 끝에 유지한다. */
+    ends?: { reference: { shape: 'box' | 'open_box' | 'cylinder'; size: number[]; position: number[]; quaternion_xyzw: number[] } } } | { kind: 'point'; point: number[] };
   hands?: ('left' | 'right')[];
   offset?: { position: number[]; yaw_deg: number };
   freedom?: 'yaw_xyz' | 'full6d';
@@ -106,7 +108,7 @@ export type CardMotion = {
 };
 
 export type MotionReport = {
-  index: number; mode: CardMotion['mode']; status: 'ok' | 'approx' | 'unreachable' | 'too_far' | 'missing_object' | 'unchanged' | 'limit' | 'partial';
+  index: number; mode: CardMotion['mode']; status: 'ok' | 'approx' | 'unreachable' | 'too_far' | 'missing_object' | 'not_a_row' | 'unchanged' | 'limit' | 'partial';
   /** 'partial': the cube is beyond reach, the hands went this far toward it (a fraction of the requested move). */
   reached_fraction?: number; reached_shift_mm?: number;
   shift_mm?: number; max_position_error_mm?: number; max_shift_mm?: number; offset_deg?: number; clamped_deg?: number; after_unreachable?: number;

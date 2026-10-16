@@ -16,6 +16,7 @@ from scipy.spatial.transform import Rotation, Slerp
 from .dynamic_clip import (APPROX_DEG, APPROX_MM, ARM_WAIST_COLUMNS, DEFAULT_MAX_SHIFT_M, FREEDOM, HANDS, OK_DEG, OK_MM,
                            RELAXATIONS, WAIST_MODES, _level, object_delta, scene_object_pose)
 from .robot import FEET, Robot
+from .row_ends import STAND_IN_SHAPES, row_goals, row_of
 
 SEARCH_STEPS = 7
 REACH_MM, REACH_DEG = 10., 5.        # a hand this close to its goal counts as having reached it; past that the move stops short
@@ -52,6 +53,8 @@ def validate_motion(spec):
             raise ValueError('Reference orientation must be a normalised xyzw quaternion')
         out['target'] = {'kind': 'object', 'object_id': object_id,
                          'reference_pose': {'position': position.tolist(), 'quaternion_xyzw': quaternion.tolist()}}
+        if target.get('ends') is not None:
+            out['target']['ends'] = _validate_ends(target['ends'])
     else:
         point = np.asarray(target.get('point'), dtype=float)
         if point.shape != (3,) or not np.isfinite(point).all() or np.abs(point).max() > 5:
@@ -78,6 +81,26 @@ def validate_motion(spec):
     return out
 
 
+def _validate_ends(spec):
+    """The stand-in row the card was authored against (`ends.reference`), so the hands can be moved to the ends of another row."""
+    reference = spec.get('reference') if isinstance(spec, dict) else None
+    if not isinstance(reference, dict) or reference.get('shape') not in STAND_IN_SHAPES:
+        raise ValueError('Row-end grasp needs a box or cylinder stand-in as its reference')
+    size = np.asarray(reference.get('size'), dtype=float)
+    position = np.asarray(reference.get('position'), dtype=float)
+    quaternion = np.asarray(reference.get('quaternion_xyzw'), dtype=float)
+    if size.shape != (3,) or not np.isfinite(size).all() or size.min() <= 0 or size.max() > 5:
+        raise ValueError('Row-end reference size must be three positive values within 5 m')
+    if position.shape != (3,) or not np.isfinite(position).all() or np.abs(position).max() > 5:
+        raise ValueError('Row-end reference position must be three finite values within 5 m')
+    if quaternion.shape != (4,) or not np.isfinite(quaternion).all() or abs(np.linalg.norm(quaternion) - 1) > 1e-3:
+        raise ValueError('Row-end reference orientation must be a normalised xyzw quaternion')
+    if row_of({'shape': reference['shape'], 'size': size, 'position': position, 'quaternion_xyzw': quaternion}) is None:
+        raise ValueError('Row-end reference must lie roughly horizontal')
+    return {'reference': {'shape': reference['shape'], 'size': size.tolist(), 'position': position.tolist(),
+                          'quaternion_xyzw': quaternion.tolist()}}
+
+
 def _smooth(u):
     return u * u * (3 - 2 * u)
 
@@ -98,6 +121,8 @@ def _hand_goals(robot: Robot, end_q, spec, project, index):
     target = spec['target']
     data = robot.data(end_q)
     hands = {f'{side}_hand': robot.point(data, f'{side}_hand') for side in spec['hands']}
+    if target['kind'] == 'object' and target.get('ends'):
+        return _row_end_goals(spec, hands, project, index)
     if target['kind'] == 'object':
         pose = scene_object_pose(project, target['object_id'])
         if pose is None:
@@ -112,6 +137,26 @@ def _hand_goals(robot: Robot, end_q, spec, project, index):
              for hand, (position, matrix) in hands.items()}
     shift = float(np.linalg.norm(now_position - reference_position))
     angle = float(np.degrees(rotation.magnitude()))
+    return goals, {'shift_mm': shift * 1000, 'rotation_deg': angle, 'hands': hands}, None
+
+
+def _row_end_goals(spec, hands, project, index):
+    """Goals that put each hand at its end of the tracked row (see row_ends), plus the card's own TCP offset."""
+    from .motion import project_scene_objects
+    target = spec['target']
+    item = next((item for item in project_scene_objects(project) if item.get('id') == target['object_id']), None)
+    if item is None:
+        return None, None, _report('missing_object', index, 'cartesian')
+    row = row_of(item)
+    if row is None:
+        return None, None, _report('not_a_row', index, 'cartesian')
+    reference = row_of(target['ends']['reference'])
+    goals, _ = row_goals(reference, row, {hand: (position, matrix) for hand, (position, matrix) in hands.items()})
+    offset = spec['offset']
+    turn = Rotation.from_euler('z', offset['yaw_deg'], degrees=True)
+    goals = {hand: (position + np.asarray(offset['position']), turn * rotation) for hand, (position, rotation) in goals.items()}
+    shift = max(float(np.linalg.norm(goals[hand][0] - hands[hand][0])) for hand in goals)
+    angle = max(float(np.degrees((goals[hand][1] * Rotation.from_matrix(hands[hand][1]).inv()).magnitude())) for hand in goals)
     return goals, {'shift_mm': shift * 1000, 'rotation_deg': angle, 'hands': hands}, None
 
 

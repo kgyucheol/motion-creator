@@ -19,6 +19,8 @@ import { restingScene, type Scene as CylinderScene } from '../lib/cylinder-sim';
 
 type SavedPose = { qpos: number[]; pins: string[]; angle_pins: string[] };
 const SCENE_FORMAT = 'motioncreator.scene.v1';
+/** 인식한 라면 용기 한 줄: 한 묶음 약 800g, 안이 빈 얇은 벽(3mm). 충돌은 벽이 손가락을 막지 않도록 축 위의 가는 선(6mm)으로 둔다. */
+const ROW_MASS_KG = .8, ROW_WALL_M = .003, ROW_LINE_M = .006;
 type SceneFile = { format: typeof SCENE_FORMAT; scene_objects: SceneObject[]; scene_groups?: SceneObjectGroup[] };
 type Project = { format: string; name: string; name_mode?: 'auto' | 'manual'; display_name?: string; project_id?: string; created_at?: string; model_sha256: string; mounted_tools?: [string, string] | null; joint_names: string[]; coordinate_system: string; units: Record<string, string>; keyframes: Keyframe[]; current_qpos?: number[]; pins?: string[]; angle_pins?: string[]; attention_pose?: SavedPose; scene_objects?: SceneObject[]; scene_groups?: SceneObjectGroup[]; lab_lateral_offsets?: Record<string, LabLateralOffsets>; box?: { position: number[]; size: number[]; visible: boolean } };
 type GraspSummary = { object_id: string; bilateral_contact: boolean; target_reached: boolean; force_limit_exceeded: boolean; target_force_n: number; max_force_n: number; max_penetration_m: number; left: { max_normal_n: number; contact_samples: number }; right: { max_normal_n: number; contact_samples: number } };
@@ -458,12 +460,14 @@ export default function Editor() {
       ...createSceneObject(existing.length + index + 1, 'cylinder'),
       name: `인식 줄 ${existing.length + index + 1}${row.clipped ? ' (잘림)' : ''}`,
       position: row.position, quaternion_xyzw: row.quaternion_xyzw, size: row.size,
+      mass_kg: ROW_MASS_KG, wall_thickness_m: ROW_WALL_M,
+      collision_shape: 'cylinder' as const, collision_size: [ROW_LINE_M, ROW_LINE_M, row.size[2]],
       placement: { prevent_overlap: false, surface_snap: false, ground_lock: false },
     }));
     commitObjects([...existing, ...created], false);
     selectObject(created[0].id);
     const clipped = rows.filter(row => row.clipped).length;
-    setMessage(`인식된 줄 ${rows.length}개를 원통으로 추가했습니다(지름 ${(rows[0].size[0] * 100).toFixed(1)}cm).${clipped ? ` ${clipped}개는 화각 밖으로 이어져 실제 길이보다 짧을 수 있습니다.` : ''}`);
+    setMessage(`인식된 줄 ${rows.length}개를 원통으로 추가했습니다(지름 ${(rows[0].size[0] * 100).toFixed(1)}cm, 800g, 충돌은 축 선).${clipped ? ` ${clipped}개는 화각 밖으로 이어져 실제 길이보다 짧을 수 있습니다.` : ''}`);
   }
   function removeObject(id: string) {
     const { objects: remaining, removedIds } = removeSceneObjectSubtree(current.current.objects, id);
@@ -1799,6 +1803,16 @@ export default function Editor() {
       patchMotion({ target: { kind: 'object', object_id: chosen.id, reference_pose: { position: [...chosen.position], quaternion_xyzw: [...chosen.quaternion_xyzw] } } });
     } else await run(async () => { const point = await recordedHandMiddle(frameIndex); if (point) patchMotion({ target: { kind: 'point', point } }); });
   }
+  function toggleRowEnds(on: boolean) {
+    const target = activeFrame?.motion?.target;
+    if (target?.kind !== 'object') return;
+    checkpoint();
+    if (!on) { const { ends: _ends, ...rest } = target; patchMotion({ target: rest }); setMessage('양끝 파지를 껐습니다. 손은 물체의 이동량만큼 따라갑니다.'); return; }
+    const object = objects.find(item => item.id === target.object_id);
+    if (!object || !['box', 'open_box', 'cylinder'].includes(object.shape)) { setError('양끝 파지의 기준은 가로로 누운 박스나 원통이어야 합니다.'); return; }
+    patchMotion({ target: { ...target, ends: { reference: { shape: object.shape as 'box' | 'open_box' | 'cylinder', size: [...object.size], position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } } });
+    setMessage(`"${object.name}"을 손 위치의 기준 물체로 저장했습니다. 이제 다른 줄을 고르면 손이 그 줄의 양 끝으로 갑니다.`);
+  }
   function recaptureMotionReference() {
     const target = activeFrame?.motion?.target;
     if (target?.kind !== 'object') return;
@@ -1806,7 +1820,7 @@ export default function Editor() {
     if (!object) { setError('기준으로 삼을 오브젝트가 장면에 없습니다.'); return; }
     checkpoint();
     patchMotion({ target: { ...target, reference_pose: { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } });
-    setMessage('물체의 지금 위치를 기준으로 다시 잡았습니다.');
+    setMessage(target.ends ? '물체의 지금 위치를 기준으로 다시 잡았습니다. 양끝 파지가 켜져 있어 손은 이 줄의 양 끝에 놓입니다.' : '물체의 지금 위치를 기준으로 다시 잡았습니다.');
   }
   /** 월드 좌표 이동량(mm)을 "앞 3.5cm · 위 2.0cm"처럼 읽는다. 5mm 미만 성분은 생략한다. */
   function describeShift(mm: number[]) {
@@ -1833,6 +1847,7 @@ export default function Editor() {
       case 'unreachable': return `도달 불가${error}`;
       case 'limit': return `관절 한계에 걸림 · ${(report.clamped_deg ?? 0).toFixed(0)}°`;
       case 'too_far': return `너무 멂 · ${(report.shift_mm ?? 0).toFixed(0)}mm (한도 ${(report.max_shift_mm ?? 0).toFixed(0)}mm)`;
+      case 'not_a_row': return '가로로 누운 줄이 아님';
       default: return '물체를 찾을 수 없음';
     }
   }
@@ -2221,11 +2236,13 @@ export default function Editor() {
             {activeFrame.motion.target.kind === 'object' ? <>
               <select aria-label="추적할 물체" disabled={disabled} value={activeFrame.motion.target.object_id} onChange={e => {
                 const object = objects.find(item => item.id === e.target.value);
-                if (object && activeFrame.motion?.target?.kind === 'object') patchMotion({ target: { kind: 'object', object_id: object.id, reference_pose: { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } });
+                if (object && activeFrame.motion?.target?.kind === 'object') patchMotion({ target: { ...activeFrame.motion.target, object_id: object.id, reference_pose: { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } });
               }}>
                 {activeFrame.motion.target.object_id && !motionObjects.some(object => object.id === (activeFrame.motion!.target as { object_id: string }).object_id) ? <option value={activeFrame.motion.target.object_id}>(없는 물체)</option> : null}
                 {motionObjects.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}</select>
               <button disabled={disabled} onClick={recaptureMotionReference} title="물체의 지금 위치를 녹화 때의 위치로 다시 저장합니다. 이 위치에서는 카드가 원본 그대로입니다.">기준 다시 잡기</button>
+              <label className="dynamic-hand" title="켜면 손이 고른 줄의 양 끝으로 갑니다. 켜는 순간 선택된 물체(원본 자세를 만든 가로 박스·원통)가 기준으로 저장되고, 각 손은 그 물체의 끝에서 놓인 거리(바깥쪽 오프셋 포함)를 새 줄의 같은 쪽 끝에 그대로 유지합니다. 줄의 길이와 방향이 달라도 따라갑니다. 추가로 더할 오프셋은 아래 오프셋 칸에 넣습니다.">
+                <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.target.ends} onChange={e => toggleRowEnds(e.target.checked)}/>양끝 파지</label>
             </> : <span className="dynamic-offset" title="두 손(TCP) 가운데가 도착할 월드 좌표(mm)입니다. 손 간격과 방향은 녹화 그대로입니다.">
               {(['X', 'Y', 'Z'] as const).map((axis, i) => <label key={axis}>{axis}
                 <NumericInput aria-label={`목표 ${axis} (mm)`} step="1" disabled={disabled} value={Math.round(((activeFrame.motion!.target as { point: number[] }).point[i]) * 1000)}
