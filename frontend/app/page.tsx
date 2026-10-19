@@ -200,7 +200,6 @@ export default function Editor() {
   const [fps, setFps] = useState(30);
   const [exportProto, setExportProto] = useState(false);
   const [showHandles, setShowHandles] = useState(true);
-  const [showCompare, setShowCompare] = useState(true);
   const [bakeCount, setBakeCount] = useState(2);
   const [showCollisions, setShowCollisions] = useState(false);
   const [objects, setObjects] = useState<SceneObject[]>(() => objectsFromProject({}));
@@ -795,21 +794,6 @@ export default function Editor() {
   }, [transformMode, space, mirror]);
   useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !preview?.physics); scene.current.keyboardEnabled = !preview?.physics; } }, [busy, playing, preview]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
-  useEffect(() => {
-    const original = showCompare ? preview?.original_states?.[sample] : null;
-    if (original) scene.current?.updateReference(original);
-    scene.current?.setReferenceVisible(!!original);
-  }, [preview, sample, showCompare]);
-  useEffect(() => {
-    const originals = showCompare ? preview?.original_states : null;
-    if (!preview || !originals) { scene.current?.setComparePaths(null); return; }
-    const changed = originals.flatMap((item, index) => item ? [index] : []);
-    if (!changed.length) { scene.current?.setComparePaths(null); return; }
-    const from = Math.max(0, changed[0] - 5), to = Math.min(preview.states.length - 1, changed[changed.length - 1] + 5);
-    const path = (side: 'left' | 'right', corrected: boolean) => preview.states.slice(from, to + 1)
-      .map((now, offset) => ((corrected ? null : originals[from + offset]) ?? now).handles[`${side}_hand`].position);
-    scene.current?.setComparePaths({ original: { left: path('left', false), right: path('right', false) }, resolved: { left: path('left', true), right: path('right', true) } });
-  }, [preview, showCompare]);
   useEffect(() => { scene.current?.setCollisionProxiesVisible(showCollisions); }, [showCollisions]);
   useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
   useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
@@ -2299,7 +2283,6 @@ export default function Editor() {
           </>}
           {activeFrame.motion && activeFrame.motion.mode !== 'recorded' && <span className={`dynamic-chip ${motionReport?.status ?? 'pending'}`} title="이 카드의 끝 지점 판정">{motionStatusText(motionReport)}</span>}
           {motionAdvice(motionReport) && <span className="motion-advice" role="status">{motionAdvice(motionReport)}</span>}
-          <label className="dynamic-hand" title="동작 방식을 적용하기 전 원본 동작을 반투명 팔과 회색 손 경로로 겹쳐 보여 줍니다(색 선은 적용 결과)"><input type="checkbox" checked={showCompare} onChange={e => setShowCompare(e.target.checked)}/>원본 비교</label>
           {activeFrame.dynamic && <button disabled={disabled} onClick={() => { checkpoint(); editFrame(frameIndex, { dynamic: undefined }); setMessage('이전 방식(창 번호)의 동적 파지를 해제했습니다.'); }} title="이 클립에는 이전 방식의 동적 파지가 남아 있습니다. 해제하면 동작 방식으로 대체할 수 있습니다.">이전 동적 파지 해제</button>}
         </div>
       </> : <span className="tool-hint">키프레임을 선택하세요.</span>}</div>
