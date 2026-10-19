@@ -184,7 +184,7 @@ export class RobotScene {
   collisionProxiesVisible = false;
   sceneAssetLoads = new Map<string, Promise<THREE.Object3D>>();
   selectedSceneObject: string | null = null;
-  /** Objects the motion grasps (object-linked cards), outlined and lit while the path display is on. */
+  /** Objects the motion grasps (object-linked cards), lit blue while the path display is on. */
   private highlightedObjects = new Set<string>();
   objectTransformMode: ObjectTransformMode = 'translate';
   com: THREE.Mesh;
@@ -1330,15 +1330,14 @@ export class RobotScene {
     }
     if (this.selectedSceneObject && !incoming.has(this.selectedSceneObject)) this.selectedSceneObject = null;
     if (this.selectedSceneObject) this.selectSceneObject(this.selectedSceneObject, this.objectTransformMode);
-    this.refreshObjectOutlines();
     this.refreshGripMarkers();
     this.dirty = true;
   }
   /** Selection wins over the grasp highlight; a ghost keeps its own tint. */
   private objectEmissive(id: string, ghost: boolean) {
-    return id === this.selectedSceneObject ? '#254e43' : ghost ? '#174c55' : this.highlightedObjects.has(id) ? '#3a3a3a' : '#000000';
+    return id === this.selectedSceneObject ? '#254e43' : ghost ? '#174c55' : this.highlightedObjects.has(id) ? '#1060b8' : '#000000';
   }
-  /** Outline and lightly light the objects the motion grasps (empty: none). */
+  /** Light the objects the motion grasps blue (empty: none). */
   setHighlightedObjects(ids: string[]) {
     const next = new Set(ids);           // kept even before the object meshes exist; setSceneObjects outlines them when they arrive
     if (next.size === this.highlightedObjects.size && [...next].every(id => this.highlightedObjects.has(id))) return;
@@ -1348,24 +1347,7 @@ export class RobotScene {
       ((Array.isArray(node.material) ? node.material : [node.material]) as THREE.MeshStandardMaterial[])
         .forEach(material => { if ('emissive' in material) material.emissive.set(this.objectEmissive(key, !!root.userData.graspGhost)); });
     }));
-    this.refreshObjectOutlines();
     this.dirty = true;
-  }
-  private refreshObjectOutlines() {
-    Object.entries(this.sceneObjects).forEach(([key, root]) => {
-      const old: THREE.LineSegments[] = [];
-      root.traverse(node => { if (node.userData.graspOutline) old.push(node as THREE.LineSegments); });
-      old.forEach(line => { line.parent?.remove(line); line.geometry.dispose(); (line.material as THREE.Material).dispose(); });
-      if (!this.highlightedObjects.has(key)) return;
-      const meshes: THREE.Mesh[] = [];
-      root.traverse(node => { if (node instanceof THREE.Mesh) meshes.push(node); });
-      meshes.forEach(mesh => {
-        const line = new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry, 25),
-          new THREE.LineBasicMaterial({ color: '#e8f6ff', transparent: true, opacity: .95, depthTest: false }));
-        line.userData.graspOutline = true; line.renderOrder = 6; line.raycast = () => {};
-        mesh.add(line);
-      });
-    });
   }
   setCollisionProxiesVisible(visible: boolean) {
     this.collisionProxiesVisible = visible;
