@@ -3,7 +3,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-from scipy.spatial.transform import Rotation
 import pytest
 
 from motioncreator.card_motion import resolve_project_motions, validate_motion
@@ -277,24 +276,3 @@ def test_editing_a_card_carries_the_linked_cards_after_it_from_its_new_end(robot
     if after < len(frames):
         assert keyframes[after]['qpos'] == frames[after]['qpos']           # the chain ends at the first card that is not linked
     assert not np.allclose(keyframes[chain[-1]]['qpos'], frames[chain[-1]]['qpos'])
-
-
-def test_hands_are_read_and_placed_relative_to_the_ends_of_a_row(robot):
-    from motioncreator.card_motion import hands_on_row
-    project = json.loads((EXAMPLE.parent / 'pick_all_keyframes.project.json').read_text())
-    linked = next(i for i, frame in enumerate(project['keyframes']) if (frame.get('motion') or {}).get('mode') == 'cartesian')
-    q = project['keyframes'][linked]['qpos']
-    across = {'shape': 'cylinder', 'size': [.13, .13, .6], 'position': [.42, .02, .88], 'quaternion_xyzw': [.7071068, 0, 0, .7071068]}
-    turned = {**across, 'quaternion_xyzw': (Rotation.from_euler('z', 20, degrees=True) * Rotation.from_quat(across['quaternion_xyzw'])).as_quat().tolist()}
-    placement = {'left_hand': [-.02, -.01, .08], 'right_hand': [-.03, .01, .09]}
-    for row in (across, turned):
-        for frame in ('object', 'robot'):
-            placed = hands_on_row(robot, q, row, placement, frame)
-            assert placed['status'] == 'ok' and placed['max_position_error_mm'] < 3
-            for hand, value in placement.items():
-                assert np.allclose(placed['placement'][hand], value, atol=.003)
-    # straight across the robot the two frames agree; turned they do not
-    assert np.allclose(hands_on_row(robot, q, across)['placement']['left_hand'], hands_on_row(robot, q, across, frame='robot')['placement']['left_hand'], atol=1e-6)
-    assert not np.allclose(hands_on_row(robot, q, turned)['placement']['left_hand'], hands_on_row(robot, q, turned, frame='robot')['placement']['left_hand'], atol=1e-3)
-    with pytest.raises(ValueError):
-        hands_on_row(robot, q, {**across, 'shape': 'sphere'})

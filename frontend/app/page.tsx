@@ -166,11 +166,6 @@ export default function Editor() {
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [mirror, setMirror] = useState(false);
   const [showMotionAdvanced, setShowMotionAdvanced] = useState(false);
-  // 물체 기준 손 위치 설정창: 손마다 자기 쪽 줄 끝에서 [x, y, z] mm (물체 축 또는 로봇 축).
-  const [placementFrame, setPlacementFrame] = useState<'object' | 'robot'>('object');
-  const [showHandPlacement, setShowHandPlacement] = useState(false);
-  const [placementObjectId, setPlacementObjectId] = useState<string | null>(null);
-  const [handPlacement, setHandPlacement] = useState<Record<'left_hand' | 'right_hand', number[]>>({ left_hand: [0, 0, 0], right_hand: [0, 0, 0] });
   const [space, setSpace] = useState<'world' | 'local'>('world');
   const [rotation, setRotation] = useState([0, 0, 0]);
   const [jointDraft, setJointDraft] = useState<number[]>([]);
@@ -1746,38 +1741,10 @@ export default function Editor() {
   const motionObjects = objects.filter(object => !object.ghost);
   const motionReport = preview?.motion_reports?.find(report => report.index === frameIndex) ?? null;
   const modeLabel = { recorded: '원본 그대로', delta: '관절 델타', cartesian: '카테시안' } as const;
-  const rowObjects = objects.filter(object => !object.ghost && ['box', 'open_box', 'cylinder'].includes(object.shape));
-  const linkedObjectId = activeFrame?.motion?.target?.kind === 'object' ? activeFrame.motion.target.object_id : null;
-  const placementObject = rowObjects.find(object => object.id === placementObjectId) ?? rowObjects.find(object => object.id === linkedObjectId)
-    ?? rowObjects.find(object => object.id === selectedObjectId) ?? rowObjects[0];
-  type HandsOnRow = { placement: Record<'left_hand' | 'right_hand', number[]>; qpos?: number[]; status?: string; max_position_error_mm?: number };
-  /** 지금 편집 중인 자세에서 각 손이 물체 끝 기준 어디에 있는지 읽어 칸에 채운다. */
-  async function readHandPlacement(object = placementObject, frame = placementFrame) {
-    if (!object || !state) return;
-    await run(async () => {
-      const result = await api<HandsOnRow>('hands-on-row', { qpos: state.qpos, object, frame });
-      setHandPlacement({ left_hand: result.placement.left_hand.map(v => Math.round(v * 1000)), right_hand: result.placement.right_hand.map(v => Math.round(v * 1000)) });
-    });
-  }
-  /** 칸의 값으로 양손을 물체 기준 위치에 놓고(IK) 카드에 반영한다. 이어진 뒤 카드도 함께 옮겨진다. */
-  async function applyHandPlacement() {
-    if (!placementObject || !state || !project) return;
-    let placed: HandsOnRow | null = null;
-    await run(async () => {
-      placed = await api<HandsOnRow>('hands-on-row', { qpos: state.qpos, object: placementObject, frame: placementFrame,
-        placement: { left_hand: handPlacement.left_hand.map(v => v / 1000), right_hand: handPlacement.right_hand.map(v => v / 1000) } });
-      applyState(await api<PoseState>('pose', { qpos: placed.qpos }));
-    });
-    const result = placed as HandsOnRow | null;
-    if (!result?.qpos) return;
-    await applyPoseToFrame(result.qpos);
-    const error = result.max_position_error_mm ?? 0;
-    if (result.status !== 'ok') setError(`"${placementObject.name}" 기준 손 위치에 ${error.toFixed(1)}mm 차이로 닿았습니다(${result.status === 'approx' ? '근사' : '도달 불가'}). 카드에는 닿은 자세로 반영했습니다.`);
-  }
   /** 선택 프레임에 반영: 뒤 카드가 앞 카드 이동 연결로 이어져 있으면 그 카드들도 새 끝점에서 이어지도록 함께 옮긴다. */
-  async function applyPoseToFrame(given?: number[]) {
+  async function applyPoseToFrame() {
     if (!project || !state) return;
-    const qpos = [...(given ?? state.qpos)], index = frameIndex;
+    const qpos = [...state.qpos], index = frameIndex;
     const patch = { pins: [...pins], angle_pins: [...anglePins] };
     if (project.keyframes[index + 1]?.motion?.mode !== 'delta') {
       editFrame(index, { qpos, ...patch }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); return;
@@ -2335,25 +2302,6 @@ export default function Editor() {
           <label className="dynamic-hand" title="동작 방식을 적용하기 전 원본 동작을 반투명 팔과 회색 손 경로로 겹쳐 보여 줍니다(색 선은 적용 결과)"><input type="checkbox" checked={showCompare} onChange={e => setShowCompare(e.target.checked)}/>원본 비교</label>
           {activeFrame.dynamic && <button disabled={disabled} onClick={() => { checkpoint(); editFrame(frameIndex, { dynamic: undefined }); setMessage('이전 방식(창 번호)의 동적 파지를 해제했습니다.'); }} title="이 클립에는 이전 방식의 동적 파지가 남아 있습니다. 해제하면 동작 방식으로 대체할 수 있습니다.">이전 동적 파지 해제</button>}
         </div>
-        {!activeIsClip && <div className="tool-group"><span className="tool-label">손 위치</span>
-          <button disabled={disabled || !rowObjects.length} aria-pressed={showHandPlacement} onClick={() => { const open = !showHandPlacement; setShowHandPlacement(open); if (open) void readHandPlacement(); }}
-            title={rowObjects.length ? '물체(가로로 누운 박스·원통)의 양 끝을 기준으로 양손 TCP 위치를 x·y·z로 정하고 이 카드에 적용합니다.' : '가로로 누운 박스나 원통(인식 줄 포함)이 장면에 있어야 합니다.'}>{showHandPlacement ? '물체 기준 닫기' : '물체 기준 설정'}</button>
-          {showHandPlacement && placementObject && <>
-            <select aria-label="손 위치 기준 물체" disabled={disabled} value={placementObject.id} onChange={e => { setPlacementObjectId(e.target.value); void readHandPlacement(rowObjects.find(object => object.id === e.target.value)); }}>
-              {rowObjects.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}</select>
-            <select aria-label="손 위치 좌표축" disabled={disabled} value={placementFrame} onChange={e => { const frame = e.target.value as 'object' | 'robot'; setPlacementFrame(frame); void readHandPlacement(placementObject, frame); }}
-              title="물체 기준: 물체를 따라 도는 축(y는 물체 길이 방향, x는 물체를 가로질러 로봇에서 멀어지는 방향, z는 위). 로봇 기준: 로봇의 축(x 앞, y 왼쪽, z 위). 로봇 앞에 똑바로 놓인 물체면 둘이 같습니다.">
-              <option value="object">물체 기준</option><option value="robot">로봇 기준</option></select>
-            {(['left_hand', 'right_hand'] as const).map(hand => <span key={hand} className="dynamic-offset" title={`${hand === 'left_hand' ? '왼손은 물체의 왼쪽 끝' : '오른손은 물체의 오른쪽 끝'} 중심축에서 TCP까지의 이동량(mm)입니다.`}>
-              <b>{hand === 'left_hand' ? '왼손' : '오른손'}</b>
-              {(['X', 'Y', 'Z'] as const).map((label, i) => <label key={label}>{label}
-                <NumericInput aria-label={`${hand === 'left_hand' ? '왼손' : '오른손'} ${label} (mm)`} step="1" disabled={disabled} value={handPlacement[hand][i]}
-                  onChange={e => setHandPlacement(current => ({ ...current, [hand]: current[hand].map((value, j) => j === i ? (+e.target.value || 0) : value) }))}/></label>)}
-            </span>)}
-            <button disabled={disabled} onClick={() => void readHandPlacement()} title="지금 편집 중인 자세의 양손 위치를 읽어 칸에 채웁니다.">지금 자세 읽기</button>
-            <button className="primary" disabled={disabled} onClick={() => void applyHandPlacement()} title="칸의 위치로 양손을 옮겨(손 방향은 유지) 이 카드에 반영합니다. 앞 카드 이동 연결로 이어진 뒤 카드도 함께 옮겨집니다.">적용</button>
-          </>}
-        </div>}
       </> : <span className="tool-hint">키프레임을 선택하세요.</span>}</div>
       <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled || objectPhysicsEnabled ? `${controllerLabel} 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(streamTime ?? preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><div className="transport-selects"><label><select aria-label="재생 속도" title="재생 속도 (화면 재생에만 적용)" value={playbackSpeed} onChange={e => setPlaybackSpeed(+e.target.value)}>{[0.25, 0.5, 1, 1.5, 2, 4].map(v => <option key={v} value={v}>{v}×</option>)}</select></label><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label></div>
         <div className="simulation-toggles">
