@@ -1392,7 +1392,7 @@ export class RobotScene {
     this.dirty = true;
   }
 
-  /** Hand paths of the original motion (grey) and the dynamic grasp result (coloured), one polyline per hand. */
+  /** Hand paths, one polyline per hand: an optional grey reference and the coloured motion (the editor's path display). */
   setComparePaths(paths: { original: Record<HandSide, number[][]>; resolved: Record<HandSide, number[][]> } | null) {
     this.comparePaths.traverse(node => {
       if (node instanceof THREE.Line) { node.geometry.dispose(); (node.material as THREE.Material).dispose(); }

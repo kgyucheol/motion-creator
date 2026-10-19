@@ -166,6 +166,7 @@ export default function Editor() {
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [mirror, setMirror] = useState(false);
   const [showMotionAdvanced, setShowMotionAdvanced] = useState(false);
+  const [showPaths, setShowPaths] = useState(false);
   const [space, setSpace] = useState<'world' | 'local'>('world');
   const [rotation, setRotation] = useState([0, 0, 0]);
   const [jointDraft, setJointDraft] = useState<number[]>([]);
@@ -794,6 +795,12 @@ export default function Editor() {
   }, [transformMode, space, mirror]);
   useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !preview?.physics); scene.current.keyboardEnabled = !preview?.physics; } }, [busy, playing, preview]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
+  useEffect(() => {
+    // 경로 표시: 미리보기 전체 동안 두 손(TCP)이 지나는 길을 선으로 그린다(초록 왼손, 주황 오른손).
+    if (!showPaths || !preview?.states.length) { scene.current?.setComparePaths(null); return; }
+    const path = (side: 'left' | 'right') => preview.states.map(state => state.handles[`${side}_hand`].position);
+    scene.current?.setComparePaths({ original: { left: [], right: [] }, resolved: { left: path('left'), right: path('right') } });
+  }, [preview, showPaths]);
   useEffect(() => { scene.current?.setCollisionProxiesVisible(showCollisions); }, [showCollisions]);
   useEffect(() => { scene.current?.setVisibleHandles(visibleTreeHandles(expanded)); }, [expanded]);
   useEffect(() => { scene.current?.setMirrorTranslation(mirror); }, [mirror]);
@@ -2286,7 +2293,7 @@ export default function Editor() {
           {activeFrame.dynamic && <button disabled={disabled} onClick={() => { checkpoint(); editFrame(frameIndex, { dynamic: undefined }); setMessage('이전 방식(창 번호)의 동적 파지를 해제했습니다.'); }} title="이 클립에는 이전 방식의 동적 파지가 남아 있습니다. 해제하면 동작 방식으로 대체할 수 있습니다.">이전 동적 파지 해제</button>}
         </div>
       </> : <span className="tool-hint">키프레임을 선택하세요.</span>}</div>
-      <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled || objectPhysicsEnabled ? `${controllerLabel} 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(streamTime ?? preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><div className="transport-selects"><label><select aria-label="재생 속도" title="재생 속도 (화면 재생에만 적용)" value={playbackSpeed} onChange={e => setPlaybackSpeed(+e.target.value)}>{[0.25, 0.5, 1, 1.5, 2, 4].map(v => <option key={v} value={v}>{v}×</option>)}</select></label><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label></div>
+      <div className="timeline-body"><div className="transport"><button className="play" title={playing ? '일시정지' : physicsEnabled || objectPhysicsEnabled ? `${controllerLabel} 재생` : '모션 재생'} disabled={!state || busy || solving} onClick={() => void play()}>{playing ? <Pause size={21}/> : <Play size={21}/>}</button><span>{(streamTime ?? preview?.time[sample] ?? 0).toFixed(2)}<small> / {(preview?.summary?.reference_seconds ?? duration).toFixed(2)}s</small></span><div className="transport-selects"><label><select aria-label="재생 속도" title="재생 속도 (화면 재생에만 적용)" value={playbackSpeed} onChange={e => setPlaybackSpeed(+e.target.value)}>{[0.25, 0.5, 1, 1.5, 2, 4].map(v => <option key={v} value={v}>{v}×</option>)}</select></label><label><select aria-label="출력 FPS" value={fps} disabled={disabled} onChange={e => setFps(+e.target.value)}>{[15, 30, 50, 60, 100, 120].map(f => <option key={f} value={f}>{f} fps</option>)}</select></label><label className="path-toggle" title="미리보기 전체 동안 두 손(TCP)이 지나는 경로를 선으로 보여 줍니다(초록 왼손, 주황 오른손)."><input type="checkbox" checked={showPaths} onChange={e => setShowPaths(e.target.checked)}/>경로</label></div>
         <div className="simulation-toggles">
         <button className="policy-toggle" type="button" aria-pressed={physicsEnabled} disabled={!state || busy || solving || playing || !physicsAvailable} onClick={() => changeSimulation(!physicsEnabled, false)} title={!physicsAvailable ? '물리 재생을 사용하려면 서버를 업데이트하고 재시작하세요.' : 'ON: 중력·접촉·관절 토크 계산 · OFF: 정책도 끄고 원본 편집으로 돌아가기'}>
           <span className="policy-indicator"/>Physics <b>{physicsEnabled ? 'ON' : 'OFF'}</b>
