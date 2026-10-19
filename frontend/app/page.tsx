@@ -1778,21 +1778,6 @@ export default function Editor() {
     if (!motionObjects.length) { setError('장면에 오브젝트가 없습니다. 먼저 물체를 추가하세요.'); return; }
     await chooseMotionMode('cartesian');
   }
-  /** 이 카드 뒤의 카드들(다음 물체 연결 카드 전까지)이 이 카드의 이동을 이어받게 하거나 끈다. */
-  function toggleFollowLater(on: boolean) {
-    if (!project) return;
-    checkpoint();
-    let stopped = false;
-    const keyframes = project.keyframes.map((item, i) => {
-      if (i <= frameIndex || stopped) return item;
-      if (item.motion?.mode === 'cartesian') { stopped = true; return item; }
-      if (on && !item.motion) return { ...item, motion: { mode: 'delta' as const } };
-      if (!on && item.motion?.mode === 'delta') { const { motion: _drop, ...rest } = item; return rest; }
-      return item;
-    });
-    setProject({ ...project, keyframes }); invalidate();
-    setMessage(on ? '뒤 카드들이 이 카드가 만든 이동을 이어받습니다(다음 물체 연결 카드 전까지).' : '뒤 카드들의 이어받기를 껐습니다.');
-  }
   function patchMotion(patch: Partial<CardMotion>) { if (activeFrame?.motion) setMotion({ ...activeFrame.motion, ...patch }); }
   async function chooseTargetKind(kind: 'object' | 'point') {
     const motion = activeFrame?.motion;
@@ -2233,8 +2218,7 @@ export default function Editor() {
         </div>}
         <div className="tool-group dynamic-group"><span className="tool-label">{activeIsClip ? '동작 방식' : '물체'}</span>
           {!activeIsClip && <label className="dynamic-hand" title="켜면 이 카드의 끝 자세가 선택한 물체를 따라갑니다. 물체를 옮기면 손이 그 위치로 갑니다."><input type="checkbox" disabled={disabled} checked={activeFrame.motion?.mode === 'cartesian'} onChange={e => void togglePoseObjectLink(e.target.checked)}/>물체 연결</label>}
-          {!activeIsClip && activeFrame.motion?.mode === 'cartesian' && <label className="dynamic-hand" title="켜면 뒤 카드들이 이 카드가 만든 이동 차이를 그대로 이어받습니다(다음 물체 연결 카드 전까지)."><input type="checkbox" disabled={disabled} checked={project!.keyframes[frameIndex + 1]?.motion?.mode === 'delta'} onChange={e => toggleFollowLater(e.target.checked)}/>뒤 카드도 같이 이동</label>}
-          
+          {!activeIsClip && frameIndex > 0 && activeFrame.motion?.mode !== 'cartesian' && <label className="dynamic-hand" title="켜면 이 카드가 바로 앞 카드가 끝난 자세에서 이어서 움직입니다(앞에서 물체 연결로 옮겨진 만큼 유지). 끄면 이 카드 동안 원래 녹화 자세로 서서히 돌아옵니다. 중간 카드 하나를 끄면 그 뒤 카드는 켜 두어도 이어받을 차이가 없습니다."><input type="checkbox" disabled={disabled} checked={activeFrame.motion?.mode === 'delta'} onChange={e => { checkpoint(); setMotion(e.target.checked ? { mode: 'delta' } : undefined, e.target.checked ? '이 카드는 앞 카드가 끝난 자세에서 이어서 움직입니다.' : '이 카드는 앞 카드의 이동 차이를 서서히 없애며 원래 자세로 돌아옵니다.'); }}/>앞 카드 이동 연결</label>}
           {activeIsClip && <select aria-label="카드 동작 방식" disabled={disabled} value={activeFrame.motion?.mode ?? 'recorded'} onChange={e => void chooseMotionMode(e.target.value as CardMotion['mode'])}
             title="원본 그대로: 녹화된 동작 · 관절 델타: 앞 카드가 끝난 자세에서 이어서 원본의 관절 변화만 더함(동작이 중요한 카드) · 카테시안: 끝 지점을 목표 위치로 옮김(도착 위치가 중요한 카드)">
             {(['recorded', 'delta', 'cartesian'] as const).map(mode => <option key={mode} value={mode}>{modeLabel[mode]}</option>)}</select>}
