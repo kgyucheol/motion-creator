@@ -97,6 +97,8 @@ export type DynamicReport = {
 /** How a card moves relative to the card before it (see motioncreator/card_motion.py). */
 export type CardMotion = {
   mode: 'recorded' | 'delta' | 'cartesian';
+  /** 앞 카드 이동 연결(delta)이 지키는 변화량: 관절 변화량(기본) 또는 손(TCP) 위치 변화량(포즈 카드만). */
+  basis?: 'joint' | 'position';
   target?: { kind: 'object'; object_id: string; reference_pose: { position: number[]; quaternion_xyzw: number[] };
     /** 양끝 파지: 원본 자세를 만들 때 쓴 물체(가로로 누운 박스·원통). 손은 이 물체의 끝에서 놓인 자리를 새 줄의 같은 쪽 끝에 유지한다. */
     ends?: { reference: { shape: 'box' | 'open_box' | 'cylinder'; size: number[]; position: number[]; quaternion_xyzw: number[] };
@@ -115,6 +117,8 @@ export type MotionReport = {
   reached_fraction?: number; reached_shift_mm?: number;
   /** 손(TCP)별 월드 좌표 오차 mm = 도달한 위치 − 목표 위치 (x 앞, y 왼쪽, z 위). */
   hand_errors_mm?: Partial<Record<'left_hand' | 'right_hand', number[]>>;
+  /** 위치 변화량으로 이어받은 카드. */
+  basis?: 'position';
   shift_mm?: number; max_position_error_mm?: number; max_shift_mm?: number; offset_deg?: number; clamped_deg?: number; after_unreachable?: number;
   /** Set when a joint limit or an unreachable card could be avoided by moving less in the same direction. */
   caused_by?: number; blocks?: number[]; safe_fraction?: number; safe_shift_mm?: number[]; requested_shift_mm?: number[];

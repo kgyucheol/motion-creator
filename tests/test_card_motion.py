@@ -203,3 +203,41 @@ def test_a_cube_beyond_reach_is_followed_as_far_as_the_arms_go(robot, project):
     assert forward > .5 * report['reached_fraction'] * np.linalg.norm(shift)             # it did move toward the cube
     assert abs(forward - report['reached_shift_mm'] / 1000) < .02                         # and by the reported amount
     assert reports[2]['reached_shift_mm'] < reports[2]['shift_mm']
+
+
+def test_a_position_delta_pose_card_keeps_the_recorded_hand_move_from_a_moved_previous_card(robot):
+    """Joint deltas keep the joint change, which moves the hands differently once the arm pose changed; the position basis
+    keeps the recorded TCP move and turn from where the previous card really ended."""
+    project = json.loads((EXAMPLE.parent / 'pick_all_keyframes.project.json').read_text())
+    frames = project['keyframes']
+    linked = next(i for i, frame in enumerate(frames) if (frame.get('motion') or {}).get('mode') == 'cartesian')
+    after = linked + 1
+    assert (frames[after].get('motion') or {}).get('mode') == 'delta' and frames[after].get('samples') is None
+
+    def hand_moves(basis):
+        moved = move_cube(copy.deepcopy(project), [.05, 0., .05])
+        moved['keyframes'][after]['motion'] = {'mode': 'delta', 'basis': basis}
+        resolved, reports = resolve_project_motions(robot, moved, advise=False)
+        before, now = (_hand_poses(robot, np.asarray(resolved['keyframes'][i]['qpos'])) for i in (linked, after))
+        return {hand: now[hand][0] - before[hand][0] for hand in HANDS}, reports[after]
+    recorded_before, recorded_now = (_hand_poses(robot, np.asarray(frames[i]['qpos'])) for i in (linked, after))
+    recorded = {hand: recorded_now[hand][0] - recorded_before[hand][0] for hand in HANDS}
+    position, report = hand_moves('position')
+    joint, _ = hand_moves('joint')
+    assert report['basis'] == 'position' and report['status'] in ('ok', 'approx')
+    assert max(np.linalg.norm(position[hand] - recorded[hand]) for hand in HANDS) < .005
+    assert max(np.linalg.norm(joint[hand] - recorded[hand]) for hand in HANDS) > max(np.linalg.norm(position[hand] - recorded[hand]) for hand in HANDS)
+    # with the cube where it was recorded nothing changes, whichever basis
+    still = copy.deepcopy(project)
+    still['keyframes'][after]['motion'] = {'mode': 'delta', 'basis': 'position'}
+    assert np.allclose(resolve_project_motions(robot, still, advise=False)[0]['keyframes'][after]['qpos'], frames[after]['qpos'], atol=1e-9)
+
+
+def test_the_position_basis_is_for_pose_cards_only(robot, project):
+    clip = next(i for i, frame in enumerate(project['keyframes']) if frame.get('samples') is not None and i > 0)
+    project['keyframes'][clip]['motion'] = {'mode': 'delta', 'basis': 'position'}
+    with pytest.raises(ValueError):
+        resolve_project_motions(robot, project)
+    with pytest.raises(ValueError):
+        validate_motion({'mode': 'delta', 'basis': 'tcp'})
+    assert validate_motion({'mode': 'delta'}) == {'mode': 'delta'} == validate_motion({'mode': 'delta', 'basis': 'joint'})
