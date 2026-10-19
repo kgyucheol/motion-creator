@@ -276,3 +276,19 @@ def test_editing_a_card_carries_the_linked_cards_after_it_from_its_new_end(robot
     if after < len(frames):
         assert keyframes[after]['qpos'] == frames[after]['qpos']           # the chain ends at the first card that is not linked
     assert not np.allclose(keyframes[chain[-1]]['qpos'], frames[chain[-1]]['qpos'])
+
+
+def test_hands_are_read_and_placed_relative_to_the_ends_of_a_row(robot):
+    from motioncreator.card_motion import hands_on_row
+    project = json.loads((EXAMPLE.parent / 'pick_all_keyframes.project.json').read_text())
+    linked = next(i for i, frame in enumerate(project['keyframes']) if (frame.get('motion') or {}).get('mode') == 'cartesian')
+    q = project['keyframes'][linked]['qpos']
+    row = {'shape': 'cylinder', 'size': [.13, .13, .6], 'position': [.42, .02, .88], 'quaternion_xyzw': [.7071068, 0, 0, .7071068]}
+    placement = {'left_hand': [.02, .01, .08], 'right_hand': [.03, -.01, .09]}
+    placed = hands_on_row(robot, q, row, placement)
+    assert placed['status'] == 'ok' and placed['max_position_error_mm'] < 3
+    for hand, value in placement.items():
+        assert np.allclose(placed['placement'][hand], value, atol=.003)
+    assert np.allclose(hands_on_row(robot, placed['qpos'], row)['placement']['left_hand'], placement['left_hand'], atol=.003)
+    with pytest.raises(ValueError):
+        hands_on_row(robot, q, {**row, 'shape': 'sphere'})
