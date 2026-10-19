@@ -441,3 +441,38 @@ def _advise(robot: Robot, project, reports):
             reports[index].update(caused_by=cause, **advice)
         if cause not in affected:
             reports[cause].update(blocks=affected, **advice)      # the card to move is not the one that complains
+
+
+def carry_edit(robot: Robot, project, index: int, qpos):
+    """Store an edited pose for card `index` and move the cards linked after it (`delta`, up to the first card that is not)
+    so each keeps its recorded change from the card before: the joint change, or for a `position` pose card the hand move
+    and turn, solved again from the new end. Returns (keyframes, {card index: report}); the input project is not modified."""
+    frames = [dict(frame) for frame in project['keyframes']]
+    if not 0 <= index < len(frames) or frames[index].get('samples') is not None:
+        raise ValueError('Pick a pose card to edit')
+    lower, upper = robot.lower[3 + 12:3 + 29], robot.upper[3 + 12:3 + 29]
+    old_end, new_end = robot.validate_q(frames[index]['qpos']), robot.validate_q(qpos)
+    frames[index]['qpos'] = new_end.tolist()
+    reports = {}
+    for j in range(index + 1, len(frames)):
+        spec = validate_motion(frames[j]['motion']) if frames[j].get('motion') else {'mode': 'recorded'}
+        if spec['mode'] != 'delta':
+            break
+        offset = new_end[COLUMNS] - old_end[COLUMNS]
+        start, end = _card_ends(robot, frames[j])
+        if frames[j].get('samples') is not None:
+            samples = np.stack([robot.validate_q(sample) for sample in frames[j]['samples']])
+            samples[:, COLUMNS] = np.clip(samples[:, COLUMNS] + offset, lower, upper)
+            frames[j] = {**frames[j], 'samples': samples.tolist(), 'qpos': samples[0].tolist()}
+            moved = samples[-1]
+        elif spec.get('basis') == 'position':
+            moved, position_error, angle_error = _position_delta(robot, old_end, new_end, end, offset)
+            reports[j] = {'status': _level(position_error, angle_error), 'max_position_error_mm': position_error,
+                          'max_angle_error_deg': angle_error}
+            frames[j] = {**frames[j], 'qpos': moved.tolist()}
+        else:
+            moved = end.copy()
+            moved[COLUMNS] = np.clip(end[COLUMNS] + offset, lower, upper)
+            frames[j] = {**frames[j], 'qpos': moved.tolist()}
+        old_end, new_end = end, moved
+    return frames, reports

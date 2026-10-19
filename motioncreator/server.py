@@ -677,6 +677,22 @@ def keyframes_to_clip(payload: KeyframesToClipInput):
     return checked(run)
 
 
+class CarryEditInput(BaseModel):
+    project: dict
+    index: int = Field(ge=0)
+    qpos: list[float]
+
+
+@app.post('/api/carry-edit')
+def carry_edit_endpoint(payload: CarryEditInput):
+    """Store an edited pose and move the cards linked after it (앞 카드 이동 연결) so they continue from its new end."""
+    def run():
+        from .card_motion import carry_edit
+        keyframes, reports = carry_edit(robot, payload.project, payload.index, payload.qpos)
+        return {'keyframes': keyframes, 'reports': {str(key): value for key, value in reports.items()}}
+    return checked(run)
+
+
 @app.post('/api/preview')
 def preview(payload: ProjectInput):
     def run():

@@ -1741,6 +1741,32 @@ export default function Editor() {
   const motionObjects = objects.filter(object => !object.ghost);
   const motionReport = preview?.motion_reports?.find(report => report.index === frameIndex) ?? null;
   const modeLabel = { recorded: '원본 그대로', delta: '관절 델타', cartesian: '카테시안' } as const;
+  /** 선택 프레임에 반영: 뒤 카드가 앞 카드 이동 연결로 이어져 있으면 그 카드들도 새 끝점에서 이어지도록 함께 옮긴다. */
+  async function applyPoseToFrame() {
+    if (!project || !state) return;
+    const qpos = [...state.qpos], index = frameIndex;
+    const patch = { pins: [...pins], angle_pins: [...anglePins] };
+    if (project.keyframes[index + 1]?.motion?.mode !== 'delta') {
+      editFrame(index, { qpos, ...patch }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); return;
+    }
+    await run(async () => {
+      const result = await api<{ keyframes: Keyframe[]; reports: Record<string, { status: string; max_position_error_mm: number }> }>('carry-edit', { project, index, qpos });
+      checkpoint();
+      // 자세가 바뀐 카드는 editFrame과 같이 자동 계획의 옛 TCP 목표와 파지 닫힘 정보를 버린다.
+      const keyframes = result.keyframes.map((frame, i) => {
+        const before = project.keyframes[i];
+        if (i !== index && JSON.stringify(frame.qpos) === JSON.stringify(before.qpos) && frame.samples === undefined) return before;
+        const { interaction: _planned, ...rest } = frame;
+        const grasp = rest.grasp ? { ...rest.grasp, closure_qpos: undefined, object_signature: undefined, contact_points_world: undefined, hand_twist_deg: undefined } : undefined;
+        return { ...rest, ...(grasp ? { grasp } : {}), ...(i === index ? patch : {}) };
+      });
+      setProject(p => p ? { ...p, keyframes } : p); invalidate(); setPoseDirty(false);
+      let last = index;
+      while (keyframes[last + 1]?.motion?.mode === 'delta') last++;
+      const missed = Object.entries(result.reports).filter(([, report]) => report.status !== 'ok' && report.status !== 'approx');
+      setMessage(`선택한 키프레임에 반영하고, 이어지는 ${index + 2}~${last + 1}번 카드를 새 끝점에서 이어지도록 옮겼습니다.${missed.length ? ` ${missed.map(([i, report]) => `${+i + 1}번`).join(', ')} 카드는 손 이동을 다 재현하지 못했습니다(오차 ${Math.max(...missed.map(([, report]) => report.max_position_error_mm)).toFixed(0)}mm).` : ''}`);
+    });
+  }
   function setMotion(next: CardMotion | undefined, message?: string) {
     editFrame(frameIndex, { motion: next });
     if (message) setMessage(message);
@@ -2161,7 +2187,7 @@ export default function Editor() {
       </details>
     </aside>
     <section className="timeline">
-      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{clipTotal ? `${clipTotal} clip · ${(project?.keyframes.length ?? 0) - clipTotal} poses` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div>{stage && project?.keyframes[stage.index] && <span className="stage-now" role="status"><b>{String(stage.index + 1).padStart(2, '0')} / {String(project.keyframes.length).padStart(2, '0')}</b> {project.keyframes[stage.index].name}<small>{project.keyframes[stage.index].samples ? '클립' : '포즈'} · {playing ? '재생 중' : '일시정지'} · 전체 {Math.round(stage.overall * 100)}%</small><i><u style={{ width: `${stage.overall * 100}%` }}/></i></span>}<div className="timeline-actions"><button className="replay-open" disabled={!project || busy} onClick={() => setReplayOpen(true)} title="Unitree 기본 정책으로 실제 로봇(또는 가상 로봇)에 재생합니다">로봇 재생</button>{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<small className="transition-hint">{transitionSelection.length === 2 ? `${Math.min(...transitionSelection) + 1}–${Math.max(...transitionSelection) + 1}번 선택` : transitionSelection.length === 1 ? '두 번째 프레임 선택' : '프레임 2개 선택'}</small><button disabled={disabled || transitionSelection.length !== 2 || poseDirty || transitionHasClip} onClick={createSmoothTransition} title="두 키프레임 사이에 편집 가능한 중간 자세를 생성합니다. 파지·도구 상호작용이 포함된 구간과 장애물 회피는 아직 지원하지 않습니다.">중간 키프레임 생성</button><button disabled={disabled || transitionSelection.length !== 2 || poseDirty} onClick={() => void bakeSelectionToClip()} title="고른 두 카드와 그 사이 카드를 녹화된 그대로 클립 하나로 합칩니다. 합친 클립은 마지막 카드의 동작 방식을 가집니다.">선택 구간을 클립으로</button><button disabled={disabled || !activeFrame || activeIsClip} onClick={() => { editFrame(frameIndex, { qpos: [...state!.qpos], pins: [...pins], angle_pins: [...anglePins] }); setPoseDirty(false); setMessage('선택한 키프레임에 현재 자세와 고정 조건을 반영했습니다.'); }}>선택 프레임에 반영</button><button disabled={disabled} className="primary" onClick={addFrame} title={activeIsClip ? "선택한 클립 바로 뒤에, 클립의 마지막 자세에서 시작하는 편집용 자세를 추가합니다." : "선택한 키프레임을 복제해 바로 다음에 추가합니다."}><Plus size={14}/>자세 추가</button></div></div>
+      <div className="timeline-header"><div className="timeline-title">KEYFRAMES <span>{clipTotal ? `${clipTotal} clip · ${(project?.keyframes.length ?? 0) - clipTotal} poses` : `${project?.keyframes.length ?? 0} poses`} · {duration.toFixed(1)}s</span></div>{stage && project?.keyframes[stage.index] && <span className="stage-now" role="status"><b>{String(stage.index + 1).padStart(2, '0')} / {String(project.keyframes.length).padStart(2, '0')}</b> {project.keyframes[stage.index].name}<small>{project.keyframes[stage.index].samples ? '클립' : '포즈'} · {playing ? '재생 중' : '일시정지'} · 전체 {Math.round(stage.overall * 100)}%</small><i><u style={{ width: `${stage.overall * 100}%` }}/></i></span>}<div className="timeline-actions"><button className="replay-open" disabled={!project || busy} onClick={() => setReplayOpen(true)} title="Unitree 기본 정책으로 실제 로봇(또는 가상 로봇)에 재생합니다">로봇 재생</button>{poseDirty && <span className="dirty-tag">편집 자세 · 반영 필요</span>}<small className="transition-hint">{transitionSelection.length === 2 ? `${Math.min(...transitionSelection) + 1}–${Math.max(...transitionSelection) + 1}번 선택` : transitionSelection.length === 1 ? '두 번째 프레임 선택' : '프레임 2개 선택'}</small><button disabled={disabled || transitionSelection.length !== 2 || poseDirty || transitionHasClip} onClick={createSmoothTransition} title="두 키프레임 사이에 편집 가능한 중간 자세를 생성합니다. 파지·도구 상호작용이 포함된 구간과 장애물 회피는 아직 지원하지 않습니다.">중간 키프레임 생성</button><button disabled={disabled || transitionSelection.length !== 2 || poseDirty} onClick={() => void bakeSelectionToClip()} title="고른 두 카드와 그 사이 카드를 녹화된 그대로 클립 하나로 합칩니다. 합친 클립은 마지막 카드의 동작 방식을 가집니다.">선택 구간을 클립으로</button><button disabled={disabled || !activeFrame || activeIsClip} onClick={() => void applyPoseToFrame()}>선택 프레임에 반영</button><button disabled={disabled} className="primary" onClick={addFrame} title={activeIsClip ? "선택한 클립 바로 뒤에, 클립의 마지막 자세에서 시작하는 편집용 자세를 추가합니다." : "선택한 키프레임을 복제해 바로 다음에 추가합니다."}><Plus size={14}/>자세 추가</button></div></div>
       <div className="keyframe-toolbar">{activeFrame ? <>
         <div className="tool-group"><span className={`tool-chip ${activeIsClip ? 'clip' : ''}`}>{frameIndex + 1}번 · {activeIsClip ? `클립 ${activeClipLength}프레임` : '포즈'}</span>
           <input aria-label="키프레임 이름" className="tool-name" value={activeFrame.name} disabled={disabled} onChange={e => editFrame(frameIndex, { name: e.target.value })}/></div>

@@ -241,3 +241,38 @@ def test_the_position_basis_is_for_pose_cards_only(robot, project):
     with pytest.raises(ValueError):
         validate_motion({'mode': 'delta', 'basis': 'tcp'})
     assert validate_motion({'mode': 'delta'}) == {'mode': 'delta'} == validate_motion({'mode': 'delta', 'basis': 'joint'})
+
+
+@pytest.mark.parametrize('basis', ['joint', 'position'])
+def test_editing_a_card_carries_the_linked_cards_after_it_from_its_new_end(robot, basis):
+    """Moving the approach pose moves the linked grasp cards with it; each keeps its recorded change from the card before."""
+    from motioncreator.card_motion import carry_edit
+    project = json.loads((EXAMPLE.parent / 'pick_all_keyframes.project.json').read_text())
+    frames = project['keyframes']
+    linked = next(i for i, frame in enumerate(frames) if (frame.get('motion') or {}).get('mode') == 'cartesian')
+    chain = []
+    for j in range(linked + 1, len(frames)):
+        if (frames[j].get('motion') or {}).get('mode') != 'delta':
+            break
+        chain.append(j)
+    assert len(chain) >= 2
+    frames[chain[0]]['motion'] = {'mode': 'delta', 'basis': basis}
+    edited = np.array(frames[linked]['qpos'], dtype=float)
+    edited[7 + 15] += .1                    # left shoulder pitch
+    edited[7 + 22] += .1                    # right shoulder pitch
+    keyframes, reports = carry_edit(robot, project, linked, edited.tolist())
+    assert np.allclose(keyframes[linked]['qpos'], edited)
+    first = chain[0]
+    if basis == 'joint':
+        assert np.allclose(np.subtract(keyframes[first]['qpos'], keyframes[linked]['qpos'])[7 + 12:],
+                           np.subtract(frames[first]['qpos'], frames[linked]['qpos'])[7 + 12:], atol=1e-9)
+    else:
+        assert reports[first]['status'] in ('ok', 'approx')
+        before, now = (_hand_poses(robot, np.asarray(keyframes[i]['qpos'])) for i in (linked, first))
+        old_before, old_now = (_hand_poses(robot, np.asarray(frames[i]['qpos'])) for i in (linked, first))
+        for hand in HANDS:
+            assert np.linalg.norm((now[hand][0] - before[hand][0]) - (old_now[hand][0] - old_before[hand][0])) < .005
+    after = chain[-1] + 1
+    if after < len(frames):
+        assert keyframes[after]['qpos'] == frames[after]['qpos']           # the chain ends at the first card that is not linked
+    assert not np.allclose(keyframes[chain[-1]]['qpos'], frames[chain[-1]]['qpos'])
