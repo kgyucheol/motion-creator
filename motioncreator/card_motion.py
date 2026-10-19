@@ -482,37 +482,39 @@ PLACE_RELAXATIONS = ((.02, 400), (.005, 600))
 ROW_HAND_ENDS = {'left_hand': 1., 'right_hand': -1.}      # the row axis points toward world +y, the robot's left
 
 
-def hands_on_row(robot: Robot, qpos, item, placement=None):
+def hands_on_row(robot: Robot, qpos, item, placement=None, frame='object'):
     """Where each hand (TCP) is relative to its end of a lying row (`item`, a scene object), and optionally a pose with the hands moved there.
 
-    A hand's place is (inward, toward the robot, up) in metres from its end of the row's centre axis: the left hand takes the end
-    toward world +y, the right hand the other. `placement` maps hands to such triples; the hands keep their current orientation
-    and the waist stays locked unless the arms alone cannot reach (then it bends forward, as for a row-end card).
-    Returns {'placement': {hand: [inward, robot side, up]}} and, with `placement`, also 'qpos' and the per-hand error."""
+    A hand's place is an x, y, z offset in metres from its end of the row's centre axis: the left hand takes the end toward
+    world +y, the right hand the other. With `frame='robot'` the axes are the world's (x forward, y left, z up); with
+    `frame='object'` they turn with the row: y along the row toward its left end, x across it away from the robot, z up
+    (a row lying straight across the robot gives the same axes). `placement` maps hands to such offsets; the hands keep their
+    current orientation and the waist stays locked unless the arms alone cannot reach (then it bends forward).
+    Returns {'placement': {hand: [x, y, z]}} and, with `placement`, also 'qpos' and the per-hand error."""
+    if frame not in ('object', 'robot'):
+        raise ValueError('Hand placement axes are the object\'s or the robot\'s')
     row = row_of(item)
     if row is None:
         raise ValueError('Hands are placed on a lying box or cylinder (a row), not on this object')
     center, axis, length = row
-    frame = row_frame(axis)
+    along = row_frame(axis)
+    axes = np.column_stack([-along[:, 1], along[:, 0], along[:, 2]]) if frame == 'object' else np.eye(3)
     q = robot.validate_q(qpos)
 
     def measure(state):
         data = robot.data(state)
-        out = {}
-        for hand, end in ROW_HAND_ENDS.items():
-            local = frame.T @ (robot.point(data, hand)[0] - (center + end * axis * length / 2))
-            out[hand] = [float(-end * local[0]), float(local[1]), float(local[2])]
-        return out
+        return {hand: (axes.T @ (robot.point(data, hand)[0] - (center + end * axis * length / 2))).tolist()
+                for hand, end in ROW_HAND_ENDS.items()}
     result = {'placement': measure(q)}
     if placement is None:
         return result
     data = robot.data(q)
     goals = {}
     for hand, end in ROW_HAND_ENDS.items():
-        inward, side, up = (float(value) for value in placement[hand])
-        if not all(np.isfinite(value) and abs(value) <= .5 for value in (inward, side, up)):
-            raise ValueError('Hand placement must be within 0.5 m of the row end')
-        goals[hand] = (center + end * axis * length / 2 + frame @ np.array([-end * inward, side, up]),
+        offset = np.asarray(placement[hand], dtype=float)
+        if offset.shape != (3,) or not np.isfinite(offset).all() or np.abs(offset).max() > .5:
+            raise ValueError('Hand placement must be three values within 0.5 m of the row end')
+        goals[hand] = (center + end * axis * length / 2 + axes @ offset,
                        Rotation.from_matrix(robot.point(data, hand)[1]))
     # Starting from the pose being edited, a weak posture preference is enough and lets the hands land on the typed place.
     best = _solve_once(robot, q, {'waist': 'lock'}, goals, PLACE_RELAXATIONS)

@@ -166,7 +166,8 @@ export default function Editor() {
   const [transformMode, setTransformMode] = useState<TransformMode>('translate');
   const [mirror, setMirror] = useState(false);
   const [showMotionAdvanced, setShowMotionAdvanced] = useState(false);
-  // 물체 기준 손 위치 설정창: 손마다 줄 끝에서 [안쪽, 로봇 쪽, 위] mm.
+  // 물체 기준 손 위치 설정창: 손마다 자기 쪽 줄 끝에서 [x, y, z] mm (물체 축 또는 로봇 축).
+  const [placementFrame, setPlacementFrame] = useState<'object' | 'robot'>('object');
   const [showHandPlacement, setShowHandPlacement] = useState(false);
   const [placementObjectId, setPlacementObjectId] = useState<string | null>(null);
   const [handPlacement, setHandPlacement] = useState<Record<'left_hand' | 'right_hand', number[]>>({ left_hand: [0, 0, 0], right_hand: [0, 0, 0] });
@@ -1751,10 +1752,10 @@ export default function Editor() {
     ?? rowObjects.find(object => object.id === selectedObjectId) ?? rowObjects[0];
   type HandsOnRow = { placement: Record<'left_hand' | 'right_hand', number[]>; qpos?: number[]; status?: string; max_position_error_mm?: number };
   /** 지금 편집 중인 자세에서 각 손이 물체 끝 기준 어디에 있는지 읽어 칸에 채운다. */
-  async function readHandPlacement(object = placementObject) {
+  async function readHandPlacement(object = placementObject, frame = placementFrame) {
     if (!object || !state) return;
     await run(async () => {
-      const result = await api<HandsOnRow>('hands-on-row', { qpos: state.qpos, object });
+      const result = await api<HandsOnRow>('hands-on-row', { qpos: state.qpos, object, frame });
       setHandPlacement({ left_hand: result.placement.left_hand.map(v => Math.round(v * 1000)), right_hand: result.placement.right_hand.map(v => Math.round(v * 1000)) });
     });
   }
@@ -1763,7 +1764,7 @@ export default function Editor() {
     if (!placementObject || !state || !project) return;
     let placed: HandsOnRow | null = null;
     await run(async () => {
-      placed = await api<HandsOnRow>('hands-on-row', { qpos: state.qpos, object: placementObject,
+      placed = await api<HandsOnRow>('hands-on-row', { qpos: state.qpos, object: placementObject, frame: placementFrame,
         placement: { left_hand: handPlacement.left_hand.map(v => v / 1000), right_hand: handPlacement.right_hand.map(v => v / 1000) } });
       applyState(await api<PoseState>('pose', { qpos: placed.qpos }));
     });
@@ -2336,13 +2337,16 @@ export default function Editor() {
         </div>
         {!activeIsClip && <div className="tool-group"><span className="tool-label">손 위치</span>
           <button disabled={disabled || !rowObjects.length} aria-pressed={showHandPlacement} onClick={() => { const open = !showHandPlacement; setShowHandPlacement(open); if (open) void readHandPlacement(); }}
-            title={rowObjects.length ? '물체(가로로 누운 박스·원통) 끝을 기준으로 양손 TCP 위치를 숫자로 정하고 이 카드에 적용합니다.' : '가로로 누운 박스나 원통(인식 줄 포함)이 장면에 있어야 합니다.'}>{showHandPlacement ? '물체 기준 닫기' : '물체 기준 설정'}</button>
+            title={rowObjects.length ? '물체(가로로 누운 박스·원통)의 양 끝을 기준으로 양손 TCP 위치를 x·y·z로 정하고 이 카드에 적용합니다.' : '가로로 누운 박스나 원통(인식 줄 포함)이 장면에 있어야 합니다.'}>{showHandPlacement ? '물체 기준 닫기' : '물체 기준 설정'}</button>
           {showHandPlacement && placementObject && <>
             <select aria-label="손 위치 기준 물체" disabled={disabled} value={placementObject.id} onChange={e => { setPlacementObjectId(e.target.value); void readHandPlacement(rowObjects.find(object => object.id === e.target.value)); }}>
               {rowObjects.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}</select>
-            {(['left_hand', 'right_hand'] as const).map(hand => <span key={hand} className="dynamic-offset" title={`${hand === 'left_hand' ? '왼손은 물체의 왼쪽(+y) 끝' : '오른손은 물체의 오른쪽(-y) 끝'} 중심축에서 TCP까지의 거리(mm)입니다. 안쪽 +는 물체 가운데 방향, 로봇 쪽 +는 로봇 방향, 위 +는 위입니다.`}>
+            <select aria-label="손 위치 좌표축" disabled={disabled} value={placementFrame} onChange={e => { const frame = e.target.value as 'object' | 'robot'; setPlacementFrame(frame); void readHandPlacement(placementObject, frame); }}
+              title="물체 기준: 물체를 따라 도는 축(y는 물체 길이 방향, x는 물체를 가로질러 로봇에서 멀어지는 방향, z는 위). 로봇 기준: 로봇의 축(x 앞, y 왼쪽, z 위). 로봇 앞에 똑바로 놓인 물체면 둘이 같습니다.">
+              <option value="object">물체 기준</option><option value="robot">로봇 기준</option></select>
+            {(['left_hand', 'right_hand'] as const).map(hand => <span key={hand} className="dynamic-offset" title={`${hand === 'left_hand' ? '왼손은 물체의 왼쪽 끝' : '오른손은 물체의 오른쪽 끝'} 중심축에서 TCP까지의 이동량(mm)입니다.`}>
               <b>{hand === 'left_hand' ? '왼손' : '오른손'}</b>
-              {(['안쪽', '로봇 쪽', '위'] as const).map((label, i) => <label key={label}>{label}
+              {(['X', 'Y', 'Z'] as const).map((label, i) => <label key={label}>{label}
                 <NumericInput aria-label={`${hand === 'left_hand' ? '왼손' : '오른손'} ${label} (mm)`} step="1" disabled={disabled} value={handPlacement[hand][i]}
                   onChange={e => setHandPlacement(current => ({ ...current, [hand]: current[hand].map((value, j) => j === i ? (+e.target.value || 0) : value) }))}/></label>)}
             </span>)}

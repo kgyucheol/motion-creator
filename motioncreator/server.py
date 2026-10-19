@@ -697,6 +697,7 @@ class HandsOnRowInput(BaseModel):
     qpos: list[float]
     object: dict
     placement: dict[str, list[float]] | None = None
+    frame: str = 'object'
 
 
 @app.post('/api/hands-on-row')
@@ -704,7 +705,7 @@ def hands_on_row_endpoint(payload: HandsOnRowInput):
     """Read (or set) where each hand is relative to its end of a lying row object."""
     def run():
         from .card_motion import hands_on_row
-        return hands_on_row(robot, payload.qpos, payload.object, payload.placement)
+        return hands_on_row(robot, payload.qpos, payload.object, payload.placement, payload.frame)
     return checked(run)
 
 
