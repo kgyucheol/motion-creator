@@ -133,3 +133,15 @@ def test_the_waist_stays_put_when_the_arms_reach_and_bends_forward_only_when_the
     assert set(errors) == {'left_hand', 'right_hand'} and all(len(v) == 3 for v in errors.values())
     assert max(np.linalg.norm(v) for v in errors.values()) <= far_reports[2]['max_position_error_mm'] + 1e-6
     assert 3 < bend <= 30                                              # leaned forward, within the joint limit
+
+
+def test_a_waist_bend_from_a_pose_already_leaning_forward_stops_at_the_joint_limit(robot):
+    from motioncreator.card_motion import _solve_once, ROW_RELAXATIONS
+    project = json.loads(EXAMPLE.read_text())
+    end = np.array(project['keyframes'][2]['qpos'], dtype=float)
+    i = robot.names.index('waist_pitch_joint')
+    end[7 + i] = robot.upper[3 + i] - np.radians(10)                  # 10° from the stop: a 29° bend would pass it
+    poses = _hand_poses(robot, end)
+    goals = {hand: (poses[hand][0] + [.05, 0, 0], Rotation.from_matrix(poses[hand][1])) for hand in ('left_hand', 'right_hand')}
+    solved, _, _ = _solve_once(robot, end, {'waist': 'lock'}, goals, ROW_RELAXATIONS, 29.)
+    assert solved[7 + i] <= robot.upper[3 + i]

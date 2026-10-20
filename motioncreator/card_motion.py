@@ -185,9 +185,9 @@ def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=N
     waist_joints = {}
     if waist_pitch_deg is not None:
         for name in ('waist_yaw_joint', 'waist_roll_joint', 'waist_pitch_joint'):
-            waist_joints[name] = float(end_q[7 + robot.names.index(name)])
-        waist_joints['waist_pitch_joint'] = min(waist_joints['waist_pitch_joint'] + np.radians(waist_pitch_deg),
-                                                float(robot.upper[7 + robot.names.index('waist_pitch_joint')]) - 1e-3)
+            i = robot.names.index(name)          # qpos has 7 root values; the limit arrays 3 (root x, y, z)
+            bend = np.radians(waist_pitch_deg) if name == 'waist_pitch_joint' else 0.
+            waist_joints[name] = float(np.clip(end_q[7 + i] + bend, robot.lower[3 + i] + 1e-3, robot.upper[3 + i] - 1e-3))
     best, initial = None, end_q
     for posture_weight, evaluations in relaxations:
         candidate, info = robot.solve(initial, end_q, pins=(*FEET, 'pelvis'), angle_pins=lock, mode='free', resistance=0.,
