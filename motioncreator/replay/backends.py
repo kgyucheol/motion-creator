@@ -106,7 +106,8 @@ class DdsStateReader:
 
 
 class ArmSdkBackend:
-    """Arm targets over `rt/arm_sdk`, written by a child process. `feedforward(q14)` gives the gravity torque (Nm) sent with each target."""
+    """Arm (and waist) targets over `rt/arm_sdk`, written by a child process. `feedforward(q14, waist)` gives the gravity torque
+    (Nm) of the arms sent with each target; the waist gets none."""
     name, label = 'arm_sdk', '기본 정책 (arm_sdk)'
     START_TIMEOUT_S = 10.0
 
@@ -117,6 +118,7 @@ class ArmSdkBackend:
         self._events: queue.Queue = queue.Queue()
         self._error: str | None = None
         self._retiring: threading.Thread | None = None
+        self.joints = C.ARM_SLICE
 
     # connection (read-only)
     def connect(self) -> None:
@@ -172,7 +174,7 @@ class ArmSdkBackend:
                 self._error = event.get('message')
             self._events.put(event)
 
-    def engage(self, q14: np.ndarray) -> np.ndarray:
+    def engage(self, q: np.ndarray, joints: slice = C.ARM_SLICE) -> np.ndarray:
         if self._retiring is not None:                      # two writers on rt/arm_sdk at once would fight
             self._retiring.join(C.ARM_SDK_RELEASE_S + 4.0)
             if self._retiring.is_alive():
@@ -183,16 +185,19 @@ class ArmSdkBackend:
         threading.Thread(target=self._pump, args=(self._proc,), daemon=True).start()
         try:
             self._wait('ready', self.START_TIMEOUT_S)
-            self._write(op='engage', **{k: v for k, v in self.settings().items() if k != 'ff'})
+            self._write(op='engage', joints=list(range(joints.start, joints.stop)), **{k: v for k, v in self.settings().items() if k != 'ff'})
             self._wait('engaged', C.ARM_SDK_ENGAGE_S + 3.0)
         except CommandError:
             self.release()
             raise
-        return np.asarray(q14, float).copy()
+        self.joints = joints
+        return np.asarray(q, float).copy()
 
-    def send(self, q14: np.ndarray) -> None:
-        tau = self.feedforward(q14) * float(self.settings()['ff'])
-        self._write(op='target', q=np.round(q14, 5).tolist(), tau=np.round(tau, 3).tolist())
+    def send(self, q: np.ndarray) -> None:
+        waist = q[:C.ARM_SLICE.start - self.joints.start]
+        arms = q[C.ARM_SLICE.start - self.joints.start:]
+        tau = np.concatenate([np.zeros(len(waist)), self.feedforward(arms, waist if len(waist) else None) * float(self.settings()['ff'])])
+        self._write(op='target', q=np.round(q, 5).tolist(), tau=np.round(tau, 3).tolist())
 
     def release(self) -> None:
         """Ask the writer to fade the weight out and go; do not wait for it (the player's lock is held)."""
@@ -222,7 +227,7 @@ class ArmSdkBackend:
 
 # ---- simulated robot ---------------------------------------------------------------------------------------------------------
 class MockBackend:
-    """A robot that stands still and whose arms reach whatever is commanded (with a little lag). Same interface as ArmSdkBackend."""
+    """A robot that stands still and whose arms (and waist) reach whatever is commanded (with a little lag). Same interface as ArmSdkBackend."""
     name, label = 'mock', '가상 로봇'
 
     def __init__(self, home_arms: np.ndarray, clock=time.monotonic, threaded: bool = True, lag: float = 0.0):
@@ -230,6 +235,7 @@ class MockBackend:
         self.q = np.zeros(C.N_JOINTS)
         self.q[C.ARM_SLICE] = home_arms
         self.target = np.asarray(home_arms, float).copy()
+        self.joints = C.ARM_SLICE
         self.engaged = False
         self.sent: list[np.ndarray] = []
         self._stop = threading.Event()
@@ -252,7 +258,7 @@ class MockBackend:
         dt, self._last = now - self._last, now
         if self.engaged:
             gain = 1.0 if self.lag <= 0 else min(1.0, dt / self.lag)
-            self.q[C.ARM_SLICE] += gain * (self.target - self.q[C.ARM_SLICE])
+            self.q[self.joints] += gain * (self.target - self.q[self.joints])
 
     def state(self) -> RobotState:
         return RobotState(self.clock(), self.q.copy(), np.zeros(C.N_JOINTS), np.array([1.0, 0.0, 0.0, 0.0]))
@@ -263,16 +269,16 @@ class MockBackend:
     def check(self) -> str | None:
         return '가상 로봇이 이미 제어 중입니다' if self.engaged else None
 
-    def engage(self, q14: np.ndarray) -> np.ndarray:
-        self.engaged = True
-        self.target = np.asarray(q14, float).copy()
+    def engage(self, q: np.ndarray, joints: slice = C.ARM_SLICE) -> np.ndarray:
+        self.engaged, self.joints = True, joints
+        self.target = np.asarray(q, float).copy()
         return self.target.copy()
 
-    def send(self, q14: np.ndarray) -> None:
-        self.target = np.asarray(q14, float).copy()
+    def send(self, q: np.ndarray) -> None:
+        self.target = np.asarray(q, float).copy()
         self.sent.append(self.target.copy())
         if not self.threaded and self.lag <= 0:
-            self.q[C.ARM_SLICE] = self.target
+            self.q[self.joints] = self.target
 
     def release(self) -> None:
         self.engaged = False

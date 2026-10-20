@@ -50,6 +50,7 @@ class ReplayPlayer:
         self.pos, self.speed, self.auto_return, self.start_idx = 0.0, 1.0, True, 0
         self.hz, self.allow_fast = float(C.COMMAND_HZ), False
         self.cmd, self.origin = np.zeros(14), np.zeros(14)
+        self.joints = C.ARM_SLICE                      # the Unitree motors the plan commands: the arms, or the waist and the arms
         self._phase: tuple[np.ndarray, np.ndarray, float, float] | None = None       # q0, q1, t0, duration of the current min-jerk move
         self._last = 0.0
         self._lag_since: float | None = None
@@ -60,11 +61,14 @@ class ReplayPlayer:
     def engaged(self) -> bool:
         return self.state in self.ACTIVE
 
-    def load(self, traj: np.ndarray, fps: float, checks: dict, keyframe_times=()) -> None:
+    def load(self, traj: np.ndarray, fps: float, checks: dict, keyframe_times=(), joints: slice = C.ARM_SLICE) -> None:
         with self._lock:
             if self.engaged:
                 raise CommandError('재생 중에는 모션을 바꿀 수 없습니다. 먼저 복귀·해제하세요')
-            self.traj, self.fps, self.pos, self.fault = np.asarray(traj, float), float(fps), 0.0, None
+            traj = np.asarray(traj, float)
+            if traj.shape[1] != joints.stop - joints.start:
+                raise ValueError('궤적의 관절 수가 제어할 관절과 다릅니다')
+            self.traj, self.fps, self.pos, self.fault, self.joints = traj, float(fps), 0.0, None, joints
             self.checks, self.keyframe_times = checks, list(keyframe_times)
 
     def _at(self, pos: float) -> np.ndarray:
@@ -90,7 +94,7 @@ class ReplayPlayer:
                 raise CommandError(f'몸통 기울기 {st.tilt_deg:.0f}° — 로봇이 안정적이지 않습니다')
             resuming = self.state in ('stopped', 'finished')
             if not resuming:
-                if np.max(np.abs(st.dq[C.ARM_SLICE])) > C.SETTLED_SPEED:
+                if np.max(np.abs(st.dq[self.joints])) > C.SETTLED_SPEED:
                     raise CommandError('팔이 아직 움직이는 중입니다. 멈춘 뒤 다시 시도하세요')
                 backend = self.get_backend()
                 if (reason := backend.check()) is not None:
@@ -101,7 +105,7 @@ class ReplayPlayer:
             limit = self._speed_limit()
             self.speed = float(np.clip(speed, min(C.REPLAY_SPEED_MIN, limit), limit))
             self.auto_return, self.fault, self._lag_since, self._cancel_engage = bool(auto_return), None, None, False
-            current = self.cmd if resuming else st.q[C.ARM_SLICE]
+            current = self.cmd if resuming else st.q[self.joints]
             approach = check_approach(self.traj[self.start_idx], current)
             if resuming:
                 self._begin_move(self.cmd, self.traj[self.start_idx], now, 'approach')
@@ -174,7 +178,7 @@ class ReplayPlayer:
             st = self.get_state()
             if st is None:
                 raise CommandError('로봇 상태가 수신되지 않습니다')
-            q0 = self.backend.engage(st.q[C.ARM_SLICE].copy())
+            q0 = self.backend.engage(st.q[self.joints].copy(), self.joints)
         except CommandError as error:
             with self._lock:
                 self.state, self.fault = 'idle', str(error)
@@ -257,7 +261,7 @@ class ReplayPlayer:
         if self.state not in ('approach', 'playing', 'returning'):
             self._lag_since = None
             return
-        lag = float(np.max(np.abs(self.cmd - st.q[C.ARM_SLICE])))
+        lag = float(np.max(np.abs(self.cmd - st.q[self.joints])))
         if lag > C.TRACKING_FAULT_RAD:
             self._lag_since = self._lag_since or now
             if now - self._lag_since > C.TRACKING_FAULT_S:

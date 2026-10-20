@@ -521,6 +521,7 @@ class ReplayConnectInput(BaseModel):
 class ReplayPrepareInput(BaseModel):
     project: dict
     fps: int = Field(30, ge=1, le=60)
+    waist: bool = False
 
 
 class ReplayStartInput(BaseModel):
@@ -558,7 +559,7 @@ def replay_disconnect():
 
 @app.post('/api/replay/prepare')
 def replay_prepare(payload: ReplayPrepareInput):
-    return replay_checked(lambda: replay_session().prepare(payload.project, payload.fps))
+    return replay_checked(lambda: replay_session().prepare(payload.project, payload.fps, payload.waist))
 
 
 @app.post('/api/replay/start')

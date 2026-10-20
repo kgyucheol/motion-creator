@@ -28,11 +28,11 @@ class ReplaySession:
     def _state(self):
         return None if self.backend is None else self.backend.state()
 
-    def _feedforward(self, q14: np.ndarray) -> np.ndarray:
+    def _feedforward(self, q14: np.ndarray, waist: np.ndarray | None = None) -> np.ndarray:
         robot = self.get_robot()
         if self._gravity is None or self._gravity[0] is not robot:
             self._gravity = (robot, Gravity(robot))
-        return self._gravity[1].torque(q14)
+        return self._gravity[1].torque(q14, waist)
 
     # ---- connection ------------------------------------------------------------------------------------------
     def connect(self, interface: str | None, mock: bool) -> None:
@@ -73,14 +73,15 @@ class ReplaySession:
             return dict(self.settings)
 
     # ---- plan ------------------------------------------------------------------------------------------------
-    def prepare(self, project: dict, fps: int = 30) -> dict:
-        """Compile the project (with the scene objects where they are now) and check it. Does not touch the robot."""
+    def prepare(self, project: dict, fps: int = 30, waist: bool = False) -> dict:
+        """Compile the project (with the scene objects where they are now) and check it. Does not touch the robot.
+        With `waist` the plan also sends the motion's waist (yaw, roll, pitch)."""
         from ..motion import compile_motion
         robot = self.get_robot()
         motion = compile_motion(robot, project, fps)
-        plan = build_plan(robot, motion, fps)
+        plan = build_plan(robot, motion, fps, waist)
         with self._lock:
-            self.player.load(plan['traj'], plan['fps'], plan['checks'], plan['keyframe_times'])
+            self.player.load(plan['traj'], plan['fps'], plan['checks'], plan['keyframe_times'], plan['joints'])
             self.plan = plan
         return self.summary()
 
@@ -91,9 +92,9 @@ class ReplaySession:
         extra = []
         state = self._state()
         if state is not None:
-            approach = check_approach(plan['traj'][0], state.q[C.ARM_SLICE])
+            approach = check_approach(plan['traj'][0], state.q[plan['joints']])
             extra.append({k: approach[k] for k in ('level', 'name', 'text')})
-        return {'duration': plan['duration'], 'frames': len(plan['traj']), 'fps': plan['fps'],
+        return {'duration': plan['duration'], 'frames': len(plan['traj']), 'fps': plan['fps'], 'waist': plan['joints'] == C.UPPER_SLICE,
                 'items': [*plan['checks']['items'], *extra], 'ok': plan['checks']['ok'],
                 'speed_cap': plan['checks']['speed_cap'], 'speed_hard': plan['checks']['speed_hard'],
                 'warnings': sum(item['level'] == 'warn' for item in [*plan['checks']['items'], *extra])}
@@ -131,7 +132,8 @@ class ReplaySession:
         return {'mode': self.mode, 'interface': self.interface, 'connected': self.backend is not None,
                 'read_only': self.read_only, 'settings': dict(self.settings),
                 'robot': None if state is None else {'age': round(state.age(now), 2), 'tilt_deg': round(state.tilt_deg, 1),
-                                                     'arms': np.round(state.q[C.ARM_SLICE], 3).tolist()},
+                                                     'arms': np.round(state.q[C.ARM_SLICE], 3).tolist(),
+                                                     'waist': np.round(state.q[C.WAIST_SLICE], 3).tolist()},
                 'player': self.player.status(), 'plan': self.summary()}
 
     @staticmethod

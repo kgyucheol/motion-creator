@@ -4,10 +4,11 @@ import { RobotScene, type PoseState } from '../lib/robot-scene';
 import { ReplayPanel } from './ReplayPanel';
 
 type Project = { name?: string; mounted_tools?: [string, string] | null; keyframes: { name: string }[] };
-type Status = { mode: 'real' | 'mock' | null; connected: boolean; robot: { age: number; tilt_deg: number; arms: number[] } | null };
+type Status = { mode: 'real' | 'mock' | null; connected: boolean; robot: { age: number; tilt_deg: number; arms: number[]; waist: number[] } | null };
 
 const ARM_NAMES = ['어깨 피치', '어깨 롤', '어깨 요', '팔꿈치', '손목 롤', '손목 피치', '손목 요'];
 const ARM_QPOS = 7 + 15;                     // left 7 then right 7 arm joints in qpos (Unitree order)
+const WAIST_QPOS = 7 + 12;                   // waist yaw, roll, pitch
 const filePath = (name: string) => name.split('/').map(encodeURIComponent).join('/');
 const CHOICE_KEY = 'motioncreator-live-choice';
 
@@ -101,6 +102,7 @@ export default function LivePage() {
         if (next.robot && home.current && scene.current) {
           const qpos = [...home.current];
           next.robot.arms.forEach((value, index) => { qpos[ARM_QPOS + index] = value; });
+          next.robot.waist.forEach((value, index) => { qpos[WAIST_QPOS + index] = value; });
           const pose = await fetch('/api/pose', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ qpos }) })
             .then(responseJson<PoseState>);
           scene.current?.update(pose);
@@ -130,18 +132,19 @@ export default function LivePage() {
         <p>여기서 고른 모션을 오른쪽 패널의 <b>모션 점검</b>으로 확인한 뒤 실행합니다. 편집 중인 모션은 편집기에서 저장해야 목록에 나타납니다.</p>
       </section>
       <section>
-        <h2>측정된 팔 관절 <small>°</small></h2>
+        <h2>측정된 허리·팔 관절 <small>°</small></h2>
         {arms ? <table className="live-joints"><thead><tr><th>관절</th><th>왼팔</th><th>오른팔</th></tr></thead>
           <tbody>{ARM_NAMES.map((name, index) => <tr key={name}><th>{name}</th>
             <td>{(arms[index] * 180 / Math.PI).toFixed(1)}</td><td>{(arms[7 + index] * 180 / Math.PI).toFixed(1)}</td></tr>)}</tbody></table>
           : <p>연결하면 rt/lowstate의 팔 관절 측정값이 여기에 표시됩니다.</p>}
+        {status?.robot && <p>허리 요 {(status.robot.waist[0] * 180 / Math.PI).toFixed(1)}° · 롤 {(status.robot.waist[1] * 180 / Math.PI).toFixed(1)}° · 피치 {(status.robot.waist[2] * 180 / Math.PI).toFixed(1)}°</p>}
         {status?.robot && <p>상태 지연 {status.robot.age.toFixed(2)} s · 몸통 기울기 {status.robot.tilt_deg.toFixed(1)}°</p>}
       </section>
       {error && <p className="error">{error}</p>}
     </aside>
     <section className="wbc-stage">
       <div ref={host} className="wbc-canvas"/>
-      <div className="wbc-stage-label"><span>VIEW</span> 측정된 팔 자세 <i/> 다리·허리는 기본 자세로 표시 (로봇 컨트롤러가 담당)</div>
+      <div className="wbc-stage-label"><span>VIEW</span> 측정된 허리·팔 자세 <i/> 다리는 기본 자세로 표시 (로봇 컨트롤러가 담당)</div>
     </section>
     <aside className="live-control">
       {project

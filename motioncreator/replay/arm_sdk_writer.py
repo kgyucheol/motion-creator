@@ -1,20 +1,22 @@
-"""Ported from g1-live-studio g1live/arm_sdk_writer.py (8411a3d); only the config import and the module path changed.
+"""Ported from g1-live-studio g1live/arm_sdk_writer.py (8411a3d); the config import, the module path and the optional waist changed.
 
 Child process: publishes arm targets on `rt/arm_sdk`, the channel that lets a program move the arms while the robot's own motion
 controller keeps it standing. It is the only place that talks to the Unitree SDK for the replay; the studio sends it JSON lines.
 
     python -m motioncreator.replay.arm_sdk_writer <interface>
 
-stdin   {"op": "engage", ...settings}             hold the arms where they are and fade the weight 0 -> 1; settings: kp_arm, kd_arm,
-                                                   kp_wrist, kd_wrist, hz (defaults and limits in config.ARM_SDK_DEFAULTS / _LIMITS)
-        {"op": "target", "q": [14], "tau": [14]}   joint targets (rad) and feed-forward torque (Nm); also the heartbeat
+stdin   {"op": "engage", "joints": [...], ...settings}   hold the commanded joints where they are and fade the weight 0 -> 1;
+                                                   joints: the motors the targets are for, 15..28 (the arms, default) or 12..28
+                                                   (the waist too, as robot-studio does); settings: kp_arm, kd_arm, kp_wrist,
+                                                   kd_wrist, hz (defaults and limits in config.ARM_SDK_DEFAULTS / _LIMITS)
+        {"op": "target", "q": [n], "tau": [n]}     joint targets (rad) and feed-forward torque (Nm), one per joint; also the heartbeat
         {"op": "release"}                          fade the weight 1 -> 0, then exit
 stdout  {"event": "ready" | "engaged" | "released" | "error", ...}
 
 The weight is `motor_cmd[29].q` (kNotUsedJoint0): 0 = the robot's controller owns the arms, 1 = this program does. If the studio goes
 silent (no message for ARM_SDK_WATCHDOG_S once engaged, or stdin closes) the weight is faded back to 0 on its own.
-Gains and the joint table are those of Unitree's `G1_29_ArmController` (unitree_lerobot): every joint is filled, the non-arm ones hold the
-pose they had when engaging.
+Gains and the joint table are those of Unitree's `G1_29_ArmController` (unitree_lerobot): every joint is filled, the ones not
+commanded hold the pose they had when engaging (the waist at 300/3, as robot-studio sends its waist yaw).
 """
 from __future__ import annotations
 
@@ -33,6 +35,16 @@ WEIGHT_JOINT = 29                                    # kNotUsedJoint0
 WRIST = (19, 20, 21, 26, 27, 28)
 ARM = range(15, 29)
 WEAK_NON_ARM = (4, 10)                               # ankle pitch
+
+
+JOINT_CHOICES = (list(range(15, 29)), list(range(12, 29)))     # the arms, or the waist and the arms
+
+
+def validate_joints(raw) -> list[int]:
+    joints = list(range(15, 29)) if raw is None else [int(j) for j in raw]
+    if joints not in JOINT_CHOICES:
+        raise ValueError("제어 관절은 팔 14축(15~28) 또는 허리와 팔 17축(12~28)이어야 합니다")
+    return joints
 
 
 def validate_settings(raw: dict) -> dict:
@@ -133,6 +145,7 @@ def main(interface: str) -> None:
 
     crc, msg, weight = CRC(), unitree_hg_msg_dds__LowCmd_(), Weight()
     msg.mode_pr, msg.mode_machine = 0, held["low"].mode_machine
+    joints = list(ARM)
     target, tau, sent = np.zeros(14), np.zeros(14), np.zeros(14)
     engaged, releasing, last_heard, announced = False, False, time.monotonic(), False
     settings = dict(C.ARM_SDK_DEFAULTS)
@@ -145,7 +158,7 @@ def main(interface: str) -> None:
             last_heard = now
             if op["op"] == "engage" and not engaged:
                 try:
-                    settings = validate_settings(op)
+                    settings, joints = validate_settings(op), validate_joints(op.get("joints"))
                 except (ValueError, TypeError) as error:
                     emit(event="error", message=f"arm_sdk 설정 오류: {error}")
                     return
@@ -155,12 +168,14 @@ def main(interface: str) -> None:
                     cmd = msg.motor_cmd[j]
                     cmd.mode, cmd.q, cmd.dq, cmd.tau = 1, low.motor_state[j].q, 0.0, 0.0
                     cmd.kp, cmd.kd = gains(j, settings)
-                target = np.array([low.motor_state[j].q for j in ARM])
-                sent, tau = target.copy(), np.zeros(14)                  # the command starts where the arms are
+                target = np.array([low.motor_state[j].q for j in joints])
+                sent, tau = target.copy(), np.zeros(len(joints))         # the command starts where the joints are
                 engaged, announced = True, False
                 weight.ramp_to(1.0, C.ARM_SDK_ENGAGE_S, now)
             elif op["op"] == "target" and engaged and not releasing:
-                target, tau = np.array(op["q"], float), np.array(op["tau"], float)
+                q, t = np.array(op["q"], float), np.array(op["tau"], float)
+                if q.shape == t.shape == (len(joints),) and np.isfinite(q).all() and np.isfinite(t).all():
+                    target, tau = q, t
             elif op["op"] in ("release", "eof") and engaged and not releasing:
                 releasing = True
                 weight.ramp_to(0.0, C.ARM_SDK_RELEASE_S, now)
@@ -172,9 +187,9 @@ def main(interface: str) -> None:
             weight.ramp_to(0.0, C.ARM_SDK_RELEASE_S, now)
             emit(event="error", message="스튜디오에서 목표가 오지 않아 arm_sdk 제어를 해제합니다")
         if engaged:
-            current = np.array([held["low"].motor_state[j].q for j in ARM])
+            current = np.array([held["low"].motor_state[j].q for j in joints])
             sent = limit_command(sent, target, current, C.ARM_SDK_VLIMIT, dt, C.ARM_SDK_MAX_LEAD_RAD)
-            for k, j in enumerate(ARM):
+            for k, j in enumerate(joints):
                 msg.motor_cmd[j].q, msg.motor_cmd[j].dq, msg.motor_cmd[j].tau = float(sent[k]), 0.0, float(tau[k])
             msg.motor_cmd[WEIGHT_JOINT].q = weight.step(now)
             msg.crc = crc.Crc(msg)

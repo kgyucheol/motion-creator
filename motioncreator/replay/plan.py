@@ -1,7 +1,9 @@
-"""From a compiled motion to what the arm_sdk path can play: the 14 arm joints over time, plus the checks that decide whether it may start.
+"""From a compiled motion to what the arm_sdk path can play: the 14 arm joints (and, if asked, the 3 waist joints before them)
+over time, plus the checks that decide whether it may start.
 
-Under Unitree's default policy the robot balances and walks by itself; this program only drives the arms. A motion that moves
-the legs, the pelvis or the waist roll/pitch therefore cannot be replayed faithfully, and the plan says so instead of silently
+Under Unitree's default policy the robot balances and walks by itself; this program drives the arms and optionally the waist,
+the way robot-studio merges its waist targets into the same rt/arm_sdk message. A motion that moves the legs or the pelvis
+(or the waist, when it is not sent) therefore cannot be replayed faithfully, and the plan says so instead of silently
 dropping that part.
 """
 from __future__ import annotations
@@ -15,6 +17,14 @@ LEG_COLUMNS = slice(7, 7 + 12)
 WAIST_YAW_COLUMN = 7 + 12
 WAIST_RP_COLUMNS = slice(7 + 13, 7 + 15)
 ARM_COLUMNS = slice(7 + 15, 7 + 29)
+UPPER_COLUMNS = slice(7 + 12, 7 + 29)
+JOINT_LABELS = ['허리 요', '허리 롤', '허리 피치'] + [f'{side} {name}' for side in ('왼', '오른') for name in
+                                                ('어깨 피치', '어깨 롤', '어깨 요', '팔꿈치', '손목 롤', '손목 피치', '손목 요')]
+
+
+def joint_labels(width: int) -> list[str]:
+    """Names of the columns of a plan: 14 arm joints, or 3 waist joints then the arms."""
+    return JOINT_LABELS[len(JOINT_LABELS) - width:]
 
 
 def resample(times: np.ndarray, qpos: np.ndarray, fps: float) -> np.ndarray:
@@ -36,7 +46,7 @@ def check_trajectory(traj: np.ndarray, fps: float, lower: np.ndarray, upper: np.
     if outside.any():
         ok = False
         frames = int(outside.any(axis=1).sum())
-        items.append({'level': 'bad', 'name': '관절 한계', 'text': f'{frames}개 프레임이 팔 관절 한계를 벗어납니다 (첫 프레임 {int(np.argmax(outside.any(axis=1)))})'})
+        items.append({'level': 'bad', 'name': '관절 한계', 'text': f'{frames}개 프레임이 관절 한계를 벗어납니다 (첫 프레임 {int(np.argmax(outside.any(axis=1)))})'})
     else:
         items.append({'level': 'ok', 'name': '관절 한계', 'text': '모든 프레임이 한계 안입니다'})
     speed = np.abs(np.diff(traj, axis=0)) * fps
@@ -45,7 +55,7 @@ def check_trajectory(traj: np.ndarray, fps: float, lower: np.ndarray, upper: np.
     frame_cap = C.REPLAY_FREQ_MAX / fps
     cap = min(vmax / peak if peak > 0 else np.inf, frame_cap)
     hard = min(C.REPLAY_VMAX_HARD / peak if peak > 0 else np.inf, frame_cap)
-    where = f'프레임 {frame}, 팔 관절 {joint}'
+    where = f'프레임 {frame}, {joint_labels(traj.shape[1])[joint]}'
     if hard < C.REPLAY_SPEED_MIN:
         ok = False
         items.append({'level': 'bad', 'name': '최대 속도', 'text': f'{peak:.1f} rad/s ({where}) — 배율 {hard:.2f} 이하로만 재생할 수 있어 거절합니다'})
@@ -56,8 +66,8 @@ def check_trajectory(traj: np.ndarray, fps: float, lower: np.ndarray, upper: np.
     return {'ok': ok, 'speed_cap': cap if ok else 0.0, 'speed_hard': hard if ok else 0.0, 'items': items}
 
 
-def check_replayable(qpos: np.ndarray) -> list[dict]:
-    """What in the motion the arm_sdk path will not do: legs, pelvis height/tilt, waist roll/pitch and waist yaw, measured against the first frame."""
+def check_replayable(qpos: np.ndarray, waist: bool = False) -> list[dict]:
+    """What in the motion the arm_sdk path will not do: legs, pelvis height/tilt and (unless `waist` is sent) the waist, measured against the first frame."""
     items = []
     legs = float(np.abs(qpos[:, LEG_COLUMNS] - qpos[0, LEG_COLUMNS]).max())
     waist_rp = float(np.abs(qpos[:, WAIST_RP_COLUMNS] - qpos[0, WAIST_RP_COLUMNS]).max())
@@ -72,15 +82,19 @@ def check_replayable(qpos: np.ndarray) -> list[dict]:
         found.append(f'골반 높이 {height * 1000:.0f} mm 변화')
     if tilt > C.ROOT_TILT_TOLERANCE_RAD:
         found.append(f'골반 기울기 {np.degrees(tilt):.1f}° 변화')
-    if waist_rp > C.LOWER_BODY_TOLERANCE_RAD:
+    if not waist and waist_rp > C.LOWER_BODY_TOLERANCE_RAD:
         found.append(f'허리 롤/피치 최대 {np.degrees(waist_rp):.1f}° 변화')
-    if waist_yaw > C.WAIST_YAW_TOLERANCE_RAD:
+    if not waist and waist_yaw > C.WAIST_YAW_TOLERANCE_RAD:
         found.append(f'허리 요 최대 {np.degrees(waist_yaw):.1f}° 변화')
+    sent = '허리 3축과 팔 14축' if waist else '팔 14축'
     if found:
+        hint = '' if waist or not (waist_rp > C.LOWER_BODY_TOLERANCE_RAD or waist_yaw > C.WAIST_YAW_TOLERANCE_RAD) else ' (허리는 "허리 포함"으로 보낼 수 있습니다)'
         items.append({'level': 'warn', 'name': '재생 가능성',
-                      'text': '기본 정책 재생은 팔 14축만 보냅니다. 다음 변화는 재생되지 않습니다: ' + ' · '.join(found)})
+                      'text': f'기본 정책 재생은 {sent}만 보냅니다. 다음 변화는 재생되지 않습니다: ' + ' · '.join(found) + hint})
     else:
-        items.append({'level': 'ok', 'name': '재생 가능성', 'text': '팔 외 관절과 골반은 거의 변하지 않습니다'})
+        items.append({'level': 'ok', 'name': '재생 가능성', 'text': f'{sent} 외의 관절과 골반은 거의 변하지 않습니다'})
+    if waist:
+        items.append({'level': 'ok', 'name': '허리', 'text': f'모션의 허리를 보냅니다: 요 최대 {np.degrees(waist_yaw):.1f}°, 롤/피치 최대 {np.degrees(waist_rp):.1f}° 변화'})
     return items
 
 
@@ -104,16 +118,18 @@ def check_dynamic(reports: list[dict]) -> list[dict]:
     return items
 
 
-def build_plan(robot, motion: dict, fps: float) -> dict:
-    """The replay plan of a compiled motion (`compile_motion` result). `traj` is (T, 14) at `fps`; `items` are the preflight lines."""
+def build_plan(robot, motion: dict, fps: float, waist: bool = False) -> dict:
+    """The replay plan of a compiled motion (`compile_motion` result). `traj` is (T, 14) at `fps`, or (T, 17) with the waist
+    first when `waist`; `joints` is the slice of Unitree motors it commands; `items` are the preflight lines."""
     qpos = resample(motion['time'], motion['qpos'], fps)
-    traj = np.ascontiguousarray(qpos[:, ARM_COLUMNS])
-    lower = np.asarray(robot.lower)[3 + 15:3 + 29]
-    upper = np.asarray(robot.upper)[3 + 15:3 + 29]
+    columns, joints = (UPPER_COLUMNS, C.UPPER_SLICE) if waist else (ARM_COLUMNS, C.ARM_SLICE)
+    traj = np.ascontiguousarray(qpos[:, columns])
+    lower = np.asarray(robot.lower)[3 + joints.start:3 + joints.stop]
+    upper = np.asarray(robot.upper)[3 + joints.start:3 + joints.stop]
     checks = check_trajectory(traj, fps, lower, upper)
-    items = [*checks['items'], *check_replayable(qpos), *check_dynamic(motion.get('dynamic_reports') or [])]
+    items = [*checks['items'], *check_replayable(qpos, waist), *check_dynamic(motion.get('dynamic_reports') or [])]
     ok = checks['ok'] and not any(item['level'] == 'bad' for item in items)
-    return {'traj': traj, 'fps': float(fps), 'checks': {**checks, 'ok': ok, 'items': items},
+    return {'traj': traj, 'joints': joints, 'fps': float(fps), 'checks': {**checks, 'ok': ok, 'items': items},
             'duration': (len(traj) - 1) / fps, 'keyframe_times': list(motion.get('keyframe_times') or []),
             'lower': lower, 'upper': upper}
 
@@ -127,9 +143,11 @@ class Gravity:
         self.home = np.asarray(robot.home, float).copy()
         self.dof = np.asarray(robot.v_indices)[3 + 15:3 + 29]
 
-    def torque(self, q14: np.ndarray) -> np.ndarray:
+    def torque(self, q14: np.ndarray, waist: np.ndarray | None = None) -> np.ndarray:
         q = self.home.copy()
         q[ARM_COLUMNS] = q14
+        if waist is not None:                          # the torso turned or bent: the arms hang differently
+            q[UPPER_COLUMNS.start:ARM_COLUMNS.start] = waist
         self.data.qpos[:] = q
         self.data.qvel[:] = 0.0
         self.data.qacc[:] = 0.0

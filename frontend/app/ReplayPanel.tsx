@@ -2,7 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 type Item = { level: 'ok' | 'warn' | 'bad'; name: string; text: string };
-type Summary = { duration: number; frames: number; fps: number; items: Item[]; ok: boolean; speed_cap: number; speed_hard: number; warnings: number };
+type Summary = { duration: number; frames: number; fps: number; waist: boolean; items: Item[]; ok: boolean; speed_cap: number; speed_hard: number; warnings: number };
 type PlayerStatus = {
   state: 'idle' | 'engaging' | 'approach' | 'playing' | 'paused' | 'stopped' | 'finished' | 'returning';
   time: number; duration: number; speed: number; phase: number | null; keyframe_times: number[]; fault: string | null; fast: boolean; backend: string | null;
@@ -45,6 +45,7 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = fal
   const [nic, setNic] = useState('');
   const [speed, setSpeed] = useState(1);
   const [autoReturn, setAutoReturn] = useState(true);
+  const [waist, setWaist] = useState(false);
   const [fast, setFast] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [safe, setSafe] = useState(false);
@@ -77,6 +78,7 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = fal
   const running = !!player && ACTIVE.includes(player.state);
   const plan = status?.plan ?? null;
   const real = status?.mode === 'real';
+  const blocked = startBlocked || (plan && plan.waist !== waist ? `허리 포함 설정이 점검 때(${plan.waist ? '켬' : '끔'})와 다릅니다. 다시 점검하세요.` : '');
   const stage = player && player.keyframe_times.length
     ? Math.max(0, player.keyframe_times.filter(start => start <= player.time + 1e-6).length - 1) : null;
 
@@ -95,7 +97,7 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = fal
   const panel = <div className={`replay-panel ${inline ? 'inline' : ''}`}>
       <header><strong>로봇 재생 · Unitree 기본 정책</strong>
         {onClose && <button aria-label="닫기" onClick={onClose} disabled={running} title={running ? '재생 중에는 닫을 수 없습니다' : '닫기'}>×</button>}</header>
-      <p className="replay-note">로봇이 자체 모션 모드로 서 있는 상태에서 <b>팔 14축</b>만 <code>rt/arm_sdk</code>로 구동합니다. 다리·골반·허리는 로봇이 정합니다.
+      <p className="replay-note">로봇이 자체 모션 모드로 서 있는 상태에서 <b>팔 14축</b>(허리 포함 시 <b>허리 3축</b>도)을 <code>rt/arm_sdk</code>로 구동합니다. 다리·골반은 로봇이 정하고, 허리를 보내지 않을 때는 제어를 시작한 자세로 허리를 붙잡아 둡니다.
         {status?.read_only ? ' (읽기 전용 모드: 가상 로봇만 사용할 수 있습니다)' : ''}</p>
 
       <section>
@@ -118,9 +120,10 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = fal
       <section>
         <h4>2. 모션 점검</h4>
         <div className="replay-row">
-          <button disabled={working || running} onClick={() => void act(async () => { await call('prepare', { project: getProject(), fps }); onPrepared?.(); })}>현재 프로젝트 점검</button>
+          <button disabled={working || running} onClick={() => void act(async () => { await call('prepare', { project: getProject(), fps, waist }); onPrepared?.(); })}>현재 프로젝트 점검</button>
+          <label title="모션의 허리(요·롤·피치)도 같은 rt/arm_sdk 메시지로 보냅니다(robot-studio의 허리 회전과 같은 방식). 바꾸면 다시 점검하세요."><input type="checkbox" checked={waist} disabled={working || running} onChange={e => setWaist(e.target.checked)}/> 허리 포함</label>
           <button disabled={working} onClick={() => void act(exportEpisode)} title="팔·허리를 LeRobot data.json으로 내보내 robot-studio 등에서 재생할 수 있습니다">data.json 내보내기</button>
-          {plan && <span className="replay-chip">{plan.duration.toFixed(1)}초 · {plan.frames}프레임 · {plan.fps} Hz</span>}
+          {plan && <span className="replay-chip">{plan.duration.toFixed(1)}초 · {plan.frames}프레임 · {plan.fps} Hz · {plan.waist ? '허리+팔 17축' : '팔 14축'}</span>}
         </div>
         {plan && <ul className="replay-items">{plan.items.map((item, index) => <li key={index} className={item.level}><b>{item.name}</b> {item.text}</li>)}</ul>}
       </section>
@@ -135,10 +138,10 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = fal
         </div>
         {!running && <div className="replay-row">
           {!confirming
-            ? <button className="primary" disabled={working || !status?.connected || !plan?.ok || !!startBlocked} onClick={() => real ? setConfirming(true) : void act(() => call('start', { speed, auto_return: autoReturn, allow_fast: fast, confirm: true }))}
-                title={!status?.connected ? '먼저 연결하세요' : !plan ? '먼저 모션을 점검하세요' : !plan.ok ? '점검을 통과하지 못했습니다' : startBlocked}>시작</button>
+            ? <button className="primary" disabled={working || !status?.connected || !plan?.ok || !!blocked} onClick={() => real ? setConfirming(true) : void act(() => call('start', { speed, auto_return: autoReturn, allow_fast: fast, confirm: true }))}
+                title={!status?.connected ? '먼저 연결하세요' : !plan ? '먼저 모션을 점검하세요' : !plan.ok ? '점검을 통과하지 못했습니다' : blocked}>시작</button>
             : <div className="replay-confirm">
-                <p><b>실제 로봇이 움직입니다.</b> {plan?.duration.toFixed(1)}초 분량을 {speed}× 로 재생하고{autoReturn ? ' 끝나면 시작 자세로 복귀합니다' : ' 끝난 자세를 유지합니다'}. 경고 {plan?.warnings ?? 0}건.</p>
+                <p><b>실제 로봇이 움직입니다{plan?.waist ? ' (허리 포함)' : ''}.</b> {plan?.duration.toFixed(1)}초 분량을 {speed}× 로 재생하고{autoReturn ? ' 끝나면 시작 자세로 복귀합니다' : ' 끝난 자세를 유지합니다'}. 경고 {plan?.warnings ?? 0}건.</p>
                 <label><input type="checkbox" checked={safe} onChange={e => setSafe(e.target.checked)}/> 로봇을 거치대나 지지 상태로 두었고, 팔 주변이 비어 있으며, 비상정지를 손이 닿는 곳에 두었습니다</label>
                 <div className="replay-row">
                   <button className="primary" disabled={!safe || working} onClick={() => void act(async () => { await call('start', { speed, auto_return: autoReturn, allow_fast: fast, confirm: true }); setConfirming(false); setSafe(false); })}>실행</button>
@@ -157,7 +160,7 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = fal
           <div className={`replay-bar ${player.state}`}><i style={{ width: `${player.duration ? Math.min(100, player.time / player.duration * 100) : 0}%` }}/></div>
           <span>{STATE_TEXT[player.state]}{player.phase !== null ? ` ${(player.phase * 100).toFixed(0)}%` : ''} · {player.time.toFixed(1)} / {player.duration.toFixed(1)}s{stage !== null && frameNames[stage] ? ` · ${frameNames[stage]}` : ''}</span>
         </div>}
-        {startBlocked && !running && <p className="replay-warn">{startBlocked}</p>}
+        {blocked && !running && <p className="replay-warn">{blocked}</p>}
         {player?.fault && <p className="replay-error">{player.fault}</p>}
         {error && <p className="replay-error">{error}</p>}
       </section>

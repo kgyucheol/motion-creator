@@ -311,3 +311,65 @@ def test_exported_lerobot_episode_imports_back_to_the_same_arms():
     qpos, fps = lerobot_episode_to_qpos(server.robot, json.dumps(episode).encode())
     assert fps == 30 and len(qpos) == 31
     np.testing.assert_allclose(qpos[:, ARM_COLUMNS], reach(31, .2), atol=1e-9)
+
+
+# ---- waist (sent in the same rt/arm_sdk message, as robot-studio does) -----------------------------------------------------
+def waist_project(robot, turn=.4, frames=31):
+    """A motion that turns the waist yaw out and back while the arms stay at HOME_ARMS."""
+    from motioncreator.motion import compile_motion
+    project = project_from_motion_bytes(robot, episode_bytes(np.tile(HOME_ARMS, (frames, 1))), 'x.json', 30)
+    swing = turn * np.sin(np.pi * np.arange(len(project['keyframes'][0]['samples'])) / (len(project['keyframes'][0]['samples']) - 1))
+    for sample, yaw in zip(project['keyframes'][0]['samples'], swing):
+        sample[7 + 12] = float(yaw)
+    return project, compile_motion(robot, project, 30)
+
+
+def test_a_plan_with_the_waist_carries_17_joints_and_no_longer_reports_the_waist_as_dropped(robot):
+    _, motion = waist_project(robot)
+    arms, upper = build_plan(robot, motion, 30), build_plan(robot, motion, 30, waist=True)
+    assert arms['traj'].shape[1] == 14 and arms['joints'] == C.ARM_SLICE
+    assert any(item['name'] == '재생 가능성' and '허리 요' in item['text'] for item in arms['checks']['items'])
+    assert upper['traj'].shape[1] == 17 and upper['joints'] == C.UPPER_SLICE and upper['checks']['ok']
+    assert not any(item['name'] == '재생 가능성' and '허리 요' in item['text'] for item in upper['checks']['items'])
+    assert abs(upper['traj'][:, 0].max() - .4) < .02                       # the waist yaw column is the motion's
+
+
+def test_a_waist_replay_moves_the_simulated_waist_and_returns_it(robot):
+    _, motion = waist_project(robot)
+    plan = build_plan(robot, motion, 30, waist=True)
+    clock = Clock()
+    backend = MockBackend(HOME_ARMS, clock=clock, threaded=False)
+    player = ReplayPlayer(lambda: backend, backend.state, clock=clock, threaded=False)
+    player.load(plan['traj'], 30, plan['checks'], joints=plan['joints'])
+    player.start(1.0, auto_return=True)
+    yaws = []
+    for _ in range(400):
+        clock.now += .02
+        backend.step()
+        player.tick()
+        yaws.append(backend.q[12])
+        if player.state == 'idle':
+            break
+    assert player.state == 'idle' and player.fault is None
+    assert max(yaws) > .35 and abs(backend.q[12]) < 1e-3                    # it turned, then came back to where it started
+    assert all(len(sent) == 17 for sent in backend.sent)
+    with pytest.raises(ValueError):
+        player.load(plan['traj'][:, 3:], 30, plan['checks'], joints=C.UPPER_SLICE)
+
+
+def test_the_writer_takes_the_arms_or_the_waist_and_arms_and_the_waist_gets_no_feedforward(robot):
+    from motioncreator.replay.arm_sdk_writer import validate_joints
+    from motioncreator.replay.backends import ArmSdkBackend
+    assert validate_joints(None) == list(range(15, 29)) and validate_joints(range(12, 29)) == list(range(12, 29))
+    with pytest.raises(ValueError):
+        validate_joints(range(0, 29))
+    assert gains(12) == (300.0, 3.0)                                          # the waist: as robot-studio's controller holds it
+    written = []
+    backend = ArmSdkBackend('eth0', lambda q14, waist: np.full(14, 2.0) if waist is not None else np.ones(14), lambda: dict(C.ARM_SDK_DEFAULTS))
+    backend._write = lambda **op: written.append(op)
+    backend.joints = C.UPPER_SLICE
+    backend.send(np.r_[.1, 0., 0., HOME_ARMS])
+    assert written[-1]['tau'][:3] == [0., 0., 0.] and written[-1]['tau'][3] == 2.0 * C.FF_DEFAULT and len(written[-1]['q']) == 17
+    backend.joints = C.ARM_SLICE
+    backend.send(HOME_ARMS)
+    assert len(written[-1]['q']) == 14 and written[-1]['tau'][0] == 1.0 * C.FF_DEFAULT

@@ -11,6 +11,8 @@ ROBOT_NET = '192.168.123.'
 
 N_JOINTS = 29
 ARM_SLICE = slice(15, 29)                      # left 7 + right 7, Unitree order
+WAIST_SLICE = slice(12, 15)                    # waist yaw, roll, pitch
+UPPER_SLICE = slice(12, 29)                    # waist then arms: what a replay with the waist commands
 ARM14 = {'left': slice(0, 7), 'right': slice(7, 14)}
 
 # ---- safety (enforced on the server whatever the browser sends) ------------------------------------------------------------
@@ -34,7 +36,7 @@ JOINT_MARGIN = 0.02           # rad kept from the model's joint limits
 LOWER_BODY_TOLERANCE_RAD = 0.02    # legs and waist roll/pitch may differ this much from the first frame
 ROOT_HEIGHT_TOLERANCE_M = 0.01
 ROOT_TILT_TOLERANCE_RAD = 0.02
-WAIST_YAW_TOLERANCE_RAD = 0.02     # waist yaw is not sent in this version
+WAIST_YAW_TOLERANCE_RAD = 0.02     # waist yaw, when the waist is not sent
 
 # ---- arm_sdk writer ---------------------------------------------------------------------------------------------------------
 FF_DEFAULT = 0.5              # share of the computed gravity torque sent as feed-forward (untested on the robot: start low)
