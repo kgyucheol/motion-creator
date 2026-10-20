@@ -3,12 +3,13 @@ import { Activity, ArrowLeft } from 'lucide-react';
 import { RobotScene, type PoseState } from '../lib/robot-scene';
 import { ReplayPanel } from './ReplayPanel';
 
-type Project = { name?: string; keyframes: { name: string }[] };
+type Project = { name?: string; mounted_tools?: [string, string] | null; keyframes: { name: string }[] };
 type Status = { mode: 'real' | 'mock' | null; connected: boolean; robot: { age: number; tilt_deg: number; arms: number[] } | null };
 
 const ARM_NAMES = ['어깨 피치', '어깨 롤', '어깨 요', '팔꿈치', '손목 롤', '손목 피치', '손목 요'];
 const ARM_QPOS = 7 + 15;                     // left 7 then right 7 arm joints in qpos (Unitree order)
 const filePath = (name: string) => name.split('/').map(encodeURIComponent).join('/');
+const CHOICE_KEY = 'motioncreator-live-choice';
 
 async function responseJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -27,6 +28,7 @@ export default function LivePage() {
   const host = useRef<HTMLDivElement>(null);
   const scene = useRef<RobotScene | null>(null);
   const home = useRef<number[] | null>(null);
+  const modelRef = useRef<{ model_id: string; tools: string[] | null } | null>(null);
   const [saved, setSaved] = useState<string[]>([]);
   const [choice, setChoice] = useState('');
   const [project, setProject] = useState<Project | null>(null);
@@ -38,7 +40,7 @@ export default function LivePage() {
     let mounted = true;
     let viewer: RobotScene | null = null;
     Promise.all([
-      fetch('/api/init').then(responseJson<{ model_id: string; visual_revision: string; state: PoseState }>),
+      fetch('/api/init').then(responseJson<{ model_id: string; visual_revision: string; state: PoseState; tools: string[] | null }>),
       fetch('/api/saved').then(responseJson<string[]>),
     ]).then(([model, projects]) => {
       if (!mounted || !host.current) return;
@@ -50,7 +52,10 @@ export default function LivePage() {
       viewer.update(model.state);
       scene.current = viewer;
       home.current = model.state.qpos;
-      setSaved(projects); setChoice(projects[0] || '');
+      modelRef.current = { model_id: model.model_id, tools: model.tools };
+      let remembered = '';
+      try { remembered = localStorage.getItem(CHOICE_KEY) ?? ''; } catch { /* private window */ }
+      setSaved(projects); setChoice(projects.includes(remembered) ? remembered : projects[0] || '');
     }).catch(failure => setError((failure as Error).message));
     return () => { mounted = false; viewer?.dispose(); scene.current = null; };
   }, []);
@@ -58,8 +63,28 @@ export default function LivePage() {
   useEffect(() => {
     if (!choice) return;
     let cancelled = false;
+    try { localStorage.setItem(CHOICE_KEY, choice); } catch { /* private window */ }
     fetch(`/api/project/${filePath(choice)}`).then(responseJson<Project>)
-      .then(next => { if (!cancelled) { setProject(next); setError(''); } })
+      .then(async next => {
+        if (cancelled) return;
+        // Like the editor: the server computes with the tools the motion was authored with (their TCP decides the arm poses).
+        const current = modelRef.current;
+        const wanted = next.mounted_tools;
+        if (wanted && current && (current.model_id !== 'g1-tools' || !current.tools || wanted.some((tool, index) => tool !== current.tools![index]))) {
+          const replay = await fetch('/api/replay/status').then(responseJson<Status>);
+          if (replay.connected) {             // never swap the robot model under a connection (or a replay)
+            setProject(null);
+            setError(`이 모션은 ${wanted.join(' / ')} 툴로 만들어졌고, 지금 서버는 ${current.tools?.join(' / ') ?? '기본 손'}입니다. 툴을 맞추려면 오른쪽 패널에서 연결을 해제한 뒤 다시 고르세요.`);
+            return;
+          }
+          const post = (path: string, body: unknown) => fetch(`/api/${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(responseJson);
+          if (current.model_id !== 'g1-tools') await post('model', { model_id: 'g1-tools' });
+          await post('tools', { left: wanted[0], right: wanted[1] });
+          location.reload();
+          return;
+        }
+        setProject(next); setError('');
+      })
       .catch(failure => { if (!cancelled) { setProject(null); setError((failure as Error).message); } });
     return () => { cancelled = true; };
   }, [choice]);
