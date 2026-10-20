@@ -167,3 +167,22 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = fal
     </div>;
   return inline ? panel : <div className="replay-backdrop" role="dialog" aria-label="로봇 재생">{panel}</div>;
 }
+
+/** The robot connection while the robot panel is closed: a chip that opens it, and a stop button whenever the arms are being driven. */
+export function RobotStatusChip({ onOpen }: { onOpen: () => void }) {
+  const [status, setStatus] = useState<Status | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () => call<Status>('status').then(next => { if (alive) setStatus(next); }).catch(() => undefined);
+    void load();
+    const timer = setInterval(() => void load(), 1000);
+    return () => { alive = false; clearInterval(timer); };
+  }, []);
+  if (!status?.connected) return null;
+  const running = ACTIVE.includes(status.player.state);
+  return <span className="robot-chip">
+    <button className={`replay-chip ok ${running ? 'running' : ''}`} onClick={onOpen} title="로봇 패널 열기">
+      {status.mode === 'real' ? '실제 로봇' : '가상 로봇'} · {STATE_TEXT[status.player.state]}</button>
+    {running && <button className="danger" onClick={() => void call('stop', {}).catch(() => undefined)} title="그 자리에서 멈추고 마지막 목표를 계속 보냅니다">정지</button>}
+  </span>;
+}
