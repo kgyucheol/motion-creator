@@ -28,8 +28,17 @@ def test_the_long_axis_of_a_box_and_a_cylinder_point_toward_the_robot_left():
     assert np.allclose(axis, [0, 1, 0]) and length == .5
     _, axis, length = row_of(cylinder([.3, 0, .9], .6, yaw_deg=-80))          # drawn pointing right, reported pointing left
     assert axis[1] > 0 and np.allclose(axis, [np.cos(np.radians(100)), np.sin(np.radians(100)), 0], atol=1e-9) and length == .6
-    assert row_of({**box([0, 0, 0]), 'shape': 'sphere'}) is None
-    assert row_of(box([0, 0, 0], size=(.08, .08, .5))) is None                # upright
+
+
+def test_objects_that_are_not_lying_rows_still_have_two_ends():
+    _, axis, length = row_of(box([0, 0, 0], size=(.08, .12, .5)))             # upright: its longest horizontal side
+    assert np.allclose(axis, [0, 1, 0]) and np.isclose(length, .12)
+    _, axis, length = row_of(box([0, 0, 0], size=(.1, .1, .1), quaternion=Rotation.from_euler('z', 30, degrees=True).as_quat()))
+    assert np.isclose(length, .1) and np.isclose(np.degrees(np.arctan2(axis[1], axis[0])), 120)   # a cube: the side closest to world y
+    upright = {**cylinder([0, 0, 0], .3, diameter=.07), 'quaternion_xyzw': [0, 0, 0, 1]}
+    for item in (upright, {'shape': 'sphere', 'size': [.09, .09, .09], 'position': [0, 0, 0], 'quaternion_xyzw': [0, 0, 0, 1]}):
+        _, axis, length = row_of(item)                                         # across the robot, as wide as the diameter
+        assert np.allclose(axis, [0, 1, 0]) and np.isclose(length, item['size'][0])
 
 
 def test_each_hand_keeps_its_distance_from_its_own_end_when_the_row_is_longer_and_turned():
@@ -74,13 +83,20 @@ def test_the_approach_card_puts_the_hands_at_the_ends_of_a_longer_shifted_row(ro
     assert 0 < (left - left_before)[1] and (right - right_before)[1] < 0             # the hands moved apart, outward
 
 
-def test_a_row_that_is_not_lying_is_reported_and_a_bad_reference_is_rejected(robot):
+def test_a_card_saved_without_ends_takes_the_tracked_object_as_its_reference(robot):
     project = json.loads(EXAMPLE.read_text())
-    upright = box(project['scene_objects'][0]['position'], size=(.08, .08, .5))
-    _, reports = resolve_project_motions(robot, with_ends(project, upright))
-    assert reports[2]['status'] == 'not_a_row'
+    cube = project['scene_objects'][0]
+    target = project['keyframes'][2]['motion']['target']
+    assert 'ends' not in target and target['object_id'] == cube['id']
+    explicit = copy.deepcopy(project)
+    explicit['keyframes'][2]['motion']['target']['ends'] = {'reference': {'shape': cube['shape'], 'size': cube['size'], **target['reference_pose']}}
+    moved = np.add(cube['position'], [.03, .02, 0]).tolist()
+    for item in (project, explicit):
+        item['scene_objects'][0]['position'] = moved
+    (old, old_reports), (new, _) = resolve_project_motions(robot, project), resolve_project_motions(robot, explicit)
+    assert old_reports[2]['status'] in ('ok', 'approx') and np.allclose(old['keyframes'][2]['qpos'], new['keyframes'][2]['qpos'])
     spec = copy.deepcopy(project['keyframes'][2]['motion'])
-    spec['target']['ends'] = {'reference': {**box([0, 0, 1]), 'shape': 'sphere'}}
+    spec['target']['ends'] = {'reference': {**box([0, 0, 1]), 'shape': 'cone'}}
     with pytest.raises(ValueError):
         validate_motion(spec)
 

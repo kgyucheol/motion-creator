@@ -100,9 +100,9 @@ export type CardMotion = {
   /** 앞 카드 이동 연결(delta)이 지키는 변화량: 관절 변화량(기본) 또는 손(TCP) 위치 변화량(포즈 카드만). */
   basis?: 'joint' | 'position';
   target?: { kind: 'object'; object_id: string; reference_pose: { position: number[]; quaternion_xyzw: number[] };
-    /** 양끝 파지: 원본 자세를 만들 때 쓴 물체(가로로 누운 박스·원통). 손은 이 물체의 끝에서 놓인 자리를 새 줄의 같은 쪽 끝에 유지한다. */
-    ends?: { reference: { shape: 'box' | 'open_box' | 'cylinder'; size: number[]; position: number[]; quaternion_xyzw: number[] };
-      /** 지정하면 녹화된 거리 대신, 각 손의 TCP를 줄 끝에서 안쪽·옆(+는 로봇 쪽)·위로 이만큼(m) 떨어진 점에 둔다. */
+    /** 기준 물체: 원본 자세를 만들 때 쓴 물체. 손은 이 물체의 끝에서 놓인 자리를 새 물체의 같은 쪽 끝에 유지한다. 없으면 기준 위치의 추적 물체. */
+    ends?: { reference: { shape: 'box' | 'open_box' | 'cylinder' | 'sphere'; size: number[]; position: number[]; quaternion_xyzw: number[] };
+      /** 양끝 파지: 지정하면 녹화된 거리 대신, 각 손의 TCP를 물체 끝에서 안쪽·옆(+는 로봇 쪽)·위로 이만큼(m) 떨어진 점에 둔다. */
       tcp?: { inward_m: number; lateral_m: number; up_m: number } } } | { kind: 'point'; point: number[] };
   hands?: ('left' | 'right')[];
   offset?: { position: number[]; yaw_deg: number };
@@ -112,7 +112,7 @@ export type CardMotion = {
 };
 
 export type MotionReport = {
-  index: number; mode: CardMotion['mode']; status: 'ok' | 'approx' | 'unreachable' | 'too_far' | 'missing_object' | 'not_a_row' | 'unchanged' | 'limit' | 'partial';
+  index: number; mode: CardMotion['mode']; status: 'ok' | 'approx' | 'unreachable' | 'too_far' | 'missing_object' | 'unchanged' | 'limit' | 'partial';
   /** 'partial': the cube is beyond reach, the hands went this far toward it (a fraction of the requested move). */
   reached_fraction?: number; reached_shift_mm?: number;
   /** 손(TCP)별 월드 좌표 오차 mm = 도달한 위치 − 목표 위치 (x 앞, y 왼쪽, z 위). */

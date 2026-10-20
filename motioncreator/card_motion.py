@@ -6,7 +6,8 @@ Every card (a pose keyframe or a motion clip) has a recorded start pose and end 
 * `delta`     continues from where the previous card really ended and adds the recorded change (the action matters);
               `basis: joint` (default) adds the recorded joint change, `basis: position` (pose cards only) moves the
               hands (TCP) by the recorded hand move and turn and solves the joints for that,
-* `cartesian` the end is moved so the hands reach a target (a tracked scene object or an x, y, z point);
+* `cartesian` the end is moved so the hands reach a target (a tracked scene object or an x, y, z point); with an
+              object each hand goes to its end of the object (see row_ends);
               the recorded shape in between is kept (the target matters).
 
 Cards are resolved in order. What is carried from card to card is the *offset* (resolved minus recorded) of the
@@ -18,7 +19,7 @@ from scipy.spatial.transform import Rotation, Slerp
 from .dynamic_clip import (APPROX_DEG, APPROX_MM, ARM_WAIST_COLUMNS, DEFAULT_MAX_SHIFT_M, FREEDOM, HANDS, OK_DEG, OK_MM,
                            RELAXATIONS, WAIST_MODES, _level, object_delta, scene_object_pose)
 from .robot import FEET, Robot
-from .row_ends import STAND_IN_SHAPES, row_goals, row_of
+from .row_ends import SHAPES, row_goals, row_of
 
 SEARCH_STEPS = 7
 REACH_MM, REACH_DEG = 10., 5.        # a hand this close to its goal counts as having reached it; past that the move stops short
@@ -75,7 +76,7 @@ def validate_motion(spec):
     freedom, waist = spec.get('freedom', 'yaw_xyz'), spec.get('waist', 'lock')
     if freedom not in FREEDOM or waist not in WAIST_MODES:
         raise ValueError('Unknown card motion freedom or waist mode')
-    shift = float(spec.get('max_shift_m', 1. if target.get('ends') else DEFAULT_MAX_SHIFT_M))     # a row-end grasp moves to a different row, not a nudge
+    shift = float(spec.get('max_shift_m', 1. if target['kind'] == 'object' else DEFAULT_MAX_SHIFT_M))     # an object target may move to a different row, not a nudge
     if not np.isfinite(shift) or not .01 <= shift <= 2:
         raise ValueError('Maximum target shift must be 0.01–2 m')
     offset = spec.get('offset') or {}
@@ -91,10 +92,10 @@ def validate_motion(spec):
 
 
 def _validate_ends(spec):
-    """The stand-in row the card was authored against (`ends.reference`), so the hands can be moved to the ends of another row."""
+    """The object the card was authored against (`ends.reference`), so the hands can be moved to the ends of another object."""
     reference = spec.get('reference') if isinstance(spec, dict) else None
-    if not isinstance(reference, dict) or reference.get('shape') not in STAND_IN_SHAPES:
-        raise ValueError('Row-end grasp needs a box or cylinder stand-in as its reference')
+    if not isinstance(reference, dict) or reference.get('shape') not in SHAPES:
+        raise ValueError('Row-end grasp needs a scene object as its reference')
     size = np.asarray(reference.get('size'), dtype=float)
     position = np.asarray(reference.get('position'), dtype=float)
     quaternion = np.asarray(reference.get('quaternion_xyzw'), dtype=float)
@@ -104,8 +105,6 @@ def _validate_ends(spec):
         raise ValueError('Row-end reference position must be three finite values within 5 m')
     if quaternion.shape != (4,) or not np.isfinite(quaternion).all() or abs(np.linalg.norm(quaternion) - 1) > 1e-3:
         raise ValueError('Row-end reference orientation must be a normalised xyzw quaternion')
-    if row_of({'shape': reference['shape'], 'size': size, 'position': position, 'quaternion_xyzw': quaternion}) is None:
-        raise ValueError('Row-end reference must lie roughly horizontal')
     out = {'reference': {'shape': reference['shape'], 'size': size.tolist(), 'position': position.tolist(),
                          'quaternion_xyzw': quaternion.tolist()}}
     if spec.get('tcp') is not None:
@@ -137,17 +136,11 @@ def _hand_goals(robot: Robot, end_q, spec, project, index):
     target = spec['target']
     data = robot.data(end_q)
     hands = {f'{side}_hand': robot.point(data, f'{side}_hand') for side in spec['hands']}
-    if target['kind'] == 'object' and target.get('ends'):
-        return _row_end_goals(spec, hands, project, index)
     if target['kind'] == 'object':
-        pose = scene_object_pose(project, target['object_id'])
-        if pose is None:
-            return None, None, _report('missing_object', index, 'cartesian')
-        reference, now_position, now_quaternion = target['reference_pose'], pose[0], pose[1]
-    else:
-        middle = np.mean([position for position, _ in hands.values()], axis=0)
-        reference = {'position': middle.tolist(), 'quaternion_xyzw': [0., 0., 0., 1.]}
-        now_position, now_quaternion = target['point'], [0., 0., 0., 1.]
+        return _row_end_goals(spec, hands, project, index)
+    middle = np.mean([position for position, _ in hands.values()], axis=0)
+    reference = {'position': middle.tolist(), 'quaternion_xyzw': [0., 0., 0., 1.]}
+    now_position, now_quaternion = target['point'], [0., 0., 0., 1.]
     rotation, reference_position, now_position = object_delta({**spec, 'reference_pose': reference}, now_position, now_quaternion)
     goals = {hand: (now_position + rotation.apply(position - reference_position), (rotation * Rotation.from_matrix(matrix)))
              for hand, (position, matrix) in hands.items()}
@@ -157,17 +150,19 @@ def _hand_goals(robot: Robot, end_q, spec, project, index):
 
 
 def _row_end_goals(spec, hands, project, index):
-    """Goals that put each hand at its end of the tracked row (see row_ends), plus the card's own TCP offset."""
+    """Goals that put each hand at its end of the tracked object (see row_ends), plus the card's own TCP offset.
+
+    A card without `ends` (saved before every object target became a row-end grasp) takes the tracked object, as it
+    was at `reference_pose`, as its reference."""
     from .motion import project_scene_objects
     target = spec['target']
     item = next((item for item in project_scene_objects(project) if item.get('id') == target['object_id']), None)
     if item is None:
         return None, None, _report('missing_object', index, 'cartesian')
     row = row_of(item)
-    if row is None:
-        return None, None, _report('not_a_row', index, 'cartesian')
-    reference = row_of(target['ends']['reference'])
-    tcp = target['ends'].get('tcp')
+    ends = target.get('ends') or {'reference': {'shape': item['shape'], 'size': item['size'], **target['reference_pose']}}
+    reference = row_of(ends['reference'])
+    tcp = ends.get('tcp')
     goals, _ = row_goals(reference, row, hands, None if tcp is None else (tcp['inward_m'], tcp['lateral_m'], tcp['up_m']))
     offset = spec['offset']
     turn = Rotation.from_euler('z', offset['yaw_deg'], degrees=True)
@@ -217,11 +212,11 @@ def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=N
 def _solve_end(robot: Robot, end_q, spec, goals, coarse=False):
     """The waist and arm joints that put the hands on `goals`, starting from the recorded end. Returns (q, errors).
 
-    A row-end grasp first tries with the waist as the card asks (locked by default) and the elbows free to straighten;
+    An object target (a row-end grasp) first tries with the waist as the card asks (locked by default) and the elbows free to straighten;
     only when the hands still miss does it bend the waist forward, as little as possible (5° steps up to 29°; `coarse`, used while
     searching how far the hands can go, tries only the largest bends to stay fast)."""
     target = spec.get('target') or {}
-    if not (target.get('kind') == 'object' and target.get('ends')):
+    if target.get('kind') != 'object':
         return _solve_once(robot, end_q, spec, goals, RELAXATIONS)
     best = _solve_once(robot, end_q, spec, goals, ROW_RELAXATIONS)
     if best[1] < REACH_MM and best[2] < REACH_DEG:
@@ -387,13 +382,16 @@ def _target_shift(robot: Robot, project, index):
         pose = scene_object_pose(project, target['object_id'])
         if pose is None:
             return None
-        reference = np.asarray(target['reference_pose']['position'], dtype=float)
+        held = target.get('ends', {}).get('reference', target['reference_pose'])
+        reference = np.asarray(held['position'], dtype=float)
         shift = np.asarray(pose[0], dtype=float) - reference
 
         def scaled(fraction):
-            moved = reference + (1 - fraction) * shift      # the reference moves toward the object: less of the move is left
-            motion = {**frame['motion'], 'target': {**target, 'reference_pose': {**target['reference_pose'], 'position': moved.tolist()}}}
-            return {**frame, 'motion': motion}
+            moved = (reference + (1 - fraction) * shift).tolist()      # the reference moves toward the object: less of the move is left
+            changed = {**target, 'reference_pose': {**target['reference_pose'], 'position': moved}}
+            if 'ends' in target:
+                changed['ends'] = {**target['ends'], 'reference': {**target['ends']['reference'], 'position': moved}}
+            return {**frame, 'motion': {**frame['motion'], 'target': changed}}
         return shift, scaled
     _, end = _card_ends(robot, frame)
     data = robot.data(end)

@@ -79,7 +79,7 @@ def test_a_point_target_moves_the_hands_to_the_coordinate(robot, project):
 
 
 def test_unreachable_far_and_missing_objects_are_reported_not_raised(robot, project):
-    _, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), [.12, 0., 0.]))
+    _, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), [.4, 0., 0.]))     # past a full waist bend
     assert reports[2]['status'] == 'partial'
     assert reports[3].get('after_unreachable') == 2
     _, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), [.5, 0., 0.]))
@@ -193,7 +193,7 @@ def test_the_all_keyframe_examples_have_no_clips_play_smoothly_and_keep_the_leng
 
 def test_a_cube_beyond_reach_is_followed_as_far_as_the_arms_go(robot, project):
     """The hands end as close to the grasp point as they can reach, in the direction of the cube, not left at the recording."""
-    shift = np.array([.12, 0., 0.])
+    shift = np.array([.4, 0., 0.])                    # past what the arms reach even with the waist bent forward
     resolved, reports = resolve_project_motions(robot, move_cube(copy.deepcopy(project), shift))
     report = reports[2]
     assert report['status'] == 'partial' and 0 < report['reached_fraction'] < 1

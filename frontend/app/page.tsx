@@ -1785,8 +1785,8 @@ export default function Editor() {
     const chosen = motionObjects.find(object => object.id === selectedObjectId) ?? motionObjects[0];
     const common = { mode: 'cartesian' as const, hands: ['left', 'right'] as ('left' | 'right')[], freedom: 'yaw_xyz' as const, waist: 'lock' as const, offset: { position: [0, 0, 0], yaw_deg: 0 } };
     if (chosen) {
-      setMotion({ ...common, target: { kind: 'object', object_id: chosen.id, reference_pose: { position: [...chosen.position], quaternion_xyzw: [...chosen.quaternion_xyzw] } } },
-        `"${chosen.name}"의 지금 위치를 기준으로 지정했습니다. 물체를 옮기면 이 카드의 끝 지점만 따라가고, 뒤의 델타 카드가 이어서 움직입니다. 기준은 녹화 때 물체가 있던 자리여야 합니다.`);
+      setMotion({ ...common, target: objectTarget(chosen) },
+        `"${chosen.name}"을 기준 물체로 지정했습니다. 각 손은 이 물체의 양 끝 중 가까운 쪽에서 놓인 자리를 유지하므로, 다른 물체를 고르거나 물체를 옮기면 손이 그 물체의 양 끝으로 갑니다. 기준은 녹화 때 물체가 있던 자리여야 합니다.`);
       return;
     }
     await run(async () => {
@@ -1801,6 +1801,17 @@ export default function Editor() {
     if (!motionObjects.length) { setError('장면에 오브젝트가 없습니다. 먼저 물체를 추가하세요.'); return; }
     await chooseMotionMode('cartesian');
   }
+  /** 물체 연결 목표: 지금 물체가 기준 위치이자 양끝 파지의 기준 물체(원본 자세를 만든 물체)가 된다. */
+  function objectTarget(object: SceneObject): ObjectTarget {
+    return { kind: 'object', object_id: object.id, reference_pose: { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] },
+      ends: { reference: { shape: object.shape, size: [...object.size], position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } };
+  }
+  /** 기준 물체가 없는(양끝 파지가 기본이 되기 전에 저장된) 카드는 기준 위치의 추적 물체를 기준 물체로 삼는다. 서버도 같은 규칙을 쓴다. */
+  function targetEnds(target: ObjectTarget): NonNullable<ObjectTarget['ends']> | undefined {
+    if (target.ends) return target.ends;
+    const object = objects.find(item => item.id === target.object_id);
+    return object && { reference: { shape: object.shape, size: [...object.size], ...target.reference_pose } };
+  }
   function patchMotion(patch: Partial<CardMotion>) { if (activeFrame?.motion) setMotion({ ...activeFrame.motion, ...patch }); }
   async function chooseTargetKind(kind: 'object' | 'point') {
     const motion = activeFrame?.motion;
@@ -1809,24 +1820,27 @@ export default function Editor() {
     if (kind === 'object') {
       const chosen = motionObjects.find(object => object.id === selectedObjectId) ?? motionObjects[0];
       if (!chosen) { setError('장면에 오브젝트가 없습니다. 먼저 물체를 추가하세요.'); return; }
-      patchMotion({ target: { kind: 'object', object_id: chosen.id, reference_pose: { position: [...chosen.position], quaternion_xyzw: [...chosen.quaternion_xyzw] } } });
+      patchMotion({ target: objectTarget(chosen) });
     } else await run(async () => { const point = await recordedHandMiddle(frameIndex); if (point) patchMotion({ target: { kind: 'point', point } }); });
   }
-  function toggleRowEnds(on: boolean) {
-    const target = activeFrame?.motion?.target;
-    if (target?.kind !== 'object') return;
-    checkpoint();
-    if (!on) { const { ends: _ends, ...rest } = target; patchMotion({ target: rest }); setMessage('양끝 파지를 껐습니다. 손은 물체의 이동량만큼 따라갑니다.'); return; }
-    const object = objects.find(item => item.id === target.object_id);
-    if (!object || !['box', 'open_box', 'cylinder'].includes(object.shape)) { setError('양끝 파지의 기준은 가로로 누운 박스나 원통이어야 합니다.'); return; }
-    patchMotion({ target: { ...target, ends: { reference: { shape: object.shape as 'box' | 'open_box' | 'cylinder', size: [...object.size], position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } } });
-    setMessage(`"${object.name}"을 손 위치의 기준 물체로 저장했습니다. 이제 다른 줄을 고르면 손이 그 줄의 양 끝으로 갑니다.`);
-  }
+  /** 양끝 파지: 켜면 녹화된 손 거리 대신 각 손의 TCP를 물체 끝점에서 안쪽·옆·위 오프셋(처음 0)만큼 떨어진 점에 둔다. */
   function setRowEndTcp(tcp: { inward_m: number; lateral_m: number; up_m: number } | undefined) {
     const target = activeFrame?.motion?.target;
-    if (target?.kind !== 'object' || !target.ends) return;
-    const { tcp: _old, ...ends } = target.ends;
-    patchMotion({ target: { ...target, ends: tcp ? { ...ends, tcp } : ends } });
+    if (target?.kind !== 'object') return;
+    const ends = targetEnds(target);
+    if (!ends) { setError('기준으로 삼을 오브젝트가 장면에 없습니다.'); return; }
+    checkpoint();
+    const { tcp: _old, ...rest } = ends;
+    patchMotion({ target: { ...target, ends: tcp ? { ...rest, tcp } : rest } });
+  }
+  /** 추적할 물체를 바꾼다. 기준 물체는 그대로라서 손이 새 물체의 양 끝으로 간다. */
+  function chooseTrackedObject(id: string) {
+    const target = activeFrame?.motion?.target;
+    const object = objects.find(item => item.id === id);
+    if (target?.kind !== 'object' || !object) return;
+    const ends = targetEnds(target);
+    checkpoint();
+    patchMotion({ target: { ...target, object_id: object.id, reference_pose: { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] }, ...(ends ? { ends } : {}) } });
   }
   function recaptureMotionReference() {
     const target = activeFrame?.motion?.target;
@@ -1835,7 +1849,7 @@ export default function Editor() {
     if (!object) { setError('기준으로 삼을 오브젝트가 장면에 없습니다.'); return; }
     checkpoint();
     patchMotion({ target: { ...target, reference_pose: { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } });
-    setMessage(target.ends ? '물체의 지금 위치를 기준으로 다시 잡았습니다. 양끝 파지가 켜져 있어 손은 이 줄의 양 끝에 놓입니다.' : '물체의 지금 위치를 기준으로 다시 잡았습니다.');
+    setMessage('물체의 지금 위치를 기준으로 다시 잡았습니다. 손이 가는 양 끝은 기준 물체로 정해지므로 바뀌지 않습니다.');
   }
   /** 월드 좌표 이동량(mm)을 "앞 3.5cm · 위 2.0cm"처럼 읽는다. 5mm 미만 성분은 생략한다. */
   function describeShift(mm: number[]) {
@@ -1863,7 +1877,6 @@ export default function Editor() {
       case 'unreachable': return `도달 불가${error}${perHand}`;
       case 'limit': return `관절 한계에 걸림 · ${(report.clamped_deg ?? 0).toFixed(0)}°`;
       case 'too_far': return `너무 멂 · ${(report.shift_mm ?? 0).toFixed(0)}mm (한도 ${(report.max_shift_mm ?? 0).toFixed(0)}mm)`;
-      case 'not_a_row': return '가로로 누운 줄이 아님';
       default: return '물체를 찾을 수 없음';
     }
   }
@@ -2255,18 +2268,13 @@ export default function Editor() {
             {(activeIsClip || activeFrame.motion.target.kind === 'point') && <select aria-label="목표 종류" disabled={disabled} value={activeFrame.motion.target.kind} onChange={e => void chooseTargetKind(e.target.value as 'object' | 'point')}>
               <option value="object">물체 추적</option><option value="point">좌표</option></select>}
             {activeFrame.motion.target.kind === 'object' ? <>
-              <select aria-label="추적할 물체" disabled={disabled} value={activeFrame.motion.target.object_id} onChange={e => {
-                const object = objects.find(item => item.id === e.target.value);
-                if (object && activeFrame.motion?.target?.kind === 'object') patchMotion({ target: { ...activeFrame.motion.target, object_id: object.id, reference_pose: { position: [...object.position], quaternion_xyzw: [...object.quaternion_xyzw] } } });
-              }}>
+              <select aria-label="추적할 물체" disabled={disabled} value={activeFrame.motion.target.object_id} onChange={e => chooseTrackedObject(e.target.value)}>
                 {activeFrame.motion.target.object_id && !motionObjects.some(object => object.id === (activeFrame.motion!.target as { object_id: string }).object_id) ? <option value={activeFrame.motion.target.object_id}>(없는 물체)</option> : null}
                 {motionObjects.map(object => <option key={object.id} value={object.id}>{object.name}</option>)}</select>
               <button disabled={disabled} onClick={recaptureMotionReference} title="물체의 지금 위치를 녹화 때의 위치로 다시 저장합니다. 이 위치에서는 카드가 원본 그대로입니다.">기준 다시 잡기</button>
-              <label className="dynamic-hand" title="켜면 손이 고른 줄의 양 끝으로 갑니다. 켜는 순간 선택된 물체(원본 자세를 만든 가로 박스·원통)가 기준으로 저장되고, 각 손은 그 물체의 끝에서 놓인 거리(바깥쪽 오프셋 포함)를 새 줄의 같은 쪽 끝에 그대로 유지합니다. 줄의 길이와 방향이 달라도 따라갑니다. 추가로 더할 오프셋은 아래 오프셋 칸에 넣습니다.">
-                <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.target.ends} onChange={e => toggleRowEnds(e.target.checked)}/>양끝 파지</label>
-              {activeFrame.motion.target.ends && <label className="dynamic-hand" title="켜면 녹화된 손 거리 대신 아래 값으로 각 손의 TCP 위치를 정합니다. 줄의 양 끝점(중심축)에서 안쪽·옆·위로 떨어진 점입니다.">
-                <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.target.ends.tcp} onChange={e => setRowEndTcp(e.target.checked ? { inward_m: 0, lateral_m: 0, up_m: 0 } : undefined)}/>TCP 기준</label>}
-              {activeFrame.motion.target.ends?.tcp && <span className="dynamic-offset" title="각 손의 TCP가 줄 끝점에서 얼마나 떨어질지(mm). 안쪽은 줄 가운데 방향, 옆은 +가 로봇 쪽, 위는 +z입니다.">
+              <label className="dynamic-hand" title="물체 연결은 항상 양 끝을 기준으로 손을 놓습니다. 끄면 각 손이 녹화 때 기준 물체의 끝에서 놓인 거리를 새 물체의 같은 쪽 끝에 유지합니다. 켜면 그 대신 각 손의 TCP를 물체 끝점(중심축 끝)에서 아래 안쪽·옆·위 값만큼 떨어진 점에 둡니다(양손 같은 값).">
+                <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.target.ends?.tcp} onChange={e => setRowEndTcp(e.target.checked ? { inward_m: 0, lateral_m: 0, up_m: 0 } : undefined)}/>양끝 파지</label>
+              {activeFrame.motion.target.ends?.tcp && <span className="dynamic-offset" title="각 손의 TCP가 물체 끝점에서 얼마나 떨어질지(mm, 양손 같은 값). 안쪽은 물체 가운데 방향, 옆은 +가 로봇 쪽, 위는 +z입니다.">
                 {([['inward_m', '안쪽'], ['lateral_m', '옆'], ['up_m', '위']] as const).map(([key, label]) => <label key={key}>{label}
                   <NumericInput aria-label={`TCP ${label} (mm)`} step="1" disabled={disabled} value={Math.round(((activeFrame.motion!.target as ObjectTarget).ends!.tcp![key]) * 1000)}
                     onChange={e => setRowEndTcp({ ...(activeFrame.motion!.target as ObjectTarget).ends!.tcp!, [key]: (+e.target.value || 0) / 1000 })}/></label>)}
