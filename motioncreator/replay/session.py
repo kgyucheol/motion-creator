@@ -109,6 +109,21 @@ class ReplaySession:
             raise CommandError('로봇(또는 가상 로봇)에 먼저 연결하세요')
         return self.player.start(speed, auto_return, allow_fast)
 
+    def move_to(self, qpos, waist: bool, confirm: bool) -> dict:
+        """Move the robot's arms (and the waist with `waist`) to one editor pose (a full qpos) and hold it."""
+        if not confirm:
+            raise CommandError('실행 확인이 필요합니다')
+        if self.mode == 'real' and self.read_only:
+            raise CommandError('읽기 전용 모드에서는 실제 로봇을 움직이지 않습니다')
+        if self.backend is None:
+            raise CommandError('로봇(또는 가상 로봇)에 먼저 연결하세요')
+        robot = self.get_robot()
+        q = robot.validate_q(qpos)
+        joints = C.UPPER_SLICE if waist else C.ARM_SLICE
+        lower = np.asarray(robot.lower)[3 + joints.start:3 + joints.stop]
+        upper = np.asarray(robot.upper)[3 + joints.start:3 + joints.stop]
+        return self.player.move_to(q[7 + joints.start:7 + joints.stop], joints, lower, upper)
+
     def pause(self, on: bool) -> None:
         self.player.pause(on)
 

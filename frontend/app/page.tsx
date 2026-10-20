@@ -7,7 +7,7 @@ import RamenSequenceControls, { type RamenSequenceSettings } from './ramen-seque
 import BodyControls from './body-controls';
 import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, groupForControl, visibleTreeHandles, expandVirtualControls } from '../lib/body-groups';
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes, PersonStanding, ArrowDownToLine, Scissors } from 'lucide-react';
-import { ReplayPanel, RobotStatusChip } from './ReplayPanel';
+import { ReplayPanel, RobotStatusChip, type PoseSource } from './ReplayPanel';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
 import { eulerDegrees, fromLocalAxes, toLocalAxes, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import type { WorldRow } from '../lib/detected-objects';
@@ -1992,6 +1992,20 @@ export default function Editor() {
   const activeClipLength = activeFrame?.samples?.length ?? 0;
   const selectedGroup = allNodes().find(node => node.children && nodeMembers(node).length === members.length && nodeMembers(node).every(key => members.includes(key)));
 
+  /** 로봇 패널 '자세 보내기'의 두 자세: 지금 편집 중인 자세와, 미리보기가 계산한 선택 카드의 자세(물체 연결 등이 반영된 결과). */
+  function robotPoses(): PoseSource[] {
+    const card = `${frameIndex + 1}번 카드 자세로`;
+    const times = preview?.keyframe_times;
+    let cardPose: PoseSource = { label: card, qpos: null, reason: '미리보기를 먼저 만드세요. 카드 자세는 미리보기가 계산한 결과(물체 연결 등 반영)를 보냅니다.' };
+    if (preview?.physics) cardPose = { ...cardPose, reason: '물리 미리보기 결과는 보내지 않습니다. 물리를 끄고 미리보기를 다시 만드세요.' };
+    else if (preview && times && times[frameIndex] !== undefined) {
+      const at = times[frameIndex];
+      let nearest = 0;
+      preview.time.forEach((t, i) => { if (Math.abs(t - at) < Math.abs(preview.time[nearest] - at)) nearest = i; });
+      cardPose = { label: card, qpos: preview.states[nearest]?.qpos ?? null };
+    }
+    return [{ label: '편집 자세 보내기', qpos: state?.qpos ?? null, reason: state ? undefined : '로봇 자세를 불러오는 중입니다' }, cardPose];
+  }
   const robotBlocked = !checkedFor ? '' : checkedFor.project !== project || checkedFor.objects !== objects || checkedFor.groups !== objectGroups || checkedFor.tools !== tools
     ? '점검한 뒤에 프로젝트·장면 물체·툴이 바뀌었습니다. 지금 장면으로 다시 점검하세요.' : '';
   return <div className={`editor ${robotOpen ? 'robot-open' : ''}`}>
@@ -2357,7 +2371,7 @@ export default function Editor() {
       <ReplayPanel inline fps={fps} frameNames={project.keyframes.map(frame => frame.name)} onClose={() => setRobotOpen(false)}
         getProject={() => sceneProject(current.current.project ?? project)}
         onPrepared={() => setCheckedFor({ project, objects, groups: objectGroups, tools })}
-        startBlocked={robotBlocked}/>
+        startBlocked={robotBlocked} poses={robotPoses}/>
     </aside>}
     <footer className={`statusbar ${error ? 'error' : ''}`}><span>{error ? <AlertCircle size={13}/> : <span className="status-dot"/>}{error || message}</span><span>{physicsEnabled || objectPhysicsEnabled ? `MuJoCo + ${controllerLabel} · ${preview?.physics ? '시뮬레이션 결과' : 'CPU 재생 준비'}` : '원본 모션 · 물리 OFF'}</span></footer>
   </div>;

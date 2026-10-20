@@ -38,8 +38,11 @@ def check_approach(first: np.ndarray, current: np.ndarray, vmax: float = C.REPLA
 
 class ReplayPlayer:
     """engaging -> approach -> playing <-> paused -> finished, then returning to the pose the arms started from and releasing.
-    `stopped` holds the last target. Going home is a separate request."""
-    ACTIVE = ('engaging', 'approach', 'playing', 'paused', 'stopped', 'finished', 'returning')
+    `stopped` holds the last target. Going home is a separate request.
+    A single pose (the editor's, or a card's) is sent with `move_to`: engaging -> moving -> holding, which keeps commanding it
+    until the next pose, a replay or going home."""
+    ACTIVE = ('engaging', 'approach', 'playing', 'paused', 'stopped', 'finished', 'returning', 'moving', 'holding')
+    SETTLED = ('stopped', 'finished', 'holding')            # still engaged, commanding a fixed target
 
     def __init__(self, get_backend, get_state, clock=time.monotonic, threaded: bool = True):
         self.get_backend, self.get_state, self.clock, self.threaded = get_backend, get_state, clock, threaded
@@ -56,6 +59,7 @@ class ReplayPlayer:
         self._lag_since: float | None = None
         self._cancel_engage = False
         self._gen = 0                                   # one tick thread per start; an older one sees the number move on and ends
+        self._goal: np.ndarray | None = None            # the pose `move_to` was asked for, until the arms are engaged
 
     @property
     def engaged(self) -> bool:
@@ -63,11 +67,13 @@ class ReplayPlayer:
 
     def load(self, traj: np.ndarray, fps: float, checks: dict, keyframe_times=(), joints: slice = C.ARM_SLICE) -> None:
         with self._lock:
-            if self.engaged:
-                raise CommandError('재생 중에는 모션을 바꿀 수 없습니다. 먼저 복귀·해제하세요')
+            if self.engaged and self.state not in self.SETTLED:
+                raise CommandError('재생 중에는 모션을 바꿀 수 없습니다. 먼저 정지하거나 복귀·해제하세요')
             traj = np.asarray(traj, float)
             if traj.shape[1] != joints.stop - joints.start:
                 raise ValueError('궤적의 관절 수가 제어할 관절과 다릅니다')
+            if self.engaged and joints != self.joints:          # holding a pose: the next replay continues from it
+                raise CommandError('제어 중인 관절(허리 포함 여부)과 다릅니다. 복귀·해제한 뒤 다시 점검하세요')
             self.traj, self.fps, self.pos, self.fault, self.joints = traj, float(fps), 0.0, None, joints
             self.checks, self.keyframe_times = checks, list(keyframe_times)
 
@@ -80,8 +86,10 @@ class ReplayPlayer:
         with self._lock:
             if self.traj is None or self.checks is None:
                 raise CommandError('재생할 모션을 먼저 준비하세요')
-            if self.state not in ('idle', 'stopped', 'finished'):
+            if self.state not in ('idle', *self.SETTLED):
                 raise CommandError('이미 재생 중입니다')
+            if self.state != 'idle' and self.cmd.shape != self.traj.shape[1:]:
+                raise CommandError('제어 중인 관절(허리 포함 여부)이 이 모션과 다릅니다. 복귀·해제한 뒤 다시 시작하세요')
             if not np.isfinite(speed):
                 raise CommandError('잘못된 재생 속도입니다')
             if not self.checks['ok']:
@@ -92,7 +100,7 @@ class ReplayPlayer:
                 raise CommandError('로봇 상태가 수신되지 않습니다')
             if st.tilt_deg > C.TILT_FAULT_DEG:
                 raise CommandError(f'몸통 기울기 {st.tilt_deg:.0f}° — 로봇이 안정적이지 않습니다')
-            resuming = self.state in ('stopped', 'finished')
+            resuming = self.state in self.SETTLED
             if not resuming:
                 if np.max(np.abs(st.dq[self.joints])) > C.SETTLED_SPEED:
                     raise CommandError('팔이 아직 움직이는 중입니다. 멈춘 뒤 다시 시도하세요')
@@ -110,11 +118,44 @@ class ReplayPlayer:
             if resuming:
                 self._begin_move(self.cmd, self.traj[self.start_idx], now, 'approach')
             else:
-                self.state, self._gen = 'engaging', self._gen + 1
+                self.state, self._gen, self._goal = 'engaging', self._gen + 1, None
                 gen = self._gen
                 self._spawn(lambda: self._engage_and_run(gen))
             return {'speed': self.speed, 'frequency': self.speed * self.fps, 'capped': self.speed < speed - 1e-9, 'approach_s': approach['seconds'],
                     'fast': self.speed > self.checks['speed_cap'] + 1e-9}
+
+    def move_to(self, q: np.ndarray, joints: slice, lower: np.ndarray, upper: np.ndarray) -> dict:
+        """Move the commanded joints to one pose (min-jerk at REPLAY_APPROACH_VMAX) and hold it there."""
+        with self._lock:
+            q = np.asarray(q, float)
+            if q.shape != (joints.stop - joints.start,) or not np.isfinite(q).all():
+                raise CommandError('보낼 자세의 관절 수가 맞지 않습니다')
+            if np.any(q < lower - 1e-4) or np.any(q > upper + 1e-4):
+                raise CommandError('보낼 자세가 관절 한계를 벗어납니다')
+            st, now = self.get_state(), self.clock()
+            if st is None or st.age(now) > C.STATE_STALE_S:
+                raise CommandError('로봇 상태가 수신되지 않습니다')
+            if st.tilt_deg > C.TILT_FAULT_DEG:
+                raise CommandError(f'몸통 기울기 {st.tilt_deg:.0f}° — 로봇이 안정적이지 않습니다')
+            if self.state in self.SETTLED:
+                if self.joints != joints:
+                    raise CommandError('제어 중인 관절(허리 포함 여부)과 다릅니다. 복귀·해제한 뒤 다시 보내세요')
+                self.fault, self._lag_since = None, None
+                self._begin_move(self.cmd, q, now, 'moving')
+                return {'seconds': self._phase[3]}
+            if self.state != 'idle':
+                raise CommandError('재생이나 이동이 진행 중입니다. 정지한 뒤 보내세요')
+            if np.max(np.abs(st.dq[joints])) > C.SETTLED_SPEED:
+                raise CommandError('팔이 아직 움직이는 중입니다. 멈춘 뒤 다시 시도하세요')
+            backend = self.get_backend()
+            if (reason := backend.check()) is not None:
+                raise CommandError(reason)
+            self.backend, self.hz, self.joints, self.fault, self._lag_since = backend, float(backend.tick_hz()), joints, None, None
+            self._goal, self._cancel_engage = q, False
+            self.state, self._gen = 'engaging', self._gen + 1
+            gen = self._gen
+            self._spawn(lambda: self._engage_and_run(gen))
+            return {'seconds': move_duration(q - st.q[joints], C.REPLAY_APPROACH_VMAX)}
 
     def pause(self, on: bool) -> None:
         with self._lock:
@@ -142,13 +183,13 @@ class ReplayPlayer:
         with self._lock:
             if self.state == 'engaging':
                 self._cancel_engage = True
-            elif self.state in ('approach', 'playing', 'paused', 'returning'):
+            elif self.state in ('approach', 'playing', 'paused', 'returning', 'moving'):
                 self.state, self._phase = 'stopped', None
 
     def go_home(self) -> None:
         """Move back to the pose the arms had when the replay was started, then hand the control back."""
         with self._lock:
-            if self.state not in ('stopped', 'finished', 'paused'):
+            if self.state not in ('stopped', 'finished', 'paused', 'holding'):
                 raise CommandError('복귀할 수 있는 상태가 아닙니다 (먼저 정지하세요)' if self.engaged else '재생 중이 아닙니다')
             self._begin_move(self.cmd, self.origin, self.clock(), 'returning', C.RETURN_VMAX)
 
@@ -189,7 +230,11 @@ class ReplayPlayer:
                 self.state = 'idle'
                 return
             self.cmd, self.origin = q0.copy(), q0.copy()
-            self._begin_move(q0, self.traj[self.start_idx], self.clock(), 'approach')
+            if self._goal is not None:
+                self._begin_move(q0, self._goal, self.clock(), 'moving')
+                self._goal = None
+            else:
+                self._begin_move(q0, self.traj[self.start_idx], self.clock(), 'approach')
         if not self.threaded:
             return
         period, nxt = 1.0 / self.hz, time.monotonic()
@@ -237,13 +282,15 @@ class ReplayPlayer:
             self._check_lag(st, now)
 
     def _target(self, now: float) -> np.ndarray:
-        if self.state in ('approach', 'returning'):
+        if self.state in ('approach', 'returning', 'moving'):
             a, b, t0, duration = self._phase
             tau = (now - t0) / duration
             q = a + (b - a) * min_jerk(tau)
             if tau >= 1.0:
                 if self.state == 'approach':
                     self.state, self.pos, self._last, self._phase = 'playing', float(self.start_idx), now, None
+                elif self.state == 'moving':
+                    self.state, self._phase = 'holding', None
                 else:
                     self._release_with(None)
             return q
@@ -258,7 +305,7 @@ class ReplayPlayer:
         return self.cmd
 
     def _check_lag(self, st, now: float) -> None:
-        if self.state not in ('approach', 'playing', 'returning'):
+        if self.state not in ('approach', 'playing', 'returning', 'moving'):
             self._lag_since = None
             return
         lag = float(np.max(np.abs(self.cmd - st.q[self.joints])))
@@ -273,7 +320,7 @@ class ReplayPlayer:
         with self._lock:
             n = 0 if self.traj is None else len(self.traj)
             progress = None
-            if self._phase is not None and self.state in ('approach', 'returning'):
+            if self._phase is not None and self.state in ('approach', 'returning', 'moving'):
                 progress = min(1.0, (self.clock() - self._phase[2]) / self._phase[3])
             checks = self.checks
             return {'state': self.state, 'frame': round(self.pos, 2), 'frames': n, 'fps': self.fps, 'speed': round(self.speed, 3),

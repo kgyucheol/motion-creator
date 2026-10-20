@@ -373,3 +373,66 @@ def test_the_writer_takes_the_arms_or_the_waist_and_arms_and_the_waist_gets_no_f
     backend.joints = C.ARM_SLICE
     backend.send(HOME_ARMS)
     assert len(written[-1]['q']) == 14 and written[-1]['tau'][0] == 1.0 * C.FF_DEFAULT
+
+
+# ---- sending one pose (the editor's or a card's) ---------------------------------------------------------------------------
+def test_a_pose_is_reached_held_then_a_replay_continues_from_it_and_home_releases(robot):
+    clock = Clock()
+    backend = MockBackend(HOME_ARMS, clock=clock, threaded=False)
+    player = ReplayPlayer(lambda: backend, backend.state, clock=clock, threaded=False)
+    lower, upper = np.full(14, -3.0), np.full(14, 3.0)
+    goal = HOME_ARMS + np.r_[.3, 0, 0, -.2, 0, 0, 0, .3, 0, 0, -.2, 0, 0, 0]
+    player.move_to(goal, C.ARM_SLICE, lower, upper)
+    run(player, backend, clock, 4.0)
+    assert player.state == 'holding' and np.allclose(backend.q[C.ARM_SLICE], goal, atol=1e-6)
+    run(player, backend, clock, 1.0)
+    assert player.state == 'holding' and np.allclose(backend.sent[-1], goal)          # it keeps commanding the pose
+    nearer = goal - np.r_[.1, 0, 0, 0, 0, 0, 0, .1, 0, 0, 0, 0, 0, 0]
+    player.move_to(nearer, C.ARM_SLICE, lower, upper)                                # a second pose from the held one
+    run(player, backend, clock, 3.0)
+    assert player.state == 'holding' and np.allclose(backend.q[C.ARM_SLICE], nearer, atol=1e-6)
+    traj = reach()
+    player.load(traj, 30.0, plan_checks(traj))                                       # checking a motion while holding is fine
+    player.start(1.0, auto_return=True)
+    assert player.state == 'approach'
+    run(player, backend, clock, 12.0)
+    assert player.state == 'idle' and not backend.engaged                            # played, returned to where it engaged, released
+    np.testing.assert_allclose(backend.q[C.ARM_SLICE], HOME_ARMS, atol=1e-6)
+
+
+def test_a_pose_outside_the_limits_or_for_other_joints_is_refused():
+    clock = Clock()
+    backend = MockBackend(HOME_ARMS, clock=clock, threaded=False)
+    player = ReplayPlayer(lambda: backend, backend.state, clock=clock, threaded=False)
+    lower, upper = np.full(14, -1.0), np.full(14, 1.0)
+    with pytest.raises(CommandError):
+        player.move_to(np.full(14, 2.0), C.ARM_SLICE, lower, upper)
+    player.move_to(HOME_ARMS, C.ARM_SLICE, lower, upper)
+    run(player, backend, clock, 1.0)
+    with pytest.raises(CommandError):
+        player.move_to(np.r_[0., 0., 0., HOME_ARMS], C.UPPER_SLICE, np.full(17, -3.), np.full(17, 3.))
+    with pytest.raises(CommandError):
+        player.load(np.zeros((5, 17)), 30.0, plan_checks(np.zeros((5, 14))), joints=C.UPPER_SLICE)
+
+
+def test_the_session_sends_an_editor_pose_with_the_waist(robot):
+    import time
+    session = ReplaySession(lambda: robot)
+    session.connect(None, mock=True)
+    q = np.asarray(robot.home, float).copy()
+    q[7 + 12] = .3                                                                   # waist yaw
+    q[7 + 15] = -.4                                                                  # left shoulder pitch
+    with pytest.raises(CommandError):
+        session.move_to(q.tolist(), True, confirm=False)
+    session.move_to(q.tolist(), True, confirm=True)
+    deadline = time.monotonic() + 10
+    while session.player.state != 'holding' and time.monotonic() < deadline:
+        time.sleep(.05)
+    state = session.backend.state()
+    assert session.player.state == 'holding' and abs(state.q[12] - .3) < 1e-3 and abs(state.q[15] + .4) < 1e-3
+    session.home()
+    deadline = time.monotonic() + 10
+    while session.player.state != 'idle' and time.monotonic() < deadline:
+        time.sleep(.05)
+    assert session.player.state == 'idle'
+    session.shutdown()

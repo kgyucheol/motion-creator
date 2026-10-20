@@ -524,6 +524,12 @@ class ReplayPrepareInput(BaseModel):
     waist: bool = False
 
 
+class ReplayMoveInput(BaseModel):
+    qpos: list[float]
+    waist: bool = False
+    confirm: bool = False
+
+
 class ReplayStartInput(BaseModel):
     speed: float = 1.0
     auto_return: bool = True
@@ -565,6 +571,12 @@ def replay_prepare(payload: ReplayPrepareInput):
 @app.post('/api/replay/start')
 def replay_start(payload: ReplayStartInput):
     return replay_checked(lambda: replay_session().start(payload.speed, payload.auto_return, payload.allow_fast, payload.confirm))
+
+
+@app.post('/api/replay/move')
+def replay_move(payload: ReplayMoveInput):
+    """Send one editor pose (the arms, and the waist if asked) to the robot and hold it there."""
+    return replay_checked(lambda: replay_session().move_to(payload.qpos, payload.waist, payload.confirm))
 
 
 @app.post('/api/replay/pause')
