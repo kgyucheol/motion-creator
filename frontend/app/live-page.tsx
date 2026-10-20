@@ -50,6 +50,7 @@ export default function LivePage() {
         transformMode: () => {}, end: () => {}, error: value => setError(value),
       }, model.model_id, model.visual_revision);
       viewer.setEditable(false); viewer.showHandles(false); viewer.setReferenceVisible(false); viewer.keyboardEnabled = false;
+      viewer.setBox([.4, 0, .3], [.3, .32, .24], false);       // the editor's stand-in box: nothing to do with the live robot
       viewer.update(model.state);
       scene.current = viewer;
       home.current = model.state.qpos;
