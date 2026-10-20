@@ -2,6 +2,9 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 import { controlKey, controlSelection } from './body-groups.ts';
 import { canMirrorSelection, isJointPairSelection } from './pose-transforms.ts';
 import { DetectedObjectsLayer, type WorldRow } from './detected-objects.ts';
@@ -65,6 +68,7 @@ export function headCameraViewQuaternion(linkQuaternion: number[]) {
 export type HeadCameraAdjust = { offset: [number, number, number]; rotation: [number, number, number] };
 /** 저장된 보정값이 기준으로 삼은 기본값의 버전. 기준이 바뀌면 옛 저장값은 무시된다. (URDF는 원래 장착 위치 그대로) */
 const ADJUST_BASE = 'urdf-original-2';
+const COMPARE_PATH_WIDTH_PX = 2;      // the TCP path lines (a plain WebGL line is 1 px)
 /** 확정한 점군 기준점 보정(d435_link 기준 mm, 도). 초기값과 "초기화" 버튼이 되돌아가는 값이다. */
 export const defaultHeadCameraAdjust = (): HeadCameraAdjust => ({ offset: HEAD_CAMERA_LENS_OFFSET.map(meters => Math.round(meters * 1000)) as [number, number, number], rotation: [0, 0, 0] });
 export const NO_HEAD_CAMERA_ADJUST: HeadCameraAdjust = { offset: [0, 0, 0], rotation: [0, 0, 0] };
@@ -1413,18 +1417,19 @@ export class RobotScene {
   /** Hand paths, one polyline per hand: an optional grey reference and the coloured motion (the editor's path display). */
   setComparePaths(paths: { original: Record<HandSide, number[][]>; resolved: Record<HandSide, number[][]> } | null) {
     this.comparePaths.traverse(node => {
-      if (node instanceof THREE.Line) { node.geometry.dispose(); (node.material as THREE.Material).dispose(); }
+      if (node instanceof Line2) { node.geometry.dispose(); node.material.dispose(); }
     });
     this.comparePaths.clear();
     if (paths) for (const side of ['left', 'right'] as HandSide[]) {
       const draw = (points: number[][], color: number, opacity: number) => {
         if (points.length < 2) return;
-        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points.map(point => new THREE.Vector3().fromArray(point))),
-          new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true, opacity }));
+        // Line2 because a plain line is always 1 px in WebGL; the width is in screen pixels
+        const line = new Line2(new LineGeometry().setPositions(points.flat()),
+          new LineMaterial({ color, linewidth: COMPARE_PATH_WIDTH_PX, depthTest: false, transparent: true, opacity }));
         line.renderOrder = 7; this.comparePaths.add(line);
       };
       draw(paths.original[side], 0xb8c2cc, .8);
-      draw(paths.resolved[side], side === 'left' ? 0x55e7c1 : 0xffbd70, 1);
+      draw(paths.resolved[side], side === 'left' ? 0xff4fd8 : 0x4f8bff, 1);
     }
     this.dirty = true;
   }

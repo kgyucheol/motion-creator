@@ -796,7 +796,7 @@ export default function Editor() {
   useEffect(() => { if (scene.current) { scene.current.setEditable(!busy && !playing && !preview?.physics); scene.current.keyboardEnabled = !preview?.physics; } }, [busy, playing, preview]);
   useEffect(() => { scene.current?.showHandles(showHandles); }, [showHandles]);
   useEffect(() => {
-    // 경로 표시: 미리보기 전체 동안 두 손(TCP)이 지나는 길을 선으로 그린다(초록 왼손, 주황 오른손).
+    // 경로 표시: 미리보기 전체 동안 두 손(TCP)이 지나는 길을 2px 선으로 그린다(분홍 왼손, 파랑 오른손).
     if (!showPaths || !preview?.states.length) { scene.current?.setComparePaths(null); return; }
     const path = (side: 'left' | 'right') => preview.states.map(state => state.handles[`${side}_hand`].position);
     scene.current?.setComparePaths({ original: { left: [], right: [] }, resolved: { left: path('left'), right: path('right') } });
