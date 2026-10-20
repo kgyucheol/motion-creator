@@ -436,3 +436,20 @@ def test_the_session_sends_an_editor_pose_with_the_waist(robot):
         time.sleep(.05)
     assert session.player.state == 'idle'
     session.shutdown()
+
+
+def test_the_battery_estimate_uses_the_moments_the_soc_changed_and_starts_over_on_a_rise():
+    from motioncreator.replay.backends import BatteryTrend
+    trend = BatteryTrend()
+    t = 0.0
+    for soc in [80] * 50 + [79] * 300 + [78] * 300 + [77] * 10:          # 1 % every 300 s once it started falling
+        trend.add(t, soc)
+        t += 1.0
+    estimate = trend.estimate(t)
+    assert abs(estimate['percent_per_hour'] - 12.0) < .05                   # 2 % over the 600 s between the first and the last drop
+    assert abs(estimate['remaining_s'] - (77 / (2 / 600) - 10)) < 1.0
+    fresh = BatteryTrend()
+    fresh.add(0, 80); fresh.add(10, 79)
+    assert fresh.estimate(20) is None                                        # one drop is not a rate yet
+    trend.add(t, 90)                                                         # charging
+    assert trend.estimate(t + 1) is None

@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 
 import numpy as np
@@ -42,6 +43,36 @@ class RobotState:
     def tilt_deg(self) -> float:
         w, x, y, z = self.imu_quat
         return math.degrees(math.acos(max(-1.0, min(1.0, 1 - 2 * (x * x + y * y)))))
+
+
+class BatteryTrend:
+    """How long the battery lasts at the rate its SOC has been falling. The SOC comes in whole percent, so the rate is measured
+    between the moments it changed (the first drop seen and the latest one), not from the first sample, whose position inside
+    its percent is unknown. A rise (charging, a battery swap) starts over."""
+
+    def __init__(self, window_s: float = C.BATTERY_TREND_WINDOW_S):
+        self.window_s = window_s
+        self.changes: deque = deque()          # (time, soc) at each change after the first value
+        self.last: float | None = None
+
+    def add(self, now: float, soc: float) -> None:
+        if self.last is not None and soc > self.last:
+            self.changes.clear()
+        if self.last is not None and soc != self.last:
+            self.changes.append((now, float(soc)))
+        self.last = float(soc)
+        while len(self.changes) > 2 and now - self.changes[1][0] > self.window_s:
+            self.changes.popleft()
+
+    def estimate(self, now: float) -> dict | None:
+        """{'percent_per_hour', 'remaining_s' (to 0 %), 'measured_s'}, or None until two drops have been seen."""
+        if len(self.changes) < 2:
+            return None
+        (t0, soc0), (t1, soc1) = self.changes[0], self.changes[-1]
+        rate = (soc0 - soc1) / (t1 - t0) if t1 > t0 else 0.0
+        if rate <= 0:
+            return None
+        return {'percent_per_hour': rate * 3600, 'remaining_s': max(0.0, soc1 / rate - (now - t1)), 'measured_s': t1 - t0}
 
 
 def list_interfaces(sysfs: str = '/sys/class/net') -> list[dict]:
@@ -77,6 +108,7 @@ class DdsStateReader:
     def __init__(self, interface: str):
         self.interface = interface
         self._state: RobotState | None = None
+        self.battery_trend = BatteryTrend()
         self.python = robot_python()
         self._errors: list[str] = []
         self._proc = subprocess.Popen([self.python, '-W', 'ignore', '-m', 'motioncreator.replay.dds_reader', interface], stdout=subprocess.PIPE,
@@ -96,6 +128,8 @@ class DdsStateReader:
                 self._state = RobotState(time.monotonic(), np.array(raw['q'], float), np.array(raw['dq'], float), np.array(raw['imu_quat'], float),
                                          np.array(raw['temp'], float) if raw.get('temp') else None,
                                          np.array(raw['tau'], float) if raw.get('tau') else None, raw.get('battery'))
+                if raw.get('battery'):
+                    self.battery_trend.add(self._state.stamp, float(raw['battery']['soc']))
             except (ValueError, KeyError):
                 continue
 
@@ -156,6 +190,9 @@ class ArmSdkBackend:
 
     def state(self) -> RobotState | None:
         return None if self.reader is None else self.reader.state()
+
+    def battery_estimate(self) -> dict | None:
+        return None if self.reader is None else self.reader.battery_trend.estimate(time.monotonic())
 
     # control
     def tick_hz(self) -> float:

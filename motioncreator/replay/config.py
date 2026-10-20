@@ -22,6 +22,7 @@ COMMAND_HZ = 50
 STATE_STALE_S = 0.5           # refuse / release if the robot state is older than this
 TILT_FAULT_DEG = 35.0         # release if the pelvis tilts more than this
 TEMP_WARNING_C, TEMP_CRITICAL_C = 55.0, 70.0   # joint temperature colours on the status figure (robot-studio's defaults; display only)
+BATTERY_TREND_WINDOW_S = 1800.0                 # the remaining-time estimate uses the SOC changes of the last half hour
 SETTLED_SPEED = 0.15          # rad/s: the arms must be slower than this to start
 TRACKING_FAULT_RAD = 0.35     # stop if a joint lags its command by more than this ...
 TRACKING_FAULT_S = 0.4        # ... for this long

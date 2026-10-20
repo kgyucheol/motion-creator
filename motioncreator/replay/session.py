@@ -154,6 +154,7 @@ class ReplaySession:
                                                      'tau': None if state.tau is None else np.round(state.tau, 2).tolist(),
                                                      'battery': state.battery},
                 'temperature_limits': {'warning': C.TEMP_WARNING_C, 'critical': C.TEMP_CRITICAL_C},
+                'battery_estimate': self.backend.battery_estimate() if hasattr(self.backend, 'battery_estimate') else None,
                 'player': self.player.status(), 'plan': self.summary()}
 
     @staticmethod

@@ -12,6 +12,7 @@ type Status = {
   mode: 'real' | 'mock' | null; interface: string | null; connected: boolean; read_only: boolean;
   robot: { age: number; tilt_deg: number; q?: number[]; temp?: number[] | null; tau?: number[] | null; battery?: Battery | null } | null;
   player: PlayerStatus; plan: Summary | null; temperature_limits?: { warning: number; critical: number };
+  battery_estimate?: { percent_per_hour: number; remaining_s: number; measured_s: number } | null;
 };
 type Interface = { name: string; ip: string; wifi: boolean; robot: boolean };
 
@@ -237,6 +238,8 @@ function RobotHealth({ status }: { status: Status }) {
   const temp = robot?.temp ?? null;
   const hottest = temp ? temp.reduce((best, value, index) => value > temp[best] ? index : best, 0) : null;
   const battery = robot?.battery ?? null;
+  const estimate = status.battery_estimate ?? null;
+  const duration = (seconds: number) => seconds >= 3600 ? `${Math.floor(seconds / 3600)}시간 ${Math.floor(seconds % 3600 / 60)}분` : `${Math.max(1, Math.round(seconds / 60))}분`;
   return <section className="robot-health">
     <h4>로봇 상태 <small>{robot ? `${status.mode === 'real' ? 'LIVE' : '가상'} · 지연 ${robot.age.toFixed(2)}s · 기울기 ${robot.tilt_deg.toFixed(1)}°` : '수신 대기'}</small></h4>
     <div className="robot-health-body">
@@ -248,7 +251,9 @@ function RobotHealth({ status }: { status: Status }) {
         })}
       </div>
       <div className="robot-metrics">
-        <div><span>배터리</span><strong>{battery ? battery.soc.toFixed(0) : '—'}<small>%</small></strong>
+        <div><span>배터리</span><strong>{battery ? battery.soc.toFixed(0) : '—'}<small>%</small>{battery && <em className="battery-left" title={estimate
+            ? `최근 ${Math.round(estimate.measured_s / 60)}분 동안 SOC가 줄어든 속도(시간당 ${estimate.percent_per_hour.toFixed(1)}%)로 0%까지 남은 시간을 추정합니다. 부하가 바뀌면 달라집니다.`
+            : 'SOC가 두 번 줄어들 때까지 감소 속도를 재고 있습니다(1% 단위라 몇 분 걸립니다).'}>{estimate ? `약 ${duration(estimate.remaining_s)} 남음` : '남은 시간 측정 중'}</em>}</strong>
           <div className="battery-track"><i className={battery && battery.soc < 20 ? 'low' : ''} style={{ width: `${battery ? Math.max(0, Math.min(100, battery.soc)) : 0}%` }}/></div>
           <small>{battery ? `${battery.voltage.toFixed(1)} V · ${battery.current.toFixed(1)} A${battery.temp !== null ? ` · ${battery.temp.toFixed(0)}°C` : ''}` : 'rt/lf/bmsstate 미수신'}</small></div>
         <div><span>최고 관절 온도</span><strong className={level(hottest !== null && temp ? temp[hottest] : null)}>{hottest !== null && temp ? temp[hottest].toFixed(0) : '—'}<small>°C</small></strong>
