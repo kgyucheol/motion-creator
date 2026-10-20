@@ -487,6 +487,12 @@ def dynamic_resolve(payload: DynamicResolveInput):
 _replay = None
 
 
+@app.get('/live', include_in_schema=False)
+def live_page():
+    """The live robot page: the replay below on its own page, with a motion picker and the measured arms."""
+    return FileResponse(ROOT / 'frontend/dist/index.html')
+
+
 def replay_session():
     global _replay
     if _replay is None:

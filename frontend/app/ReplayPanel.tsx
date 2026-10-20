@@ -32,7 +32,13 @@ async function call<T>(path: string, body?: unknown, method = body === undefined
  * Replay of the current project on a real G1 under Unitree's default policy (arms over rt/arm_sdk), or on a simulated robot.
  * Nothing is sent to a real robot until a connection exists, the preflight passed and the operator confirmed.
  */
-export function ReplayPanel({ getProject, fps, frameNames, onClose }: { getProject: () => unknown; fps: number; frameNames: string[]; onClose: () => void }) {
+export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = false, onPrepared, startBlocked = '' }: {
+  getProject: () => unknown; fps: number; frameNames: string[]; onClose?: () => void; inline?: boolean;
+  /** called after the current project was checked (the plan on the server is now this project's) */
+  onPrepared?: () => void;
+  /** a reason the start button stays off (e.g. the checked plan belongs to another project) */
+  startBlocked?: string;
+}) {
   const [status, setStatus] = useState<Status | null>(null);
   const [interfaces, setInterfaces] = useState<Interface[]>([]);
   const [target, setTarget] = useState<'mock' | 'real'>('mock');
@@ -86,10 +92,9 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose }: { getProje
     link.click(); URL.revokeObjectURL(link.href);
   }
 
-  return <div className="replay-backdrop" role="dialog" aria-label="로봇 재생">
-    <div className="replay-panel">
+  const panel = <div className={`replay-panel ${inline ? 'inline' : ''}`}>
       <header><strong>로봇 재생 · Unitree 기본 정책</strong>
-        <button aria-label="닫기" onClick={onClose} disabled={running} title={running ? '재생 중에는 닫을 수 없습니다' : '닫기'}>×</button></header>
+        {onClose && <button aria-label="닫기" onClick={onClose} disabled={running} title={running ? '재생 중에는 닫을 수 없습니다' : '닫기'}>×</button>}</header>
       <p className="replay-note">로봇이 자체 모션 모드로 서 있는 상태에서 <b>팔 14축</b>만 <code>rt/arm_sdk</code>로 구동합니다. 다리·골반·허리는 로봇이 정합니다.
         {status?.read_only ? ' (읽기 전용 모드: 가상 로봇만 사용할 수 있습니다)' : ''}</p>
 
@@ -113,7 +118,7 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose }: { getProje
       <section>
         <h4>2. 모션 점검</h4>
         <div className="replay-row">
-          <button disabled={working || running} onClick={() => void act(() => call('prepare', { project: getProject(), fps }))}>현재 프로젝트 점검</button>
+          <button disabled={working || running} onClick={() => void act(async () => { await call('prepare', { project: getProject(), fps }); onPrepared?.(); })}>현재 프로젝트 점검</button>
           <button disabled={working} onClick={() => void act(exportEpisode)} title="팔·허리를 LeRobot data.json으로 내보내 robot-studio 등에서 재생할 수 있습니다">data.json 내보내기</button>
           {plan && <span className="replay-chip">{plan.duration.toFixed(1)}초 · {plan.frames}프레임 · {plan.fps} Hz</span>}
         </div>
@@ -130,8 +135,8 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose }: { getProje
         </div>
         {!running && <div className="replay-row">
           {!confirming
-            ? <button className="primary" disabled={working || !status?.connected || !plan?.ok} onClick={() => real ? setConfirming(true) : void act(() => call('start', { speed, auto_return: autoReturn, allow_fast: fast, confirm: true }))}
-                title={!status?.connected ? '먼저 연결하세요' : !plan ? '먼저 모션을 점검하세요' : !plan.ok ? '점검을 통과하지 못했습니다' : ''}>시작</button>
+            ? <button className="primary" disabled={working || !status?.connected || !plan?.ok || !!startBlocked} onClick={() => real ? setConfirming(true) : void act(() => call('start', { speed, auto_return: autoReturn, allow_fast: fast, confirm: true }))}
+                title={!status?.connected ? '먼저 연결하세요' : !plan ? '먼저 모션을 점검하세요' : !plan.ok ? '점검을 통과하지 못했습니다' : startBlocked}>시작</button>
             : <div className="replay-confirm">
                 <p><b>실제 로봇이 움직입니다.</b> {plan?.duration.toFixed(1)}초 분량을 {speed}× 로 재생하고{autoReturn ? ' 끝나면 시작 자세로 복귀합니다' : ' 끝난 자세를 유지합니다'}. 경고 {plan?.warnings ?? 0}건.</p>
                 <label><input type="checkbox" checked={safe} onChange={e => setSafe(e.target.checked)}/> 로봇을 거치대나 지지 상태로 두었고, 팔 주변이 비어 있으며, 비상정지를 손이 닿는 곳에 두었습니다</label>
@@ -152,9 +157,10 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose }: { getProje
           <div className={`replay-bar ${player.state}`}><i style={{ width: `${player.duration ? Math.min(100, player.time / player.duration * 100) : 0}%` }}/></div>
           <span>{STATE_TEXT[player.state]}{player.phase !== null ? ` ${(player.phase * 100).toFixed(0)}%` : ''} · {player.time.toFixed(1)} / {player.duration.toFixed(1)}s{stage !== null && frameNames[stage] ? ` · ${frameNames[stage]}` : ''}</span>
         </div>}
+        {startBlocked && !running && <p className="replay-warn">{startBlocked}</p>}
         {player?.fault && <p className="replay-error">{player.fault}</p>}
         {error && <p className="replay-error">{error}</p>}
       </section>
-    </div>
-  </div>;
+    </div>;
+  return inline ? panel : <div className="replay-backdrop" role="dialog" aria-label="로봇 재생">{panel}</div>;
 }
