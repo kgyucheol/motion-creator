@@ -62,3 +62,13 @@ export function incrementRotation(quaternion: number[], axis: number, degrees: n
   const current = new Quaternion().fromArray(quaternion);
   return (space === 'local' ? current.multiply(delta) : delta.multiply(current)).normalize().toArray();
 }
+
+/** A world vector in the axes of a part oriented by `quaternion` (xyzw): the numbers the local gizmo axes read. */
+export function toLocalAxes(vector: number[], quaternion: number[]) {
+  return new Vector3().fromArray(vector).applyQuaternion(new Quaternion().fromArray(quaternion).invert()).toArray();
+}
+
+/** The world vector for numbers read along the axes of a part oriented by `quaternion` (xyzw). */
+export function fromLocalAxes(vector: number[], quaternion: number[]) {
+  return new Vector3().fromArray(vector).applyQuaternion(new Quaternion().fromArray(quaternion)).toArray();
+}

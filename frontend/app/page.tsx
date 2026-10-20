@@ -9,7 +9,7 @@ import { allNodes, nodeMembers, selectMembers, controlKey, controlSelection, gro
 import { Play, Pause, Plus, Save, FolderOpen, RotateCcw, Undo2, Redo2, LockKeyhole, MousePointer2, Move3d, ChevronLeft, ChevronRight, ChevronDown, Trash2, Download, Check, AlertCircle, Boxes, PersonStanding, ArrowDownToLine, Scissors } from 'lucide-react';
 import { ReplayPanel } from './ReplayPanel';
 import { RobotScene, canRotateSelection, isJointHandle, HIP_HANDLES, ANKLE_HANDLES, COMBINED_JOINTS, type PoseState, type TransformMode } from '../lib/robot-scene';
-import { eulerDegrees, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
+import { eulerDegrees, fromLocalAxes, toLocalAxes, quaternionFromDegrees, rotatedGroupTargets, incrementRotation, canMirrorSelection, counterpart, isJointPairSelection, mirrorFrameHandle, pairedJointTargets, translatedTargets } from '../lib/pose-transforms';
 import type { WorldRow } from '../lib/detected-objects';
 import { candidateRamenGraspPoints, createImportedSceneObjects, createSceneObject, createSceneObjectGroup, DEFAULT_RAMEN_GRASP_COEFFICIENTS, groundedSceneObject, isRamenBundle, normalizedObjectSize, objectVerticalHalfExtent, objectsFromProject, placeSceneObject, removeSceneObjectSubtree, reparentSceneObjects, savedRamenGraspCoefficients, sceneObjectDescendantIds, scenePlacementOptions, transformSceneObjectChildren, transformSceneObjectGroup, withScenePlacement, type ObjectTransformMode, type RamenGraspCoefficients, type SceneAssetImport, type SceneObject, type SceneObjectGroup, type SceneObjectPose, type SceneObjectShape, type ScenePlacementOptions } from '../lib/scene-objects';
 import { duplicateKeyframeKeepingTimes, insertPoseAfterClip, insertSmoothTransitionFrames, keyframeStartTimes, moveKeyframe, outgoingSeconds, mergeIntoNextPose, removeKeyframe, retimeSmoothTransition, type Keyframe, type TwoHandGrasp, clipSampleAtTime, clipSampleIndexAtTime, convertClipToPoses, defaultDynamicWindow, setDynamicWindowValue, DYNAMIC_WINDOW_KEYS, type DynamicGrasp, type DynamicReport, type CardMotion, type MotionReport, mergeMotionClips, middleSample, splitMotionClip } from '../lib/keyframes';
@@ -278,6 +278,15 @@ export default function Editor() {
   const alive = useRef(true);
   const actions = useRef({ select: (_key: string, _additive: boolean, _hover: boolean) => {}, begin: () => {}, move: (_key: string, _target: number[]) => {}, rotate: (_key: string, _quaternion: number[]) => {}, jointAngle: (_key: string, _angle: number) => {}, transformMode: (_mode: TransformMode) => {}, history: (_redo: boolean) => {}, pickSurface: (_id: string, _point: number[], _normal: number[]) => {}, end: () => {} });
 
+  /** 지금 선택 부위의 방향(로컬 축). 위치 입력과 1cm 이동이 로컬 축을 쓸 때의 기준이다. */
+  const localFrame = state && members.length ? state.handles[controlKey(members, selected)]?.quaternion : undefined;
+  /** 선택 위치를 축 하나(로컬 축 모드면 선택 부위의 축)로 `step`(m)만큼 옮긴 목표. */
+  function nudgedPosition(axis: number, step: number) {
+    const position = selectionPosition(state!, members, selected);
+    const offset = [0, 0, 0].map((_, j) => j === axis ? step : 0);
+    const move = space === 'local' && localFrame ? fromLocalAxes(offset, localFrame) : offset;
+    return position.map((n, j) => n + move[j]);
+  }
   function selectionPosition(pose: PoseState, items: string[], active: string) {
     const c = current.current;
     return c.mirror && c.transformMode === 'translate' && canMirrorSelection(controlSelection(items))
@@ -2097,8 +2106,12 @@ export default function Editor() {
       </> : <>
         <label className="inspector-label">{mirrorActive ? '대칭 기준 부위 목표 위치' : members.length > 1 ? '그룹 중심 목표 위치' : '목표 위치'} · 월드 XYZ <small>m</small></label>
         <div className="xyz">{target.map((v, i) => <label key={i}><span className={`axis-${i}`}>{'XYZ'[i]}</span><NumericInput aria-label={`목표 ${'XYZ'[i]} 위치`}  step="0.01" value={Number(v.toFixed(4))} disabled={disabled || selectionPinned} onChange={e => setTarget(t => t.map((n, j) => i === j ? +e.target.value : n))}/></label>)}</div>
+        {space === 'local' && localFrame && <>
+          <label className="inspector-label" title="같은 목표 위치를 선택 부위의 로컬 축(로컬 기즈모와 같은 방향)으로 읽은 값입니다. 원점은 월드 원점이라, 한 칸을 바꾸면 목표가 그 로컬 축 방향으로만 움직입니다.">{mirrorActive ? '대칭 기준 부위 목표 위치' : members.length > 1 ? '그룹 중심 목표 위치' : '목표 위치'} · 로컬 XYZ <small>m</small></label>
+          <div className="xyz">{toLocalAxes(target, localFrame).map((v, i) => <label key={i}><span className={`axis-${i}`}>{'XYZ'[i]}</span><NumericInput aria-label={`목표 로컬 ${'XYZ'[i]} 위치`} step="0.01" value={Number(v.toFixed(4))} disabled={disabled || selectionPinned} onChange={e => setTarget(t => fromLocalAxes(toLocalAxes(t, localFrame).map((n, j) => i === j ? +e.target.value : n), localFrame))}/></label>)}</div>
+        </>}
         <button className="wide" disabled={disabled || selectionPinned} onClick={() => numericMove(target)}>목표 위치 적용</button>
-        <div className="nudge"><span>1cm · 월드</span>{['X', 'Y', 'Z'].map((a, i) => <div key={a}><button aria-label={`${a} 마이너스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionPosition(state!, members, selected).map((n, j) => i === j ? n - .01 : n))}>−</button><span>{a}</span><button aria-label={`${a} 플러스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(selectionPosition(state!, members, selected).map((n, j) => i === j ? n + .01 : n))}>+</button></div>)}</div>
+        <div className="nudge"><span>1cm · {space === 'local' && localFrame ? '로컬' : '월드'}</span>{['X', 'Y', 'Z'].map((a, i) => <div key={a}><button aria-label={`${a} 마이너스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(nudgedPosition(i, -.01))}>−</button><span>{a}</span><button aria-label={`${a} 플러스 1cm`} disabled={disabled || selectionPinned} onClick={() => numericMove(nudgedPosition(i, .01))}>+</button></div>)}</div>
         <p className="hint">고정된 부위를 이동하려면 자물쇠를 해제하세요. {isJointHandle(selected) && 'W는 관절 중심의 위치를 IK로 이동합니다. 해당 관절 자체의 회전각을 바꾸려면 E를 누르세요.'}</p>
       </>}
       <div className={`solver-card ${info && !info.converged ? 'warn' : ''}`}><div>{solving ? <span className="spinner"/> : info && !info.converged ? <AlertCircle size={15}/> : <Check size={15}/>} {solving ? 'IK 계산 중' : info ? info.converged ? '목표 도달' : '목표에 도달하지 못함' : '편집 준비 완료'}</div><dl><dt>{members.length > 1 ? '최대 목표 오차' : '목표 오차'}</dt><dd>{info ? info.target_error_mm.toFixed(2) : '—'} mm</dd><dt>고정 오차</dt><dd>{info ? info.pin_error_mm.toFixed(3) : '—'} mm</dd><dt>회전·각도 오차</dt><dd>{info?.angle_error_deg?.toFixed(3) ?? '—'}°</dd></dl></div>
