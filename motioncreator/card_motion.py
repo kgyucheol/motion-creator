@@ -5,7 +5,8 @@ Every card (a pose keyframe or a motion clip) has a recorded start pose and end 
 * `recorded`  plays as recorded; whatever offset the previous cards left fades out over this card,
 * `delta`     continues from where the previous card really ended and adds the recorded change (the action matters);
               `basis: joint` (default) adds the recorded joint change, `basis: position` (pose cards only) moves the
-              hands (TCP) by the recorded hand move and turn and solves the joints for that,
+              hands (TCP) by the recorded hand move and turn and solves the joints for that, `basis: grip` (pose cards
+              only) moves both hands by the recorded move of their midpoint, keeping the gap they hold an object with,
 * `cartesian` the end is moved so the hands reach a target (a tracked scene object or an x, y, z point); with an
               object each hand goes to its end of the object (see row_ends);
               the recorded shape in between is kept (the target matters).
@@ -24,7 +25,7 @@ from .row_ends import SHAPES, row_goals, row_of
 SEARCH_STEPS = 7
 REACH_MM, REACH_DEG = 10., 5.        # a hand this close to its goal counts as having reached it; past that the move stops short
 MODES = ('recorded', 'delta', 'cartesian')
-DELTA_BASES = ('joint', 'position')
+DELTA_BASES = ('joint', 'position', 'grip')
 TARGET_KINDS = ('object', 'point')
 TOLERANCE_STEP_DEG = 5.
 MAX_ANGLE_TOLERANCE_DEG = 45.     # how far a cartesian card may turn the hands from the goal orientation when the arms cannot meet it exactly
@@ -328,14 +329,21 @@ def _reach(robot: Robot, end_q, spec, goals, base):
     return (*best, low)
 
 
-def _position_delta(robot: Robot, recorded_previous, resolved_previous, end, offset):
+def _position_delta(robot: Robot, recorded_previous, resolved_previous, end, offset, grip=False):
     """A pose card that keeps the recorded hand (TCP) move from the previous card: each hand goes from where the previous
-    card really ended by the recorded move (world x, y, z) and turn (in the hand frame). Returns (q, position error mm, angle error deg)."""
+    card really ended by the recorded move (world x, y, z) and turn (in the hand frame). With `grip` both hands move by
+    the recorded move of their midpoint instead, so the gap between them stays as the previous card left it (an object
+    held in both hands is carried, not squeezed or dropped). Returns (q, position error mm, angle error deg)."""
     before, after, now = robot.data(recorded_previous), robot.data(end), robot.data(resolved_previous)
+    hands = [f'{side}_hand' for side in HANDS]
+    moves = {hand: robot.point(after, hand)[0] - robot.point(before, hand)[0] for hand in hands}
+    if grip:
+        middle = np.mean(list(moves.values()), axis=0)
+        moves = {hand: middle for hand in hands}
     goals = {}
-    for hand in (f'{side}_hand' for side in HANDS):
-        (p0, m0), (p1, m1), (pn, mn) = robot.point(before, hand), robot.point(after, hand), robot.point(now, hand)
-        goals[hand] = (pn + (p1 - p0), Rotation.from_matrix(mn @ m0.T @ m1))
+    for hand in hands:
+        (_, m0), (_, m1), (pn, mn) = robot.point(before, hand), robot.point(after, hand), robot.point(now, hand)
+        goals[hand] = (pn + moves[hand], Rotation.from_matrix(mn @ m0.T @ m1))
     seed = np.array(end, dtype=float)
     limits = slice(COLUMNS.start - 4, COLUMNS.stop - 4)         # qpos has 7 root values; the limit arrays 3
     seed[COLUMNS] = np.clip(end[COLUMNS] + offset, robot.lower[limits] + 1e-6, robot.upper[limits] - 1e-6)
@@ -360,17 +368,19 @@ def resolve_project_motions(robot: Robot, project, advise=True):
         entry, mode = offset, spec['mode']
         plain = {key: value for key, value in frame.items() if key != 'motion'}      # resolved: later passes must not apply it again
         report = None
-        if spec.get('basis') == 'position' and frame.get('samples') is not None:
-            raise ValueError(f'Card {index + 1}: the position change is for pose cards; a clip carries the joint change')
+        if spec.get('basis') in ('position', 'grip') and frame.get('samples') is not None:
+            raise ValueError(f'Card {index + 1}: the position change and the kept hand gap are for pose cards; a clip carries the joint change')
         if mode == 'recorded':
             exit_offset = np.zeros_like(offset)
-        elif mode == 'delta' and spec.get('basis') == 'position' and index > 0 and np.any(offset):
+        elif mode == 'delta' and index > 0 and (spec.get('basis') == 'grip' or (spec.get('basis') == 'position' and np.any(offset))):
+            # the gap is kept even when nothing before moved: the recording itself may bring the hands together
             previous = resolved[-1]
             resolved_previous = robot.validate_q(previous['samples'][-1] if previous.get('samples') is not None else previous['qpos'])
-            solved, position_error, angle_error = _position_delta(robot, _card_ends(robot, frames[index - 1])[1], resolved_previous, end, offset)
+            solved, position_error, angle_error = _position_delta(robot, _card_ends(robot, frames[index - 1])[1], resolved_previous, end, offset,
+                                                                  grip=spec['basis'] == 'grip')
             exit_offset = solved[COLUMNS] - end[COLUMNS]
             status = _level(position_error, angle_error)
-            report = _report(status, index, mode, basis='position', max_position_error_mm=position_error, max_angle_error_deg=angle_error)
+            report = _report(status, index, mode, basis=spec['basis'], max_position_error_mm=position_error, max_angle_error_deg=angle_error)
             if status == 'unreachable' and broken is None:
                 broken = index
         elif mode == 'delta':
@@ -527,8 +537,8 @@ def carry_edit(robot: Robot, project, index: int, qpos):
             samples[:, COLUMNS] = np.clip(samples[:, COLUMNS] + offset, lower, upper)
             frames[j] = {**frames[j], 'samples': samples.tolist(), 'qpos': samples[0].tolist()}
             moved = samples[-1]
-        elif spec.get('basis') == 'position':
-            moved, position_error, angle_error = _position_delta(robot, old_end, new_end, end, offset)
+        elif spec.get('basis') in ('position', 'grip'):
+            moved, position_error, angle_error = _position_delta(robot, old_end, new_end, end, offset, grip=spec['basis'] == 'grip')
             reports[j] = {'status': _level(position_error, angle_error), 'max_position_error_mm': position_error,
                           'max_angle_error_deg': angle_error}
             frames[j] = {**frames[j], 'qpos': moved.tolist()}

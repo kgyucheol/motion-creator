@@ -1872,7 +1872,7 @@ export default function Editor() {
     const note = report.after_unreachable !== undefined ? ` · ${report.after_unreachable + 1}번 카드가 도달하지 못한 영향` : '';
     switch (report.status) {
       case 'unchanged': return report.mode === 'cartesian' ? '기준 위치 그대로' : `이어서 이동${report.offset_deg ? ` · 관절 차이 ${report.offset_deg.toFixed(0)}°` : ''}`;
-      case 'ok': return report.mode === 'cartesian' ? `도달${error}${perHand}` : `이어서 이동${report.basis === 'position' ? ' · 위치 변화량' : ''}${error}${note}`;
+      case 'ok': return report.mode === 'cartesian' ? `도달${error}${perHand}` : `이어서 이동${report.basis === 'position' ? ' · 위치 변화량' : report.basis === 'grip' ? ' · 양손 간격 유지' : ''}${error}${note}`;
       case 'approx': return `근사${error}${perHand}`;
       case 'partial': return `한도까지 이동 · 요청 ${(report.shift_mm ?? 0).toFixed(0)}mm 중 ${(report.reached_shift_mm ?? 0).toFixed(0)}mm${error}${perHand}${note}`;
       case 'unreachable': return `도달 불가${error}${perHand}`;
@@ -2259,9 +2259,9 @@ export default function Editor() {
           {!activeIsClip && <label className="dynamic-hand" title="켜면 이 카드의 끝 자세가 선택한 물체를 따라갑니다. 물체를 옮기면 손이 그 위치로 갑니다."><input type="checkbox" disabled={disabled} checked={activeFrame.motion?.mode === 'cartesian'} onChange={e => void togglePoseObjectLink(e.target.checked)}/>물체 연결</label>}
           {!activeIsClip && frameIndex > 0 && activeFrame.motion?.mode !== 'cartesian' && <label className="dynamic-hand" title="켜면 이 카드가 바로 앞 카드가 끝난 자세에서 이어서 움직입니다(앞에서 물체 연결로 옮겨진 만큼 유지). 끄면 이 카드 동안 원래 녹화 자세로 서서히 돌아옵니다. 중간 카드 하나를 끄면 그 뒤 카드는 켜 두어도 이어받을 차이가 없습니다."><input type="checkbox" disabled={disabled} checked={activeFrame.motion?.mode === 'delta'} onChange={e => { checkpoint(); setMotion(e.target.checked ? { mode: 'delta', ...(activeFrame.motion?.basis ? { basis: activeFrame.motion.basis } : {}) } : undefined, e.target.checked ? '이 카드는 앞 카드가 끝난 자세에서 이어서 움직입니다.' : '이 카드는 앞 카드의 이동 차이를 서서히 없애며 원래 자세로 돌아옵니다.'); }}/>앞 카드 이동 연결</label>}
           {!activeIsClip && frameIndex > 0 && activeFrame.motion?.mode === 'delta' && <select aria-label="이어받는 변화량" disabled={disabled} value={activeFrame.motion.basis ?? 'joint'}
-            onChange={e => { checkpoint(); const basis = e.target.value as 'joint' | 'position'; setMotion(basis === 'joint' ? { mode: 'delta' } : { mode: 'delta', basis }, basis === 'joint' ? '녹화의 관절 변화량을 그대로 더합니다. 앞 카드 자세가 바뀌면 손이 움직이는 방향과 거리는 달라질 수 있습니다.' : '녹화에서 손(TCP)이 움직이고 돈 양을 앞 카드가 실제로 끝난 손 위치에서 그대로 재현합니다. 관절은 IK로 다시 풉니다.'); }}
-            title="관절 변화량: 녹화된 관절 회전을 그대로 더합니다(손목 회전처럼 관절 동작이 중요한 카드). 위치 변화량: 녹화에서 손(TCP)이 움직이고 돈 양을 그대로 재현합니다(양손을 모으는 것처럼 손 이동이 중요한 카드).">
-            <option value="joint">관절 변화량</option><option value="position">위치 변화량</option></select>}
+            onChange={e => { checkpoint(); const basis = e.target.value as 'joint' | 'position' | 'grip'; setMotion(basis === 'joint' ? { mode: 'delta' } : { mode: 'delta', basis }, basis === 'joint' ? '녹화의 관절 변화량을 그대로 더합니다. 앞 카드 자세가 바뀌면 손이 움직이는 방향과 거리는 달라질 수 있습니다.' : basis === 'position' ? '녹화에서 손(TCP)이 움직이고 돈 양을 앞 카드가 실제로 끝난 손 위치에서 그대로 재현합니다. 관절은 IK로 다시 풉니다.' : '두 손이 녹화된 양손 가운데점의 이동량만큼 함께 움직여, 앞 카드가 끝난 양손 간격을 그대로 유지합니다(물체를 든 채 옮길 때). 직선 이동과 함께 쓰면 두 손이 평행한 직선으로 움직입니다.'); }}
+            title="관절 변화량: 녹화된 관절 회전을 그대로 더합니다(손목 회전처럼 관절 동작이 중요한 카드). 위치 변화량: 녹화에서 손(TCP)이 움직이고 돈 양을 그대로 재현합니다(양손을 모으는 것처럼 손 이동이 중요한 카드). 양손 간격 유지: 두 손이 함께 같은 만큼 움직여 간격이 그대로입니다(물체를 든 채 옮기는 카드).">
+            <option value="joint">관절 변화량</option><option value="position">위치 변화량</option><option value="grip">양손 간격 유지</option></select>}
           {activeIsClip && <select aria-label="카드 동작 방식" disabled={disabled} value={activeFrame.motion?.mode ?? 'recorded'} onChange={e => void chooseMotionMode(e.target.value as CardMotion['mode'])}
             title="원본 그대로: 녹화된 동작 · 관절 델타: 앞 카드가 끝난 자세에서 이어서 원본의 관절 변화만 더함(동작이 중요한 카드) · 카테시안: 끝 지점을 목표 위치로 옮김(도착 위치가 중요한 카드)">
             {(['recorded', 'delta', 'cartesian'] as const).map(mode => <option key={mode} value={mode}>{modeLabel[mode]}</option>)}</select>}

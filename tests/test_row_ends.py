@@ -199,3 +199,18 @@ def test_a_position_delta_card_whose_carried_offset_passes_a_joint_limit_still_s
     resolved_previous = previous.copy()
     solved, _, _ = _position_delta(robot, previous, resolved_previous, end, offset)
     assert np.all(solved[7:] >= robot.lower[3:] - 1e-6) and np.all(solved[7:] <= robot.upper[3:] + 1e-6)
+
+
+def test_the_grip_basis_carries_both_hands_by_their_midpoint_move_and_keeps_their_gap(robot):
+    from motioncreator.card_motion import _position_delta, COLUMNS
+    project = json.loads(EXAMPLE.read_text())
+    previous, end = np.asarray(project['keyframes'][0]['qpos'], dtype=float), np.asarray(project['keyframes'][1]['qpos'], dtype=float)   # the recording opens the hands 15 cm
+    offset = np.zeros(COLUMNS.stop - COLUMNS.start)
+    solved, position_error, _ = _position_delta(robot, previous, previous, end, offset, grip=True)
+    assert position_error < 10
+    (left0, right0), (left1, right1), (recorded_left, recorded_right) = hands(robot, previous), hands(robot, solved), hands(robot, end)
+    assert np.linalg.norm(recorded_left - recorded_right) - np.linalg.norm(left0 - right0) > .1
+    assert abs(np.linalg.norm(left1 - right1) - np.linalg.norm(left0 - right0)) < .01                    # the gap is kept
+    assert np.allclose((left1 + right1) / 2 - (left0 + right0) / 2, (recorded_left + recorded_right) / 2 - (left0 + right0) / 2, atol=.01)
+    spec = {'mode': 'delta', 'basis': 'grip'}
+    assert validate_motion(spec)['basis'] == 'grip'

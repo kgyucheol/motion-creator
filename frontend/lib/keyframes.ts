@@ -98,7 +98,7 @@ export type DynamicReport = {
 export type CardMotion = {
   mode: 'recorded' | 'delta' | 'cartesian';
   /** 앞 카드 이동 연결(delta)이 지키는 변화량: 관절 변화량(기본) 또는 손(TCP) 위치 변화량(포즈 카드만). */
-  basis?: 'joint' | 'position';
+  basis?: 'joint' | 'position' | 'grip';
   target?: { kind: 'object'; object_id: string; reference_pose: { position: number[]; quaternion_xyzw: number[] };
     /** 기준 물체: 원본 자세를 만들 때 쓴 물체. 손은 이 물체의 끝에서 놓인 자리를 새 물체의 같은 쪽 끝에 유지한다. 없으면 기준 위치의 추적 물체. */
     ends?: { reference: { shape: 'box' | 'open_box' | 'cylinder' | 'sphere'; size: number[]; position: number[]; quaternion_xyzw: number[] };
@@ -123,8 +123,8 @@ export type MotionReport = {
   hand_errors_mm?: Partial<Record<'left_hand' | 'right_hand', number[]>>;
   /** 각도 허용을 쓴 카드: 손이 목표 방향에서 실제로 틀어진 각도(도, 양손 중 큰 값). */
   hand_turn_deg?: number;
-  /** 위치 변화량으로 이어받은 카드. */
-  basis?: 'position';
+  /** 위치 변화량이나 양손 간격 유지로 이어받은 카드. */
+  basis?: 'position' | 'grip';
   shift_mm?: number; max_position_error_mm?: number; max_shift_mm?: number; offset_deg?: number; clamped_deg?: number; after_unreachable?: number;
   /** Set when a joint limit or an unreachable card could be avoided by moving less in the same direction. */
   caused_by?: number; blocks?: number[]; safe_fraction?: number; safe_shift_mm?: number[]; requested_shift_mm?: number[];
