@@ -59,7 +59,10 @@ def child_env() -> dict:
 
 
 def robot_python() -> str:
-    return C.ROBOT_PYTHON or sys.executable
+    """The Python the SDK children run with: MOTIONCREATOR_ROBOT_PYTHON, else GR00T's venv (it has unitree_sdk2py), else this one."""
+    if C.ROBOT_PYTHON:
+        return C.ROBOT_PYTHON
+    return str(C.SDK_VENV_PYTHON) if C.SDK_VENV_PYTHON.exists() else sys.executable
 
 
 # ---- real robot --------------------------------------------------------------------------------------------------------------
@@ -70,9 +73,17 @@ class DdsStateReader:
     def __init__(self, interface: str):
         self.interface = interface
         self._state: RobotState | None = None
-        self._proc = subprocess.Popen([robot_python(), '-W', 'ignore', '-m', 'motioncreator.replay.dds_reader', interface], stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL, text=True, bufsize=1, env=child_env(), cwd=str(C.ROOT))
+        self.python = robot_python()
+        self._errors: list[str] = []
+        self._proc = subprocess.Popen([self.python, '-W', 'ignore', '-m', 'motioncreator.replay.dds_reader', interface], stdout=subprocess.PIPE,
+                                      stderr=subprocess.PIPE, text=True, bufsize=1, env=child_env(), cwd=str(C.ROOT))
         threading.Thread(target=self._pump, daemon=True).start()
+        threading.Thread(target=self._pump_errors, daemon=True).start()
+
+    def _pump_errors(self) -> None:
+        for line in self._proc.stderr:
+            if line.strip():
+                self._errors = [*self._errors[-4:], line.rstrip()]
 
     def _pump(self) -> None:
         for line in self._proc.stdout:
@@ -86,8 +97,12 @@ class DdsStateReader:
         deadline = time.monotonic() + self.START_TIMEOUT_S
         while self._state is None:
             if self._proc.poll() is not None or time.monotonic() > deadline:
+                died = self._proc.poll() is not None
                 self.close()
-                raise CommandError('로봇 상태를 수신하지 못했습니다. 인터페이스 이름, 로봇 전원, 로봇 Python(MOTIONCREATOR_ROBOT_PYTHON)을 확인하세요. 명령은 보내지 않았습니다')
+                time.sleep(0.05)
+                cause = f' 오류: {self._errors[-1][-200:]}' if died and self._errors else ''
+                raise CommandError(f'로봇 상태를 수신하지 못했습니다 ({"수신 프로세스가 종료됨" if died else f"{self.START_TIMEOUT_S:.0f}초 동안 수신 없음"}, '
+                                   f'Python: {self.python}).{cause} 인터페이스 이름, 로봇 전원, 로봇 Python(MOTIONCREATOR_ROBOT_PYTHON)을 확인하세요. 명령은 보내지 않았습니다')
             time.sleep(0.05)
 
     def state(self) -> RobotState | None:

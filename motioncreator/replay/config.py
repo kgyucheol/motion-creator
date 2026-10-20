@@ -6,7 +6,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 CYCLONEDDS_HOME = Path(os.environ.get('CYCLONEDDS_HOME', Path.home() / 'cyclonedds' / 'install'))   # the build the Unitree SDK's binding matches
-ROBOT_PYTHON = os.environ.get('MOTIONCREATOR_ROBOT_PYTHON')        # interpreter that has unitree_sdk2py (default: this one)
+ROBOT_PYTHON = os.environ.get('MOTIONCREATOR_ROBOT_PYTHON')        # interpreter that has unitree_sdk2py (default: SDK_VENV_PYTHON, else this one)
+SDK_VENV_PYTHON = Path.home() / 'GR00T-WholeBodyControl' / '.venv_decoupled_wbc' / 'bin' / 'python'   # GR00T's venv ships unitree_sdk2py
 ROBOT_NET = '192.168.123.'
 
 N_JOINTS = 29
