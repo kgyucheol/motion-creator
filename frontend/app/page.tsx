@@ -2275,8 +2275,8 @@ export default function Editor() {
               <button disabled={disabled} onClick={recaptureMotionReference} title="물체의 지금 위치를 녹화 때의 위치로 다시 저장합니다. 이 위치에서는 카드가 원본 그대로입니다.">기준 다시 잡기</button>
               <label className="dynamic-hand" title="물체 연결은 항상 양 끝을 기준으로 손을 놓습니다. 끄면 각 손이 녹화 때 기준 물체의 끝에서 놓인 거리를 새 물체의 같은 쪽 끝에 유지합니다. 켜면 그 대신 각 손의 TCP를 물체 끝점(중심축 끝)에서 아래 안쪽·옆·위 값만큼 떨어진 점에 둡니다(양손 같은 값).">
                 <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.target.ends?.tcp} onChange={e => setRowEndTcp(e.target.checked ? { inward_m: 0, lateral_m: 0, up_m: 0 } : undefined)}/>양끝 파지</label>
-              <label className="dynamic-hand" title="켜면 각 손이 머리 카메라에서 자기 파지점을 바라보는 방향을 가리키도록 손 방향을 돌립니다(가장 작은 회전, 그 축을 도는 롤은 녹화 그대로). 팔이 그 방향을 맞추지 못하면 각도 허용만큼 틀어질 수 있습니다.">
-                <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.camera_aim} onChange={e => { const { camera_aim: _old, ...rest } = activeFrame.motion!; setMotion(e.target.checked ? { ...rest, camera_aim: true } : rest); }}/>카메라 시선 방향</label>
+              <label className="dynamic-hand" title="켜면 각 손이 두 어깨 사이에서 자기 파지점을 바라보는 방향을 가리키도록 손 방향을 돌립니다(가장 작은 회전, 그 축을 도는 롤은 녹화 그대로). 팔이 그 방향을 맞추지 못하면 각도 허용만큼 틀어질 수 있습니다.">
+                <input type="checkbox" disabled={disabled} checked={!!activeFrame.motion.camera_aim} onChange={e => { const { camera_aim: _old, ...rest } = activeFrame.motion!; setMotion(e.target.checked ? { ...rest, camera_aim: true } : rest); }}/>시선 방향</label>
               {activeFrame.motion.target.ends?.tcp && <span className="dynamic-offset" title="각 손의 TCP가 물체 끝점에서 얼마나 떨어질지(mm, 양손 같은 값). 안쪽은 물체 가운데 방향, 옆은 +가 로봇 쪽, 위는 +z입니다.">
                 {([['inward_m', '안쪽'], ['lateral_m', '옆'], ['up_m', '위']] as const).map(([key, label]) => <label key={key}>{label}
                   <NumericInput aria-label={`TCP ${label} (mm)`} step="1" disabled={disabled} value={Math.round(((activeFrame.motion!.target as ObjectTarget).ends!.tcp![key]) * 1000)}

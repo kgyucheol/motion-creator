@@ -165,8 +165,7 @@ def test_an_angle_tolerance_turns_the_hands_only_as_far_as_needed_instead_of_ben
         validate_motion(spec)
 
 
-def test_camera_aim_points_each_hand_along_the_line_of_sight_to_its_grasp_point_and_keeps_its_roll(robot):
-    from motioncreator.tool_model import head_camera_pose
+def test_camera_aim_points_each_hand_along_the_line_from_between_the_shoulders_to_its_grasp_point_and_keeps_its_roll(robot):
     project = json.loads(EXAMPLE.read_text())
     cube = project['scene_objects'][0]
     aimed = with_ends(copy.deepcopy(project), cylinder(np.add(cube['position'], [.02, 0, 0]), .5))
@@ -174,8 +173,8 @@ def test_camera_aim_points_each_hand_along_the_line_of_sight_to_its_grasp_point_
     resolved, reports = resolve_project_motions(robot, aimed, advise=False)
     assert reports[2]['status'] in ('ok', 'approx')
     recorded_end, end = np.asarray(project['keyframes'][2]['qpos']), np.asarray(resolved['keyframes'][2]['qpos'])
-    camera = head_camera_pose(robot, recorded_end)[0]
     before, after = robot.data(recorded_end), robot.data(end)
+    camera = np.mean([before.xpos[robot.model.body(f'{side}_shoulder_pitch_link').id] for side in ('left', 'right')], axis=0)
     for hand in ('left_hand', 'right_hand'):
         position, matrix = robot.point(after, hand)
         pointing = position - after.xpos[robot.orientation_ids[hand]]

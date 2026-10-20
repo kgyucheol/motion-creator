@@ -20,7 +20,6 @@ from .dynamic_clip import (APPROX_DEG, APPROX_MM, ARM_WAIST_COLUMNS, DEFAULT_MAX
                            RELAXATIONS, WAIST_MODES, _level, object_delta, scene_object_pose)
 from .robot import FEET, Robot
 from .row_ends import SHAPES, row_goals, row_of
-from .tool_model import head_camera_pose
 
 SEARCH_STEPS = 7
 REACH_MM, REACH_DEG = 10., 5.        # a hand this close to its goal counts as having reached it; past that the move stops short
@@ -152,7 +151,7 @@ def _hand_goals(robot: Robot, end_q, spec, project, index):
         aim = None
         if spec.get('camera_aim'):          # the way each hand points: from its wrist to its TCP, in the hand frame
             pointing = {hand: matrix.T @ (position - data.xpos[robot.orientation_ids[hand]]) for hand, (position, matrix) in hands.items()}
-            aim = head_camera_pose(robot, end_q)[0], {hand: axis / np.linalg.norm(axis) for hand, axis in pointing.items()}
+            aim = _sight_origin(robot, data), {hand: axis / np.linalg.norm(axis) for hand, axis in pointing.items()}
         return _row_end_goals(spec, hands, project, index, aim)
     middle = np.mean([position for position, _ in hands.values()], axis=0)
     reference = {'position': middle.tolist(), 'quaternion_xyzw': [0., 0., 0., 1.]}
@@ -169,9 +168,9 @@ def _row_end_goals(spec, hands, project, index, aim=None):
     """Goals that put each hand at its end of the tracked object (see row_ends), plus the card's own TCP offset.
 
     A card without `ends` (saved before every object target became a row-end grasp) takes the tracked object, as it
-    was at `reference_pose`, as its reference. With `aim` = (head camera position, {hand: pointing axis in the hand
-    frame}) each hand is then swung, by the smallest turn, to point along the camera's line of sight to its goal: the
-    hand reaches in the way the robot looks at the grasp point, keeping the recorded roll about that line."""
+    was at `reference_pose`, as its reference. With `aim` = (sight origin, {hand: pointing axis in the hand frame}) each
+    hand is then swung, by the smallest turn, to point along the line from the sight origin (between the shoulders) to
+    its goal: the hand reaches in the way the robot looks at the grasp point, keeping the recorded roll about that line."""
     from .motion import project_scene_objects
     target = spec['target']
     item = next((item for item in project_scene_objects(project) if item.get('id') == target['object_id']), None)
@@ -191,6 +190,11 @@ def _row_end_goals(spec, hands, project, index, aim=None):
     shift = max(float(np.linalg.norm(goals[hand][0] - hands[hand][0])) for hand in goals)
     angle = max(float(np.degrees((goals[hand][1] * Rotation.from_matrix(hands[hand][1]).inv()).magnitude())) for hand in goals)
     return goals, {'shift_mm': shift * 1000, 'rotation_deg': angle, 'hands': hands}, None
+
+
+def _sight_origin(robot: Robot, data):
+    """Where a camera-aimed card looks from: midway between the shoulder joints (the head camera looks down too steeply)."""
+    return np.mean([data.xpos[robot.model.body(f'{side}_shoulder_pitch_link').id] for side in HANDS], axis=0)
 
 
 def _swing_to(rotation, local_axis, direction):
