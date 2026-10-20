@@ -193,8 +193,11 @@ def _row_end_goals(spec, hands, project, index, aim=None):
 
 
 def _sight_origin(robot: Robot, data):
-    """Where a camera-aimed card looks from: midway between the shoulder joints (the head camera looks down too steeply)."""
-    return np.mean([data.xpos[robot.model.body(f'{side}_shoulder_pitch_link').id] for side in HANDS], axis=0)
+    """Where a camera-aimed card looks from: midway between the shoulder joints, at the height of the elbows (from the head
+    camera or the shoulders the hands tip down too steeply)."""
+    middle = np.mean([data.xpos[robot.model.body(f'{side}_shoulder_pitch_link').id] for side in HANDS], axis=0)
+    middle[2] = np.mean([data.xpos[robot.model.body(f'{side}_elbow_link').id][2] for side in HANDS])
+    return middle
 
 
 def _swing_to(rotation, local_axis, direction):
@@ -334,7 +337,8 @@ def _position_delta(robot: Robot, recorded_previous, resolved_previous, end, off
         (p0, m0), (p1, m1), (pn, mn) = robot.point(before, hand), robot.point(after, hand), robot.point(now, hand)
         goals[hand] = (pn + (p1 - p0), Rotation.from_matrix(mn @ m0.T @ m1))
     seed = np.array(end, dtype=float)
-    seed[COLUMNS] = end[COLUMNS] + offset
+    limits = slice(COLUMNS.start - 4, COLUMNS.stop - 4)         # qpos has 7 root values; the limit arrays 3
+    seed[COLUMNS] = np.clip(end[COLUMNS] + offset, robot.lower[limits] + 1e-6, robot.upper[limits] - 1e-6)
     return _solve_once(robot, seed, {'waist': 'lock'}, goals, RELAXATIONS)
 
 

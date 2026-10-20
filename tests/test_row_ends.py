@@ -165,7 +165,7 @@ def test_an_angle_tolerance_turns_the_hands_only_as_far_as_needed_instead_of_ben
         validate_motion(spec)
 
 
-def test_camera_aim_points_each_hand_along_the_line_from_between_the_shoulders_to_its_grasp_point_and_keeps_its_roll(robot):
+def test_camera_aim_points_each_hand_along_the_line_from_between_the_shoulders_at_elbow_height_to_its_grasp_point(robot):
     project = json.loads(EXAMPLE.read_text())
     cube = project['scene_objects'][0]
     aimed = with_ends(copy.deepcopy(project), cylinder(np.add(cube['position'], [.02, 0, 0]), .5))
@@ -175,6 +175,7 @@ def test_camera_aim_points_each_hand_along_the_line_from_between_the_shoulders_t
     recorded_end, end = np.asarray(project['keyframes'][2]['qpos']), np.asarray(resolved['keyframes'][2]['qpos'])
     before, after = robot.data(recorded_end), robot.data(end)
     camera = np.mean([before.xpos[robot.model.body(f'{side}_shoulder_pitch_link').id] for side in ('left', 'right')], axis=0)
+    camera[2] = np.mean([before.xpos[robot.model.body(f'{side}_elbow_link').id][2] for side in ('left', 'right')])
     for hand in ('left_hand', 'right_hand'):
         position, matrix = robot.point(after, hand)
         pointing = position - after.xpos[robot.orientation_ids[hand]]
@@ -187,3 +188,14 @@ def test_camera_aim_points_each_hand_along_the_line_from_between_the_shoulders_t
         assert np.degrees(np.arccos(np.clip((matrix @ side) @ swing.apply(old_matrix @ side) / np.linalg.norm(side) ** 2, -1, 1))) < 6
     point = copy.deepcopy(project['keyframes'][5]['motion'])
     assert 'camera_aim' not in validate_motion({**point, 'camera_aim': True})     # a point target ignores it
+
+
+def test_a_position_delta_card_whose_carried_offset_passes_a_joint_limit_still_solves(robot):
+    from motioncreator.card_motion import COLUMNS, _position_delta
+    project = json.loads(EXAMPLE.read_text())
+    previous, end = np.asarray(project['keyframes'][2]['qpos'], dtype=float), np.asarray(project['keyframes'][3]['qpos'], dtype=float)
+    offset = np.zeros(COLUMNS.stop - COLUMNS.start)
+    offset[robot.names.index('left_elbow_joint') - 12] = 4.          # far past the elbow's range
+    resolved_previous = previous.copy()
+    solved, _, _ = _position_delta(robot, previous, resolved_previous, end, offset)
+    assert np.all(solved[7:] >= robot.lower[3:] - 1e-6) and np.all(solved[7:] <= robot.upper[3:] + 1e-6)
