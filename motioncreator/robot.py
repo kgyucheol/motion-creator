@@ -273,7 +273,8 @@ class Robot:
 
     def solve(self, q, anchor, focus=None, target=None, pins=FEET, resistance=1., mode='elastic', targets=None, max_nfev=50,
               posture_reference=None, posture_weight=.055, selected_targets=None, orientation_targets=None,
-              joint_targets=None, angle_pins=()):
+              joint_targets=None, angle_pins=(), orientation_tolerance=0.):
+        # orientation_tolerance (rad): an orientation target within this angle costs nothing; past it only the excess counts.
         q, anchor = self.validate_q(q), self.validate_q(anchor)
         selected_targets = dict(selected_targets or {})
         orientation_targets = dict(orientation_targets or {})
@@ -386,11 +387,22 @@ class Robot:
                 if k in orientation_targets or k in orientation_locks or (k in pins and k in FEET):
                     w = 90. if k in orientation_locks or (k in pins and k in FEET) else 18.
                     err = Rotation.from_matrix(r @ tr.T).as_rotvec()
-                    residuals.append(w * err)
+                    band = np.eye(3)
+                    angle = np.linalg.norm(err)
+                    if orientation_tolerance and k in orientation_targets and k not in orientation_locks:
+                        if angle <= orientation_tolerance:
+                            excess, band = np.zeros(3), np.zeros((3, 3))
+                        else:      # e - t e/|e| and its derivative
+                            axis = err / angle
+                            excess = err - orientation_tolerance * axis
+                            band = np.eye(3) - orientation_tolerance / angle * (np.eye(3) - np.outer(axis, axis))
+                    else:
+                        excess = err
+                    residuals.append(w * excess)
                     if jac:
                         if jrot is None:
                             _, jrot = jacobian(p, self.ids[k], self.orientation_ids[k])
-                        matrices.append(w * left_jacobian_inverse(err) @ jrot)
+                        matrices.append(w * band @ left_jacobian_inverse(err) @ jrot)
                 if k in FEET:
                     for offset in ((-.085, -.03, 0), (-.085, .03, 0), (.085, -.03, 0), (.085, .03, 0)):
                         corner = p + r @ offset

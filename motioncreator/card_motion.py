@@ -26,6 +26,8 @@ REACH_MM, REACH_DEG = 10., 5.        # a hand this close to its goal counts as h
 MODES = ('recorded', 'delta', 'cartesian')
 DELTA_BASES = ('joint', 'position')
 TARGET_KINDS = ('object', 'point')
+TOLERANCE_STEP_DEG = 5.
+MAX_ANGLE_TOLERANCE_DEG = 45.     # how far a cartesian card may turn the hands from the goal orientation when the arms cannot meet it exactly
 COLUMNS = slice(ARM_WAIST_COLUMNS.start, ARM_WAIST_COLUMNS.stop)
 
 
@@ -88,6 +90,11 @@ def validate_motion(spec):
         raise ValueError('TCP offset yaw must be within ±180 degrees')
     out.update(hands=list(hands), freedom=freedom, waist=waist, max_shift_m=shift,
                offset={'position': offset_position.tolist(), 'yaw_deg': offset_yaw})
+    tolerance = spec.get('angle_tolerance_deg', 0.)
+    if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)) or not 0 <= tolerance <= MAX_ANGLE_TOLERANCE_DEG:
+        raise ValueError(f'Hand angle tolerance must be 0–{MAX_ANGLE_TOLERANCE_DEG:.0f} degrees')
+    if tolerance:
+        out['angle_tolerance_deg'] = float(tolerance)
     return out
 
 
@@ -176,8 +183,11 @@ ROW_RELAXATIONS = (*RELAXATIONS, (.02, 400))       # row-end grasps may straight
 WAIST_PITCH_STEPS_DEG = (5., 10., 15., 20., 25., 29.)    # forward bend tried, smallest first, only when the arms alone do not reach (the joint stops at 29.8°)
 
 
-def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=None):
-    """One IK solve from the recorded end. With `waist_pitch_deg` the waist is released and its pitch aimed at the recorded value plus that bend."""
+def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=None, tolerance_deg=0.):
+    """One IK solve from the recorded end. With `waist_pitch_deg` the waist is released and its pitch aimed at the recorded value plus that bend.
+
+    With `tolerance_deg` a hand may end up to that angle from its goal orientation for free; the returned angle error is
+    only what lies past it."""
     targets = {hand: goal[0] for hand, goal in goals.items()}
     orientations = {hand: goal[1].as_quat() for hand, goal in goals.items()}
     locked = spec['waist'] == 'lock' and waist_pitch_deg is None
@@ -192,7 +202,8 @@ def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=N
     for posture_weight, evaluations in relaxations:
         candidate, info = robot.solve(initial, end_q, pins=(*FEET, 'pelvis'), angle_pins=lock, mode='free', resistance=0.,
                                       selected_targets=targets, orientation_targets=orientations, joint_targets=waist_joints or None,
-                                      posture_reference=end_q, posture_weight=posture_weight, max_nfev=evaluations)
+                                      posture_reference=end_q, posture_weight=posture_weight, max_nfev=evaluations,
+                                      orientation_tolerance=np.radians(tolerance_deg))
         if best is None or info['target_error_mm'] < best[1]['target_error_mm']:
             best = (candidate, info)
         if info['converged'] and not info.get('rejected'):
@@ -206,24 +217,46 @@ def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=N
         position, matrix = robot.point(achieved, hand)
         position_error = max(position_error, float(np.linalg.norm(position - goal[0])) * 1000)
         angle_error = max(angle_error, float(np.degrees((Rotation.from_matrix(matrix) * goal[1].inv()).magnitude())))
-    return result, position_error, angle_error
+    return result, position_error, max(0., angle_error - tolerance_deg)
+
+
+def _tolerance_steps(tolerance, coarse=False):
+    """The angle tolerances tried before bending the waist: 5° at a time up to the card's, so the hands turn only as far as needed."""
+    if not tolerance:
+        return ()
+    if coarse:
+        return (tolerance,)
+    return (*np.arange(TOLERANCE_STEP_DEG, tolerance, TOLERANCE_STEP_DEG), tolerance)
 
 
 def _solve_end(robot: Robot, end_q, spec, goals, coarse=False):
     """The waist and arm joints that put the hands on `goals`, starting from the recorded end. Returns (q, errors).
 
-    An object target (a row-end grasp) first tries with the waist as the card asks (locked by default) and the elbows free to straighten;
-    only when the hands still miss does it bend the waist forward, as little as possible (5° steps up to 29°; `coarse`, used while
-    searching how far the hands can go, tries only the largest bends to stay fast)."""
+    The hands are first aimed at the goal orientation exactly; only when they miss is the card's `angle_tolerance_deg`
+    used (the hands may turn that much from the goal), widened 5° at a time. An object target (a row-end grasp) tries with the waist as the card
+    asks (locked by default) and the elbows free to straighten, exactly and then with the tolerance; only when the hands
+    still miss does it bend the waist forward, as little as possible, with the tolerance (5° steps up to 29°; `coarse`,
+    used while searching how far the hands can go, tries only the largest bends to stay fast)."""
     target = spec.get('target') or {}
+    tolerance = spec.get('angle_tolerance_deg', 0.)
+
+    def reached(trial):
+        return trial[1] < REACH_MM and trial[2] < REACH_DEG
+    relaxations = ROW_RELAXATIONS if target.get('kind') == 'object' else RELAXATIONS
+    best = _solve_once(robot, end_q, spec, goals, relaxations)
+    if reached(best):
+        return best
+    for step in _tolerance_steps(tolerance, coarse):
+        trial = _solve_once(robot, end_q, spec, goals, relaxations, tolerance_deg=step)
+        if reached(trial):
+            return trial
+        if trial[1] < best[1]:
+            best = trial
     if target.get('kind') != 'object':
-        return _solve_once(robot, end_q, spec, goals, RELAXATIONS)
-    best = _solve_once(robot, end_q, spec, goals, ROW_RELAXATIONS)
-    if best[1] < REACH_MM and best[2] < REACH_DEG:
         return best
     for bend in WAIST_PITCH_STEPS_DEG[-1:] if coarse else WAIST_PITCH_STEPS_DEG:
-        trial = _solve_once(robot, end_q, spec, goals, ROW_RELAXATIONS, bend)
-        if trial[1] < REACH_MM and trial[2] < REACH_DEG:
+        trial = _solve_once(robot, end_q, spec, goals, ROW_RELAXATIONS, bend, tolerance)
+        if reached(trial):
             return trial
         if trial[1] < best[1]:
             best = trial
@@ -330,6 +363,9 @@ def resolve_project_motions(robot: Robot, project, advise=True):
                                  max_position_error_mm=position_error, max_angle_error_deg=angle_error)
                 achieved = robot.data(solved)
                 report['hand_errors_mm'] = {hand: ((robot.point(achieved, hand)[0] - goal[0]) * 1000).tolist() for hand, goal in goals.items()}
+                if spec.get('angle_tolerance_deg'):          # the angle error above is only what lies past the tolerance
+                    report['hand_turn_deg'] = max(float(np.degrees((Rotation.from_matrix(robot.point(achieved, hand)[1]) * goal[1].inv()).magnitude()))
+                                                  for hand, goal in goals.items())
                 if fraction < 1.:
                     report.update(reached_fraction=fraction, reached_shift_mm=fraction * base['shift_mm'],
                                   max_shift_mm=spec['max_shift_m'] * 1000)

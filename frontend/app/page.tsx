@@ -1866,7 +1866,8 @@ export default function Editor() {
   }
   function motionStatusText(report: MotionReport | null) {
     if (!report) return '미리보기를 만들면 표시됩니다';
-    const error = report.max_position_error_mm !== undefined ? ` · ${report.max_position_error_mm.toFixed(1)}mm` : '';
+    const turn = report.hand_turn_deg !== undefined ? ` · 손 각도 ${report.hand_turn_deg.toFixed(0)}° 틀어짐` : '';
+    const error = (report.max_position_error_mm !== undefined ? ` · ${report.max_position_error_mm.toFixed(1)}mm` : '') + turn;
     const perHand = report.hand_errors_mm ? ` · 오차(도달−목표) ${(['left_hand', 'right_hand'] as const).flatMap(hand => { const e = report.hand_errors_mm![hand]; return e ? [`${hand === 'left_hand' ? '좌' : '우'} x${e[0].toFixed(0)} y${e[1].toFixed(0)} z${e[2].toFixed(0)}`] : []; }).join(' / ')}mm` : '';
     const note = report.after_unreachable !== undefined ? ` · ${report.after_unreachable + 1}번 카드가 도달하지 못한 영향` : '';
     switch (report.status) {
@@ -2290,6 +2291,9 @@ export default function Editor() {
                   onChange={e => { const position = [...(activeFrame.motion!.offset?.position ?? [0, 0, 0])]; position[i] = (+e.target.value || 0) / 1000; patchMotion({ offset: { position, yaw_deg: activeFrame.motion!.offset?.yaw_deg ?? 0 } }); }}/></label>)}
               <label>회전°<NumericInput aria-label="오프셋 회전 (도)" step="1" disabled={disabled} value={activeFrame.motion.offset?.yaw_deg ?? 0}
                 onChange={e => patchMotion({ offset: { position: activeFrame.motion!.offset?.position ?? [0, 0, 0], yaw_deg: +e.target.value || 0 } })}/></label>
+              <label title="팔이 손 방향을 정확히 맞추지 못할 때 손이 목표 방향에서 이만큼(도)까지 틀어져도 됩니다. 허리를 숙이기 전에 먼저 써 봅니다. 0이면 녹화 방향 그대로입니다.">각도 허용°
+                <NumericInput aria-label="손 각도 허용 (도)" step="1" min="0" max="45" disabled={disabled} value={activeFrame.motion.angle_tolerance_deg ?? 0}
+                  onChange={e => { const value = Math.min(45, Math.max(0, +e.target.value || 0)); const { angle_tolerance_deg: _old, ...rest } = activeFrame.motion!; setMotion(value ? { ...rest, angle_tolerance_deg: value } : rest); }}/></label>
             </span>
             {!activeIsClip && <button disabled={disabled} aria-pressed={showMotionAdvanced} onClick={() => setShowMotionAdvanced(value => !value)} title="손 선택·허리 고정·기울기·회전 오프셋">{showMotionAdvanced ? '세부 닫기' : '세부'}</button>}
             {(activeIsClip || showMotionAdvanced) && <>

@@ -108,6 +108,8 @@ export type CardMotion = {
   offset?: { position: number[]; yaw_deg: number };
   freedom?: 'yaw_xyz' | 'full6d';
   waist?: 'free' | 'lock';
+  /** 손 각도 허용(도): 팔이 손 방향을 정확히 맞추지 못하면 목표 방향에서 이만큼까지 틀어져도 된다. 없으면 0. */
+  angle_tolerance_deg?: number;
   max_shift_m?: number;
 };
 
@@ -117,6 +119,8 @@ export type MotionReport = {
   reached_fraction?: number; reached_shift_mm?: number;
   /** 손(TCP)별 월드 좌표 오차 mm = 도달한 위치 − 목표 위치 (x 앞, y 왼쪽, z 위). */
   hand_errors_mm?: Partial<Record<'left_hand' | 'right_hand', number[]>>;
+  /** 각도 허용을 쓴 카드: 손이 목표 방향에서 실제로 틀어진 각도(도, 양손 중 큰 값). */
+  hand_turn_deg?: number;
   /** 위치 변화량으로 이어받은 카드. */
   basis?: 'position';
   shift_mm?: number; max_position_error_mm?: number; max_shift_mm?: number; offset_deg?: number; clamped_deg?: number; after_unreachable?: number;

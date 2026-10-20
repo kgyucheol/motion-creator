@@ -145,3 +145,21 @@ def test_a_waist_bend_from_a_pose_already_leaning_forward_stops_at_the_joint_lim
     goals = {hand: (poses[hand][0] + [.05, 0, 0], Rotation.from_matrix(poses[hand][1])) for hand in ('left_hand', 'right_hand')}
     solved, _, _ = _solve_once(robot, end, {'waist': 'lock'}, goals, ROW_RELAXATIONS, 29.)
     assert solved[7 + i] <= robot.upper[3 + i]
+
+
+def test_an_angle_tolerance_turns_the_hands_only_as_far_as_needed_instead_of_bending_the_waist(robot):
+    project = json.loads(EXAMPLE.read_text())
+    cube = project['scene_objects'][0]
+    recorded = waist_pitch_deg(robot, project['keyframes'][2]['qpos'])
+    row = cylinder(np.add(cube['position'], [.1, 0, 0]), .5)
+    exact, exact_reports = resolve_project_motions(robot, with_ends(copy.deepcopy(project), row), advise=False)
+    tolerant = with_ends(copy.deepcopy(project), row)
+    tolerant['keyframes'][2]['motion']['angle_tolerance_deg'] = 30
+    turned, reports = resolve_project_motions(robot, tolerant, advise=False)
+    assert waist_pitch_deg(robot, exact['keyframes'][2]['qpos']) - recorded > 5 and 'hand_turn_deg' not in exact_reports[2]
+    assert abs(waist_pitch_deg(robot, turned['keyframes'][2]['qpos']) - recorded) < .5        # no bend
+    assert reports[2]['status'] in ('ok', 'approx') and 5 < reports[2]['hand_turn_deg'] < 25   # turned, but not to the full 30°
+    spec = copy.deepcopy(tolerant['keyframes'][2]['motion'])
+    spec['angle_tolerance_deg'] = 60
+    with pytest.raises(ValueError):
+        validate_motion(spec)
