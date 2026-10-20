@@ -30,6 +30,9 @@ HANDLES = {
     'right_shoulder': ('right_shoulder_pitch_link', (0, 0, 0), '오른 어깨'),
 }
 FEET = ('left_foot', 'right_foot')
+BODY_CLEARANCE_M = .02            # card and straight-path solves keep the arms (upper arm down) this far from the trunk
+CLEARANCE_WEIGHT = 60.            # per metre inside the clearance (a hand target weighs 28 per metre of error)
+CLEARANCE_LOOKAHEAD_M = .05       # geoms farther than the clearance plus this are not measured exactly
 ROTATABLE = ('pelvis', 'left_hand', 'right_hand', *FEET)
 BASIC_ROTATABLE = ROTATABLE
 HINGES = {key: key + '_joint' for key in ('left_elbow', 'right_elbow', 'left_knee', 'right_knee')}
@@ -133,6 +136,7 @@ class Robot:
         self.lower = np.r_[[-4, -4, .20], m.jnt_range[1:, 0]]
         self.upper = np.r_[[4, 4, 1.5], m.jnt_range[1:, 1]]
         self.home = m.qpos0.copy()
+        self.body_clearance_pairs = self._body_clearance_pairs()
         for side in ('left', 'right'):
             for name, value in [('hip_pitch', -.12), ('knee', .24), ('ankle_pitch', -.12), ('elbow', .15)]:
                 self.home[m.joint(f'{side}_{name}_joint').qposadr[0]] = value
@@ -271,10 +275,28 @@ class Robot:
         aa, bb = ancestors(self.ids[a]), ancestors(self.ids[b])
         return min(i + bb.index(n) for i, n in enumerate(aa) if n in bb)
 
+    def _body_clearance_pairs(self):
+        """(arm geom, trunk geom) collision pairs an arm must keep clear of: everything from the upper arm (shoulder yaw
+        link) down, including a mounted tool, against the pelvis, torso, logo and head."""
+        m = self.model
+        trunk_bodies = {'pelvis', 'pelvis_contour_link', 'torso_link', 'logo_link', 'head_link'}
+
+        def chain(body):
+            names = set()
+            while body:
+                names.add(m.body(body).name)
+                body = m.body_parentid[body]
+            return names
+        collidable = [g for g in range(m.ngeom) if m.geom_contype[g] or m.geom_conaffinity[g]]
+        trunk = [g for g in collidable if m.body(m.geom_bodyid[g]).name in trunk_bodies]
+        arms = [g for g in collidable if chain(m.geom_bodyid[g]) & {'left_shoulder_yaw_link', 'right_shoulder_yaw_link'}]
+        return [(a, b) for a in arms for b in trunk]
+
     def solve(self, q, anchor, focus=None, target=None, pins=FEET, resistance=1., mode='elastic', targets=None, max_nfev=50,
               posture_reference=None, posture_weight=.055, selected_targets=None, orientation_targets=None,
-              joint_targets=None, angle_pins=(), orientation_tolerance=0.):
+              joint_targets=None, angle_pins=(), orientation_tolerance=0., clearance=0.):
         # orientation_tolerance (rad): an orientation target within this angle costs nothing; past it only the excess counts.
+        # clearance (m): the arms are pushed away from the trunk when closer than this (0 = no check).
         q, anchor = self.validate_q(q), self.validate_q(anchor)
         selected_targets = dict(selected_targets or {})
         orientation_targets = dict(orientation_targets or {})
@@ -420,6 +442,20 @@ class Robot:
                 residuals.append(np.array([120.*(x[index]-value)]))
                 if jac:
                     row = np.zeros((1, n)); row[0, index] = 120.; matrices.append(row)
+            if clearance:
+                fromto = np.zeros(6)
+                for a, b in self.body_clearance_pairs:
+                    distance = mujoco.mj_geomDistance(self.model, d, a, b, clearance + CLEARANCE_LOOKAHEAD_M, fromto)
+                    residuals.append(np.array([CLEARANCE_WEIGHT * max(0., clearance - distance)]))
+                    if jac:
+                        row = np.zeros((1, n))
+                        gap = fromto[3:] - fromto[:3]
+                        if distance < clearance and np.linalg.norm(gap) > 1e-9:
+                            normal = np.sign(distance or 1.) * gap / np.linalg.norm(gap)     # from the arm toward the trunk
+                            arm_point, _ = jacobian(fromto[:3].copy(), self.model.geom_bodyid[a])
+                            trunk_point, _ = jacobian(fromto[3:].copy(), self.model.geom_bodyid[b])
+                            row[0] = -CLEARANCE_WEIGHT * normal @ (trunk_point - arm_point)
+                        matrices.append(row)
             residuals.append(posture_weight*(x-posture_x))
             if jac:
                 matrices.append(posture_weight*np.eye(n))

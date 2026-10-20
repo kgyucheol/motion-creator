@@ -19,7 +19,7 @@ from scipy.spatial.transform import Rotation, Slerp
 
 from .dynamic_clip import (APPROX_DEG, APPROX_MM, ARM_WAIST_COLUMNS, DEFAULT_MAX_SHIFT_M, FREEDOM, HANDS, OK_DEG, OK_MM,
                            RELAXATIONS, WAIST_MODES, _level, object_delta, scene_object_pose)
-from .robot import FEET, Robot
+from .robot import BODY_CLEARANCE_M, FEET, Robot
 from .row_ends import SHAPES, row_goals, row_of
 
 SEARCH_STEPS = 7
@@ -231,7 +231,7 @@ def _solve_once(robot: Robot, end_q, spec, goals, relaxations, waist_pitch_deg=N
         candidate, info = robot.solve(initial, end_q, pins=(*FEET, 'pelvis'), angle_pins=lock, mode='free', resistance=0.,
                                       selected_targets=targets, orientation_targets=orientations, joint_targets=waist_joints or None,
                                       posture_reference=end_q, posture_weight=posture_weight, max_nfev=evaluations,
-                                      orientation_tolerance=np.radians(tolerance_deg))
+                                      orientation_tolerance=np.radians(tolerance_deg), clearance=BODY_CLEARANCE_M)
         if best is None or info['target_error_mm'] < best[1]['target_error_mm']:
             best = (candidate, info)
         if info['converged'] and not info.get('rejected'):

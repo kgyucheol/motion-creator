@@ -214,3 +214,23 @@ def test_the_grip_basis_carries_both_hands_by_their_midpoint_move_and_keeps_thei
     assert np.allclose((left1 + right1) / 2 - (left0 + right0) / 2, (recorded_left + recorded_right) / 2 - (left0 + right0) / 2, atol=.01)
     spec = {'mode': 'delta', 'basis': 'grip'}
     assert validate_motion(spec)['basis'] == 'grip'
+
+
+def test_a_solve_with_clearance_moves_an_arm_off_the_trunk_and_keeps_the_hand(robot):
+    import mujoco
+    from motioncreator.robot import FEET
+    q = np.asarray(json.loads(EXAMPLE.read_text())['keyframes'][2]['qpos'], dtype=float)
+    for name, degrees in (('right_shoulder_roll_joint', 12), ('right_shoulder_yaw_joint', -20), ('right_elbow_joint', 15)):
+        q[7 + robot.names.index(name)] = np.radians(degrees)             # the upper arm pressed into the torso (as seen on a row to the left)
+    fromto = np.zeros(6)
+
+    def closest(pose):
+        data = robot.data(pose)
+        return min(mujoco.mj_geomDistance(robot.model, data, a, b, .3, fromto) for a, b in robot.body_clearance_pairs)
+    assert closest(q) < 0
+    hand = robot.point(robot.data(q), 'right_hand')
+    target = {'right_hand': hand[0]}, {'right_hand': Rotation.from_matrix(hand[1]).as_quat()}
+    solved, _ = robot.solve(q, q, pins=(*FEET, 'pelvis', 'left_hand'), mode='free', resistance=0., selected_targets=target[0],
+                            orientation_targets=target[1], posture_reference=q, posture_weight=.02, max_nfev=400, clearance=.02)
+    assert closest(solved) > .01
+    assert np.linalg.norm(robot.point(robot.data(solved), 'right_hand')[0] - hand[0]) < .01

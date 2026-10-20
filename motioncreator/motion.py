@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import mujoco
 from scipy.spatial.transform import Rotation, Slerp
-from .robot import (Robot, ROOT, FEET, HANDLES, HINGES, ANGLE_LOCKABLE,
+from .robot import (Robot, ROOT, FEET, HANDLES, HINGES, ANGLE_LOCKABLE, BODY_CLEARANCE_M,
                     BASIC_ROTATABLE as ROTATABLE, quat_matrix, matrix_quat)
 from .kimodo_format import KIMODO_KEYS, export_kimodo_g1, kimodo_g1_to_qpos
 
@@ -821,7 +821,8 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
                 solved, info = robot.solve(solved, q, pins=sorted({*FEET, 'pelvis'}), angle_pins=sorted({*angle_pins, 'pelvis'}), mode='free', resistance=0.,
                                            selected_targets={hand: goal[0] for hand, goal in goals.items()},
                                            orientation_targets={hand: goal[1] for hand, goal in goals.items()},
-                                           posture_reference=q, posture_weight=posture_weight, max_nfev=evaluations)
+                                           posture_reference=q, posture_weight=posture_weight, max_nfev=evaluations,
+                                           clearance=BODY_CLEARANCE_M)
                 if info['converged'] and not info.get('rejected') and info['target_error_mm'] < 1.:
                     break
             q = q.copy()
