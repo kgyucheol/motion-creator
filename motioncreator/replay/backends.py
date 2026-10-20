@@ -31,6 +31,9 @@ class RobotState:
     q: np.ndarray                      # 29 joint angles, Unitree order
     dq: np.ndarray
     imu_quat: np.ndarray               # wxyz
+    temp: np.ndarray | None = None     # 29 motor temperatures (°C, the hotter of the two sensors)
+    tau: np.ndarray | None = None      # 29 estimated torques (Nm)
+    battery: dict | None = None        # soc %, voltage V, current A, temp °C, cycle (None when rt/lf/bmsstate is stale)
 
     def age(self, now: float | None = None) -> float:
         return (time.monotonic() if now is None else now) - self.stamp
@@ -90,7 +93,9 @@ class DdsStateReader:
         for line in self._proc.stdout:
             try:
                 raw = json.loads(line)
-                self._state = RobotState(time.monotonic(), np.array(raw['q'], float), np.array(raw['dq'], float), np.array(raw['imu_quat'], float))
+                self._state = RobotState(time.monotonic(), np.array(raw['q'], float), np.array(raw['dq'], float), np.array(raw['imu_quat'], float),
+                                         np.array(raw['temp'], float) if raw.get('temp') else None,
+                                         np.array(raw['tau'], float) if raw.get('tau') else None, raw.get('battery'))
             except (ValueError, KeyError):
                 continue
 
@@ -277,7 +282,10 @@ class MockBackend:
             self.q[self.joints] += gain * (self.target - self.q[self.joints])
 
     def state(self) -> RobotState:
-        return RobotState(self.clock(), self.q.copy(), np.zeros(C.N_JOINTS), np.array([1.0, 0.0, 0.0, 0.0]))
+        temp = np.full(C.N_JOINTS, 36.0)
+        temp[C.ARM_SLICE] += 4.0 * self.engaged                 # a warmer upper body while driven, so the figure shows something
+        return RobotState(self.clock(), self.q.copy(), np.zeros(C.N_JOINTS), np.array([1.0, 0.0, 0.0, 0.0]), temp, np.zeros(C.N_JOINTS),
+                          {'soc': 80.0, 'voltage': 50.0, 'current': -1.0, 'temp': 33.0, 'cycle': 0})
 
     def tick_hz(self) -> float:
         return float(C.COMMAND_HZ)

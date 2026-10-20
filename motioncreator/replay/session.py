@@ -148,7 +148,12 @@ class ReplaySession:
                 'read_only': self.read_only, 'settings': dict(self.settings),
                 'robot': None if state is None else {'age': round(state.age(now), 2), 'tilt_deg': round(state.tilt_deg, 1),
                                                      'arms': np.round(state.q[C.ARM_SLICE], 3).tolist(),
-                                                     'waist': np.round(state.q[C.WAIST_SLICE], 3).tolist()},
+                                                     'waist': np.round(state.q[C.WAIST_SLICE], 3).tolist(),
+                                                     'q': np.round(state.q, 3).tolist(),
+                                                     'temp': None if state.temp is None else np.round(state.temp, 1).tolist(),
+                                                     'tau': None if state.tau is None else np.round(state.tau, 2).tolist(),
+                                                     'battery': state.battery},
+                'temperature_limits': {'warning': C.TEMP_WARNING_C, 'critical': C.TEMP_CRITICAL_C},
                 'player': self.player.status(), 'plan': self.summary()}
 
     @staticmethod

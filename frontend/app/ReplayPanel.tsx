@@ -7,9 +7,11 @@ type PlayerStatus = {
   state: 'idle' | 'engaging' | 'approach' | 'playing' | 'paused' | 'stopped' | 'finished' | 'returning' | 'moving' | 'holding';
   time: number; duration: number; speed: number; phase: number | null; keyframe_times: number[]; fault: string | null; fast: boolean; backend: string | null;
 };
+type Battery = { soc: number; voltage: number; current: number; temp: number | null; cycle: number };
 type Status = {
   mode: 'real' | 'mock' | null; interface: string | null; connected: boolean; read_only: boolean;
-  robot: { age: number; tilt_deg: number } | null; player: PlayerStatus; plan: Summary | null;
+  robot: { age: number; tilt_deg: number; q?: number[]; temp?: number[] | null; tau?: number[] | null; battery?: Battery | null } | null;
+  player: PlayerStatus; plan: Summary | null; temperature_limits?: { warning: number; critical: number };
 };
 type Interface = { name: string; ip: string; wifi: boolean; robot: boolean };
 
@@ -106,6 +108,7 @@ export function ReplayPanel({ getProject, fps, frameNames, onClose, inline = fal
         {onClose && <button aria-label="닫기" onClick={onClose} disabled={running} title={running ? '재생 중에는 닫을 수 없습니다' : '닫기'}>×</button>}</header>
       <p className="replay-note">로봇이 자체 모션 모드로 서 있는 상태에서 <b>팔 14축</b>(허리 포함 시 <b>허리 3축</b>도)을 <code>rt/arm_sdk</code>로 구동합니다. 다리·골반은 로봇이 정하고, 허리를 보내지 않을 때는 제어를 시작한 자세로 허리를 붙잡아 둡니다.
         {status?.read_only ? ' (읽기 전용 모드: 가상 로봇만 사용할 수 있습니다)' : ''}</p>
+      {status?.connected && <RobotHealth status={status}/>}
 
       <section>
         <h4>1. 연결</h4>
@@ -210,4 +213,54 @@ export function RobotStatusChip({ onOpen }: { onOpen: () => void }) {
       {status.mode === 'real' ? '실제 로봇' : '가상 로봇'} · {STATE_TEXT[status.player.state]}</button>
     {running && <button className="danger" onClick={() => void call('stop', {}).catch(() => undefined)} title="그 자리에서 멈추고 마지막 목표를 계속 보냅니다">정지</button>}
   </span>;
+}
+
+const JOINT_NAMES = ['왼 고관절 피치', '왼 고관절 롤', '왼 고관절 요', '왼 무릎', '왼 발목 피치', '왼 발목 롤',
+  '오른 고관절 피치', '오른 고관절 롤', '오른 고관절 요', '오른 무릎', '오른 발목 피치', '오른 발목 롤', '허리 요', '허리 롤', '허리 피치',
+  '왼 어깨 피치', '왼 어깨 롤', '왼 어깨 요', '왼 팔꿈치', '왼 손목 롤', '왼 손목 피치', '왼 손목 요',
+  '오른 어깨 피치', '오른 어깨 롤', '오른 어깨 요', '오른 팔꿈치', '오른 손목 롤', '오른 손목 피치', '오른 손목 요'];
+/** Body parts on the status figure (robot-studio's dashboard/core.py GROUPS): label, motor indices, x %, y %. The figure is a front
+ * view, so the robot's left is on the right of the picture. */
+const PARTS: [string, number[], number, number][] = [
+  ['오른 어깨', [22, 23, 24], 33, 31], ['왼 어깨', [15, 16, 17], 67, 31], ['오른 팔꿈치', [25], 30, 45], ['왼 팔꿈치', [18], 70, 45],
+  ['오른 손목', [26, 27, 28], 28, 55], ['왼 손목', [19, 20, 21], 72, 55], ['허리', [12, 13, 14], 50, 51],
+  ['오른 고관절', [6, 7, 8], 37, 58], ['왼 고관절', [0, 1, 2], 63, 58], ['오른 무릎', [9], 37, 76], ['왼 무릎', [3], 63, 76],
+  ['오른 발목', [10, 11], 37, 93], ['왼 발목', [4, 5], 63, 93]];
+
+/** The robot at a glance (after robot-studio's status card): battery, the hottest joint, a figure with the temperature of each
+ * body part, and a table of all 29 joints. */
+function RobotHealth({ status }: { status: Status }) {
+  const [details, setDetails] = useState(false);
+  const robot = status.robot;
+  const limits = status.temperature_limits ?? { warning: 55, critical: 70 };
+  const level = (t: number | null | undefined) => t === null || t === undefined ? 'unknown' : t >= limits.critical ? 'hot' : t >= limits.warning ? 'warm' : 'cool';
+  const temp = robot?.temp ?? null;
+  const hottest = temp ? temp.reduce((best, value, index) => value > temp[best] ? index : best, 0) : null;
+  const battery = robot?.battery ?? null;
+  return <section className="robot-health">
+    <h4>로봇 상태 <small>{robot ? `${status.mode === 'real' ? 'LIVE' : '가상'} · 지연 ${robot.age.toFixed(2)}s · 기울기 ${robot.tilt_deg.toFixed(1)}°` : '수신 대기'}</small></h4>
+    <div className="robot-health-body">
+      <div className="robot-figure">
+        <img src="/robot-status/g1-status-cutout.png" alt="G1 정면 · 부위별 최고 관절 온도"/>
+        {PARTS.map(([label, ids, x, y]) => {
+          const value = temp ? Math.max(...ids.map(id => temp[id])) : null;
+          return <i key={label} className={`heat ${level(value)}`} style={{ left: `${x}%`, top: `${y}%` }} title={`${label} ${value === null ? '미수신' : `${value.toFixed(0)}°C`}`}/>;
+        })}
+      </div>
+      <div className="robot-metrics">
+        <div><span>배터리</span><strong>{battery ? battery.soc.toFixed(0) : '—'}<small>%</small></strong>
+          <div className="battery-track"><i className={battery && battery.soc < 20 ? 'low' : ''} style={{ width: `${battery ? Math.max(0, Math.min(100, battery.soc)) : 0}%` }}/></div>
+          <small>{battery ? `${battery.voltage.toFixed(1)} V · ${battery.current.toFixed(1)} A${battery.temp !== null ? ` · ${battery.temp.toFixed(0)}°C` : ''}` : 'rt/lf/bmsstate 미수신'}</small></div>
+        <div><span>최고 관절 온도</span><strong className={level(hottest !== null && temp ? temp[hottest] : null)}>{hottest !== null && temp ? temp[hottest].toFixed(0) : '—'}<small>°C</small></strong>
+          <small>{hottest !== null ? JOINT_NAMES[hottest] : '미수신'}</small></div>
+        <div className="heat-legend"><span><i className="cool"/>{`<${limits.warning}`}</span><span><i className="warm"/>주의</span><span><i className="hot"/>{`≥${limits.critical}`}</span><span><i className="unknown"/>미수신</span></div>
+        <button className="robot-details-toggle" onClick={() => setDetails(open => !open)}>{details ? '관절 상세 닫기' : '29개 관절 상세'}</button>
+      </div>
+    </div>
+    {details && <table className="robot-joints"><thead><tr><th>관절</th><th>각도</th><th>온도</th><th>토크</th></tr></thead>
+      <tbody>{JOINT_NAMES.map((name, index) => <tr key={name}><th>{index} · {name}</th>
+        <td>{robot?.q ? `${(robot.q[index] * 180 / Math.PI).toFixed(1)}°` : '—'}</td>
+        <td className={level(temp?.[index])}>{temp ? `${temp[index].toFixed(0)}°C` : '—'}</td>
+        <td>{robot?.tau ? `${robot.tau[index].toFixed(1)}` : '—'}</td></tr>)}</tbody></table>}
+  </section>;
 }
