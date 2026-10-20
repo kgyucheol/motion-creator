@@ -59,10 +59,11 @@ def child_env() -> dict:
 
 
 def robot_python() -> str:
-    """The Python the SDK children run with: MOTIONCREATOR_ROBOT_PYTHON, else GR00T's venv (it has unitree_sdk2py), else this one."""
+    """The Python the SDK children run with: MOTIONCREATOR_ROBOT_PYTHON, else an environment that has unitree_sdk2py
+    (unitree_lerobot's conda env first), else this one. The children use only unitree_sdk2py and numpy."""
     if C.ROBOT_PYTHON:
         return C.ROBOT_PYTHON
-    return str(C.SDK_VENV_PYTHON) if C.SDK_VENV_PYTHON.exists() else sys.executable
+    return str(next((path for path in C.SDK_PYTHONS if path.exists()), sys.executable))
 
 
 # ---- real robot --------------------------------------------------------------------------------------------------------------
