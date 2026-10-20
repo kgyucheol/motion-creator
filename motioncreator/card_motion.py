@@ -43,7 +43,7 @@ def validate_motion(spec):
     if mode == 'delta':
         basis = spec.get('basis', 'joint')
         if basis not in DELTA_BASES:
-            raise ValueError('A delta card carries the joint change or the position change')
+            raise ValueError('A delta card carries the joint change, the position change or the kept hand gap')
         if basis != 'joint':
             out['basis'] = basis
     if mode != 'cartesian':
