@@ -1,0 +1,35 @@
+{
+  "_comment": "Stage -> slice of the MotionCreator bundle. Times refer to the second cycle of the bundle (22.6 s = ready pose).",
+  "target_object": "Mupama_Stack_L03_R04",
+  "ready": {
+    "bundle": "../data/bundle_a",
+    "start_s": 22.6,
+    "end_s": 22.6
+  },
+  "grasp": {
+    "bundle": "../data/bundle_a",
+    "start_s": 22.6,
+    "end_s": 29.2
+  },
+  "transfer": {
+    "bundle": "../data/bundle_a",
+    "start_s": 29.2,
+    "end_s": 33.2
+  },
+  "place": {
+    "bundle": "../data/bundle_a",
+    "start_s": 33.2,
+    "end_s": 37.2
+  },
+  "return": {
+    "bundle": "../data/bundle_a",
+    "start_s": 37.2,
+    "end_s": 42.2
+  },
+  "authored_root_at_s": 22.6,
+  "robot_start_xy_yaw": [
+    -1.0,
+    0.0,
+    0.0
+  ]
+}

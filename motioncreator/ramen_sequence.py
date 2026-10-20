@@ -6,7 +6,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 
 from .robot import FEET, Robot
-from .tool_model import head_camera_spec
+from .tool_model import head_camera_pose, head_camera_spec
 
 
 FORMAT = 'motioncreator.ramen-interaction.v1'
@@ -91,16 +91,7 @@ def _object_reference(item, taught, robot_position):
 
 def _camera_observation(robot, qpos):
     specification = head_camera_spec()
-    data = robot.data(qpos)
-    try:
-        body = robot.model.body(specification['link']).id
-        position = data.xpos[body].copy()
-        rotation = data.xmat[body].reshape(3, 3).copy()
-    except KeyError:
-        body = robot.model.body(specification['parent_link']).id
-        parent_rotation = data.xmat[body].reshape(3, 3)
-        position = data.xpos[body] + parent_rotation @ np.asarray(specification['mount_xyz_m'])
-        rotation = parent_rotation @ Rotation.from_euler('xyz', specification['mount_rpy_rad']).as_matrix()
+    position, rotation = head_camera_pose(robot, qpos)
     return {**specification, 'world_position_m': position.tolist(),
             'world_quaternion_xyzw': Rotation.from_matrix(rotation).as_quat().tolist()}
 

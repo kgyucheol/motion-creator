@@ -13,7 +13,7 @@ from pathlib import Path
 import numpy as np
 import mujoco
 from scipy.spatial.transform import Rotation, Slerp
-from .robot import (Robot, ROOT, FEET, HANDLES, HINGES, ANGLE_LOCKABLE,
+from .robot import (Robot, ROOT, FEET, HANDLES, HINGES, ANGLE_LOCKABLE, BODY_CLEARANCE_M,
                     BASIC_ROTATABLE as ROTATABLE, quat_matrix, matrix_quat)
 from .kimodo_format import KIMODO_KEYS, export_kimodo_g1, kimodo_g1_to_qpos
 
@@ -153,6 +153,12 @@ def environment_snapshot(project):
 
 def validate_project(robot: Robot, project):
     ensure_project_identity(project)
+    mounted_tools = project.get('mounted_tools')
+    if mounted_tools is not None:
+        from .tool_model import parse_tools
+        if not isinstance(mounted_tools, (list, tuple)) or len(mounted_tools) != 2 or not all(isinstance(tool, str) for tool in mounted_tools):
+            raise ValueError('Mounted tools must contain left and right tool ids')
+        parse_tools(':'.join(mounted_tools))
     if project.get('format') != FORMAT or project.get('model_sha256') not in robot.compatible_fingerprints:
         raise ValueError('Project format or G1 model fingerprint does not match')
     project['model_sha256'] = robot.fingerprint
@@ -165,8 +171,6 @@ def validate_project(robot: Robot, project):
     frames = project.get('keyframes', [])
     if not 1 <= len(frames) <= MAX_KEYFRAMES:
         raise ValueError(f'A project needs 1–{MAX_KEYFRAMES} keyframes')
-    if any(frame.get('samples') is not None for frame in frames) and not (len(frames) == 1 and frames[0].get('samples') is not None):
-        raise ValueError('An imported motion clip must be the project\'s only keyframe')
     total = 0.
     for frame in frames:
         if not isinstance(frame.get('name'), str):
@@ -190,7 +194,28 @@ def validate_project(robot: Robot, project):
                 raise ValueError('Motion clips cannot use pins until they are split into keyframes')
             if frame.get('angle_pins'):
                 raise ValueError('Motion clips cannot use angle pins until they are split into keyframes')
+        if frame.get('path') is not None:
+            from .path_move import validate_path
+            if frame.get('samples') is not None:
+                raise ValueError('Only pose keyframes take a move path; a clip plays its own path')
+            validate_path(frame['path'])
+        if frame.get('motion') is not None:
+            from .card_motion import validate_motion
+            validate_motion(frame['motion'])
+        if frame.get('dynamic') is not None:
+            if frame.get('samples') is None:
+                raise ValueError('Only motion clips take a dynamic grasp binding')
+            from .dynamic_clip import validate_dynamic
+            validate_dynamic(frame['dynamic'], len(frame['samples']))
         total += duration
+        transition = frame.get('transition')
+        if transition is not None:
+            if frame.get('samples') is None:
+                raise ValueError('Only motion clips take a transition time')
+            transition = float(transition)
+            if not np.isfinite(transition) or not .1 <= transition <= 60:
+                raise ValueError('Clip transition times must be 0.1–60 seconds')
+            total += transition
         if any(k not in HANDLES for k in frame.get('pins', [])):
             raise ValueError('Unknown pinned handle')
         if any(k not in ANGLE_LOCKABLE for k in frame.get('angle_pins', [])):
@@ -432,6 +457,7 @@ def new_project(robot, name=''):
     return {'format': FORMAT, 'name': name, 'name_mode': 'manual' if name.strip() else 'auto',
             'project_id': uuid.uuid4().hex, 'created_at': _created_now(),
             'model_sha256': robot.fingerprint,
+            'mounted_tools': list(robot.tools) if robot.tools else None,
             'joint_names': robot.names, 'coordinate_system': 'right-handed, +X forward, +Y left, +Z up',
             'units': {'position': 'm', 'angle': 'rad', 'time': 's'},
             'angle_pins': [],
@@ -439,13 +465,17 @@ def new_project(robot, name=''):
                            'pins': list(FEET), 'angle_pins': []}]}
 
 
-def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: int = 30):
-    """Create an editable project from a Kimodo NPZ or 36-column G1 CSV."""
+def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: int = 30, source: str = 'actions'):
+    """Create an editable project from a Kimodo NPZ, 36-column G1 CSV or LeRobot episode JSON."""
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
     suffix = Path(filename).suffix.lower()
     try:
-        if suffix == '.csv':
+        if suffix == '.json':
+            from .lerobot_format import lerobot_episode_to_qpos
+            qpos, fps = lerobot_episode_to_qpos(robot, content, source)
+            fps = max(1, min(120, round(fps)))
+        elif suffix == '.csv':
             qpos = np.loadtxt(io.BytesIO(content), delimiter=',')
             qpos = np.atleast_2d(qpos)
         elif suffix == '.npz':
@@ -459,7 +489,7 @@ def project_from_motion_bytes(robot: Robot, content: bytes, filename: str, fps: 
                 else:
                     raise ValueError('NPZ must contain Kimodo G1 arrays or a qpos array')
         else:
-            raise ValueError('Only .npz and .csv motion files are supported')
+            raise ValueError('Only .npz, .csv and LeRobot .json motion files are supported')
     except (EOFError, OSError, TypeError, zipfile.BadZipFile) as exc:
         raise ValueError(f'Could not read {suffix.upper()[1:]} motion file') from exc
 
@@ -517,6 +547,93 @@ def compile_motion_clip(robot: Robot, frame, fps):
     return motion_result(robot, qpos, times, contacts, fps)
 
 
+def smooth_transition_duration(qa, qb):
+    """Conservative editing speed for travelling between two poses; mirrors the editor's smoothTransitionDuration."""
+    qa, qb = np.asarray(qa, dtype=float), np.asarray(qb, dtype=float)
+    root_distance = float(np.linalg.norm(qb[:3] - qa[:3]))
+    root_dot = min(1., abs(float(np.dot(qa[3:7], qb[3:7]))))
+    root_angle = 2 * np.arccos(root_dot)
+    joint = float(np.abs(qb[7:] - qa[7:]).max()) if len(qa) > 7 else 0.
+    seconds = max(.8, 1.875 * root_distance / .35, 1.875 * root_angle / .8, 1.875 * joint / 1.)
+    return min(60., np.ceil(seconds * 10 - 1e-9) / 10)
+
+
+def _compile_with_clips(robot: Robot, project, fps, on_segment=None):
+    """Compile a project whose keyframes mix motion clips and pose keyframes.
+
+    Clips play their samples. Pose keyframes travel from wherever the previous item ended, and a clip that
+    does not start where its predecessor ended is entered through a generated pose-to-pose transition
+    (`transition` seconds, or an automatic duration). Neighbouring clips from a split share a boundary
+    sample, so the repeated frame is dropped.
+    """
+    frames = project['keyframes']
+    qpos, times, contacts, pin_errors, marks = [], [], [], [], []
+    now = 0.
+
+    def run_poses(run, skip_first):
+        """Append a pose-only compile of `run`; with skip_first its first frame repeats the previous end."""
+        nonlocal now
+        wrapped = None
+        if on_segment is not None:
+            offset, dropped = now, [not skip_first]
+
+            def wrapped(ts, qs):
+                if not dropped[0]:
+                    dropped[0] = True
+                    return
+                on_segment([offset + t for t in ts], qs)
+        sub = _compile_motion(robot, {**project, 'keyframes': run}, fps, wrapped)
+        first = 1 if skip_first else 0
+        qpos.extend(sub['qpos'][first:])
+        times.extend(now + np.asarray(sub['time'][first:]))
+        contacts.extend(sub['contacts'][first:])
+        pin_errors.extend([sub['max_pin_error_mm']])
+        start = now
+        now = start + float(sub['time'][-1])
+        return sub, start
+
+    index = 0
+    while index < len(frames):
+        frame = frames[index]
+        end = qpos[-1] if qpos else None
+        if frame.get('samples') is None:
+            stop = index
+            while stop < len(frames) and frames[stop].get('samples') is None:
+                stop += 1
+            run = [dict(item) for item in frames[index:stop]]
+            if end is not None:
+                run.insert(0, {'name': '_start', 'qpos': np.asarray(end).tolist(), 'duration': 1., 'pins': [], 'angle_pins': []})
+            sub, start = run_poses(run, end is not None)
+            arrivals = sub['keyframe_times'][1:] if end is not None else sub['keyframe_times']
+            marks.extend(start + t for t in arrivals)
+            index = stop
+            continue
+        source = np.stack([robot.validate_q(sample) for sample in frame['samples']])
+        for k in range(1, len(source)):
+            if np.dot(source[k - 1, 3:7], source[k, 3:7]) < 0:
+                source[k, 3:7] *= -1
+        if end is not None:
+            if np.dot(end[3:7], source[0, 3:7]) < 0:
+                source[:, 3:7] *= -1
+            if not np.allclose(end, source[0], atol=1e-6, rtol=0):
+                transition = frame.get('transition')
+                run = [{'name': '_start', 'qpos': np.asarray(end).tolist(), 'duration': 1., 'pins': [], 'angle_pins': []},
+                       {'name': '_enter', 'qpos': source[0].tolist(), 'pins': [], 'angle_pins': [],
+                        'duration': float(transition) if transition is not None else smooth_transition_duration(end, source[0])}]
+                run_poses(run, True)
+        marks.append(now)
+        part = compile_motion_clip(robot, {**frame, 'samples': source.tolist(), 'qpos': source[0].tolist()}, fps)
+        first = 0 if end is None else 1
+        qpos.extend(part['qpos'][first:])
+        times.extend(now + np.asarray(part['time'][first:]))
+        contacts.extend(np.zeros((len(part['time']) - first, len(FEET)), dtype=bool))
+        if on_segment is not None:
+            on_segment((now + np.asarray(part['time'][first:])).tolist(), part['qpos'][first:])
+        now += float(part['time'][-1])
+        index += 1
+    return {**motion_result(robot, qpos, times, contacts, fps, pin_errors), 'keyframe_times': marks}
+
+
 _COMPILE_CACHE = OrderedDict()
 _COMPILE_CACHE_SIZE = 8
 # Frames whose joint-space blend already meets every IK goal this closely keep the blend as is.
@@ -524,15 +641,19 @@ _IK_SKIP_POSITION_M = .001
 _IK_SKIP_ANGLE_RAD = np.deg2rad(.25)
 
 
-def compile_motion(robot: Robot, project, fps=30):
+def compile_motion(robot: Robot, project, fps=30, on_segment=None):
     """Compile keyframes to a dense motion, reusing the result while the project is unchanged."""
-    key = hashlib.sha256(json.dumps([robot.fingerprint, fps, project], sort_keys=True, default=str).encode()).hexdigest()
+    key = hashlib.sha256(json.dumps([robot.cache_key, fps, project], sort_keys=True, default=str).encode()).hexdigest()
     validate_project(robot, project)
-    if key not in _COMPILE_CACHE:
-        _COMPILE_CACHE[key] = _compile_motion(robot, project, fps)
+    cached = key in _COMPILE_CACHE
+    if not cached:
+        _COMPILE_CACHE[key] = _compile_motion(robot, project, fps, on_segment=on_segment)
         while len(_COMPILE_CACHE) > _COMPILE_CACHE_SIZE:
             _COMPILE_CACHE.popitem(last=False)
     _COMPILE_CACHE.move_to_end(key)
+    if on_segment is not None and cached:
+        motion = _COMPILE_CACHE[key]
+        on_segment(motion['time'].tolist(), motion['qpos'])
     return copy.deepcopy(_COMPILE_CACHE[key])
 
 
@@ -647,6 +768,11 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
     duration = float(b['duration'])
     count = max(1, round(duration * fps))
     duration = count / fps
+    path_spec = b.get('path') if b.get('path') and b['path'].get('kind', 'joint') != 'joint' else None
+    hand_at = None
+    if path_spec:
+        from .path_move import hand_path
+        hand_at = hand_path(path_spec['kind'], pa, pb, path_spec.get('via_offset'))
     root_rotation = quat_matrix(qa[3:7])
     root_delta = Rotation.from_matrix(root_rotation.T @ quat_matrix(qb[3:7])).as_rotvec()
     angular_deltas = {k: Rotation.from_matrix(pa[k][1].T @ pb[k][1]).as_rotvec() for k in ROTATABLE}
@@ -676,6 +802,8 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
             h01, h11 = -2*u**3 + 3*u**2, u**3 - u**2
             s = float(np.clip(h01 + h10*start_slope + h11*end_slope, 0., 1.))
             q = h00*qa + h10*duration*start_velocity + h01*qb + h11*duration*end_velocity
+            # The cubic can overshoot between keyframes sitting at a joint limit; the IK below rejects such an anchor.
+            q[robot.q_indices] = np.clip(q[robot.q_indices], robot.lower, robot.upper)
         else:
             s = u*u*u*(10 + u*(-15 + 6*u))  # quintic easing, zero endpoint velocity/acceleration
             q = (1-s)*qa + s*qb
@@ -684,7 +812,23 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
             q[3:7] *= -1
         if i == count:
             q = qb.copy()
-        if i != count and all(interaction_pair):
+        if hand_at is not None and i != count and not all(interaction_pair):
+            # MoveL / MoveC: the hands follow the Cartesian path at the same time scaling the joint blend used
+            goals = hand_at(s)
+            solved = segment_poses[-1] if segment_poses else qa
+            for posture_weight, evaluations in ((.35, 60), (.06, 120)):
+                # everything but the arms and waist stays where the joint blend puts it: only the hands leave it
+                solved, info = robot.solve(solved, q, pins=sorted({*FEET, 'pelvis'}), angle_pins=sorted({*angle_pins, 'pelvis'}), mode='free', resistance=0.,
+                                           selected_targets={hand: goal[0] for hand, goal in goals.items()},
+                                           orientation_targets={hand: goal[1] for hand, goal in goals.items()},
+                                           posture_reference=q, posture_weight=posture_weight, max_nfev=evaluations,
+                                           clearance=BODY_CLEARANCE_M)
+                if info['converged'] and not info.get('rejected') and info['target_error_mm'] < 1.:
+                    break
+            q = q.copy()
+            q[7 + 12:7 + 29] = solved[7 + 12:7 + 29]
+            segment_pin_errors.append(info.get('pin_error_mm', 0.))
+        elif i != count and all(interaction_pair):
             from .interaction import interpolate_interaction
             interaction = interpolate_interaction(*interaction_pair, s)
             tcp_targets = interaction['tcp_targets']
@@ -719,36 +863,65 @@ def _compile_segment(robot: Robot, frames, segment_index, qa, qb, fps):
     return segment_poses, segment_pin_errors, [k in pins for k in FEET], duration
 
 
-def _compile_motion(robot: Robot, project, fps):
+def _compile_motion(robot: Robot, project, fps, on_segment=None):
     validate_project(robot, project)
     from .interaction import project_with_consistent_interactions
     project = project_with_consistent_interactions(robot, project)
     if not 1 <= fps <= 120:
         raise ValueError('FPS must be 1–120')
+    from .card_motion import resolve_project_motions
+    from .dynamic_clip import resolve_project_dynamics
+    unresolved = project
+    project, motion_reports = resolve_project_motions(robot, project)
+    project, dynamic_reports = resolve_project_dynamics(robot, project)
     frames = project['keyframes']
-    if len(frames) == 1 and frames[0].get('samples') is not None:
-        return compile_motion_clip(robot, frames[0], fps)
-    poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
-    pin_errors = []
-    # Fix the quaternion signs sequentially (cheap); after that every segment is independent.
-    endpoints, previous = [], poses[0]
-    for a, b in zip(frames, frames[1:]):
-        qa, qb = robot.validate_q(a['qpos']), robot.validate_q(b['qpos'])
-        if np.dot(qa[3:7], previous[3:7]) < 0:
-            qa[3:7] *= -1
-        if np.dot(qa[3:7], qb[3:7]) < 0:
-            qb[3:7] *= -1
-        endpoints.append((qa, qb))
-        previous = qb
-    elapsed = 0.
-    for segment_poses, segment_pin_errors, segment_contact, duration in _compile_segments(robot, frames, endpoints, fps):
-        for i, q in enumerate(segment_poses, start=1):
-            poses.append(q)
-            times.append(elapsed + i / fps)
-            contacts.append(segment_contact)
-        pin_errors += segment_pin_errors
-        elapsed += duration
-    return motion_result(robot, poses, times, contacts, fps, pin_errors)
+    if any(frame.get('samples') is not None for frame in frames):
+        result = _compile_with_clips(robot, project, fps, on_segment)
+    else:
+        poses, times, contacts = [robot.validate_q(frames[0]['qpos'])], [0.], [[k in frames[0].get('pins', []) for k in FEET]]
+        if on_segment is not None:
+            on_segment([0.], poses)
+        pin_errors = []
+        # Fix the quaternion signs sequentially (cheap); after that every segment is independent.
+        endpoints, previous = [], poses[0]
+        for a, b in zip(frames, frames[1:]):
+            qa, qb = robot.validate_q(a['qpos']), robot.validate_q(b['qpos'])
+            if np.dot(qa[3:7], previous[3:7]) < 0:
+                qa[3:7] *= -1
+            if np.dot(qa[3:7], qb[3:7]) < 0:
+                qb[3:7] *= -1
+            endpoints.append((qa, qb))
+            previous = qb
+        elapsed = 0.
+        keyframe_times = [0.]
+        for segment_poses, segment_pin_errors, segment_contact, duration in _compile_segments(robot, frames, endpoints, fps):
+            for i, q in enumerate(segment_poses, start=1):
+                poses.append(q)
+                times.append(elapsed + i / fps)
+                contacts.append(segment_contact)
+            pin_errors += segment_pin_errors
+            if on_segment is not None:
+                on_segment([elapsed + i / fps for i in range(1, len(segment_poses) + 1)], segment_poses)
+            elapsed += duration
+            keyframe_times.append(elapsed)
+        result = {**motion_result(robot, poses, times, contacts, fps, pin_errors), 'keyframe_times': keyframe_times}
+    if dynamic_reports:
+        result['dynamic_reports'] = [{'index': index, **report} for index, report in dynamic_reports.items()]
+    if motion_reports:
+        result['motion_reports'] = list(motion_reports.values())
+    if dynamic_reports or motion_reports:
+        result['original_qpos'] = _original_qpos(robot, unresolved, fps, result['qpos'])
+    return result
+
+
+def _original_qpos(robot: Robot, project, fps, resolved):
+    """The same motion without the dynamic grasp corrections, to compare against; None when its frames do not line up."""
+    plain = {**project, 'keyframes': [{k: v for k, v in frame.items() if k not in ('dynamic', 'motion')} for frame in project['keyframes']]}
+    try:
+        original = np.asarray(_compile_motion(robot, plain, fps)['qpos'])
+    except ValueError:
+        return None
+    return original if original.shape == np.asarray(resolved).shape else None
 
 
 def _existing_project_folder(root_folder, project_id):
@@ -779,6 +952,51 @@ def _atomic_text(path, content):
     _atomic_bytes(path, content.encode('utf-8'))
 
 
+def _project_folder_name(project, display_name):
+    name = re.sub(r'[^\w-]', '_', display_name, flags=re.UNICODE).strip('_')[:72] or 'motion'
+    created = datetime.fromisoformat(project['created_at'])
+    if project['name_mode'] == 'auto':
+        name = f'{name}T{created.strftime("%H%M%S")}'
+    else:
+        name = f'{name}_{created.strftime("%Y%m%dT%H%M%S")}'
+    return f'{name}_{project["project_id"][:8]}'
+
+
+def rename_project(project_id, name, directory=None):
+    """Rename a saved project in place: same folder contents and project ID, new name and folder name.
+
+    An empty name switches the project back to its automatic name. Nothing is recompiled or copied.
+    """
+    if not isinstance(name, str) or len(name) > 80:
+        raise ValueError('Project name must be text of at most 80 characters')
+    if not isinstance(project_id, str) or not PROJECT_ID_PATTERN.fullmatch(project_id):
+        raise ValueError('Project ID must be 32 lowercase hexadecimal characters')
+    root_folder = Path(directory or ROOT / 'motions')
+    folder = _existing_project_folder(root_folder, project_id) if root_folder.is_dir() else None
+    if folder is None:
+        return {'renamed': False}
+    project_file = folder / 'project.json'
+    project = json.loads(project_file.read_text(encoding='utf-8'))
+    prepare_saved_project(project, project_file.relative_to(root_folder), project_file.stat().st_mtime)
+    project['name'] = name.strip()
+    project['name_mode'] = 'manual' if name.strip() else 'auto'
+    display_name = project_display_name(project)
+    project['display_name'] = display_name
+    desired = root_folder / _project_folder_name(project, display_name)
+    if desired != folder and desired.exists():
+        raise ValueError('A different saved project already uses the requested project name')
+    metadata_path = folder / 'metadata.json'
+    if metadata_path.is_file():
+        metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
+        metadata['display_name'] = display_name
+        _atomic_text(metadata_path, json.dumps(metadata, ensure_ascii=False, indent=2))
+    _atomic_text(folder / 'project.json', json.dumps(project, ensure_ascii=False, indent=2))
+    if desired != folder:
+        folder.rename(desired)
+    return {'renamed': True, 'display_name': display_name, 'folder': desired.name, 'name': project['name'],
+            'name_mode': project['name_mode'], 'project_file': str(Path(desired.name) / 'project.json')}
+
+
 def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=False, save_as=False):
     """Create or atomically update one self-contained project folder."""
     if save_as:
@@ -786,20 +1004,15 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
         project['project_id'] = uuid.uuid4().hex
         project['created_at'] = _created_now()
     ensure_project_identity(project)
+    project['mounted_tools'] = list(robot.tools) if robot.tools else None
     motion = compile_motion(robot, project, fps)
     root_folder = Path(directory or ROOT / 'motions')
     root_folder.mkdir(parents=True, exist_ok=True)
     display_name = project_display_name(project)
     project['display_name'] = display_name
-    name = re.sub(r'[^\w-]', '_', display_name, flags=re.UNICODE).strip('_')[:72] or 'motion'
-    created = datetime.fromisoformat(project['created_at'])
-    if project['name_mode'] == 'auto':
-        name = f'{name}T{created.strftime("%H%M%S")}'
-    else:
-        name = f'{name}_{created.strftime("%Y%m%dT%H%M%S")}'
     folder = _existing_project_folder(root_folder, project['project_id'])
     reused = folder is not None
-    desired_folder = root_folder / f'{name}_{project["project_id"][:8]}'
+    desired_folder = root_folder / _project_folder_name(project, display_name)
     if folder is None:
         folder = desired_folder
         folder.mkdir()
@@ -817,6 +1030,7 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
     environment_text = json.dumps(environment, ensure_ascii=False, indent=2)
     environment_sha256 = hashlib.sha256(environment_text.encode('utf-8')).hexdigest()
     metadata = {'format': FORMAT, 'model_sha256': robot.fingerprint, 'joint_names': robot.names,
+                'mounted_tools': list(robot.tools) if robot.tools else None,
                 'project_id': project['project_id'], 'created_at': project['created_at'],
                 'display_name': display_name,
                 'reference_schema': 'motioncreator.reference.v2',
@@ -837,7 +1051,7 @@ def save_bundle(robot: Robot, project, fps=30, directory=None, protomotions=Fals
                                'minimum_sole_height_mm': min(floor), 'max_joint_speed_rad_s': float(np.abs(motion['qvel'][:, 6:]).max()),
                                'self_collision_checked': False, 'dynamic_balance_checked': False},
                 'interpolation': ('imported clip resampled with piecewise-linear position/joints and root SLERP'
-                                  if project['keyframes'][0].get('samples') is not None else
+                                  if any(frame.get('samples') is not None for frame in project['keyframes']) else
                                   'quintic easing, shortest-path root SLERP, orientation-aware IK for shared pins; finite-difference velocities'),
                 'environment_file': 'environment.json', 'environment_sha256': environment_sha256,
                 'fps': fps, 'samples': len(motion['time'])}

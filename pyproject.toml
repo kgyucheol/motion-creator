@@ -1,0 +1,23 @@
+# MotionCreator is run from a checkout (assets are located relative to the repository), so install it editable:
+#   pip install -e .[controller]          runtime only (FSM, vision interface, motion library)
+#   pip install -e .[controller,sim]      + the sim2sim stack (MuJoCo, ZMQ); also needs ROS 2 + decoupled_wbc, see
+#                                           docs/controller.md and scripts/setup_sim_env.sh
+# The authoring tool (server, frontend, Kimodo, policy preview) keeps its own requirements.txt flow.
+[build-system]
+requires = ["setuptools>=67"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "motioncreator"
+version = "0.1.0"
+description = "G1 motion authoring (motioncreator) and the task controller runtime (ramen_controller)"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+controller = ["numpy>=1.26", "scipy>=1.11"]
+sim = ["mujoco>=3.1", "pyzmq", "msgpack", "msgpack-numpy"]
+dev = ["pytest>=7"]
+
+[tool.setuptools]
+packages = ["motioncreator", "ramen_controller", "ramen_controller.adapters", "ramen_controller.sim"]

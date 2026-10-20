@@ -18,8 +18,8 @@ def test_tool_urdf_joint_mapping_and_tcp_ik(monkeypatch):
     assert [robot.model.joint(int(i)).name for i in robot.model.actuator_trnid[:, 0]] == robot.names
     assert 'scoop' in robot.handles['left_hand'][2]
     assert 'end_support' in robot.handles['right_hand'][2]
-    np.testing.assert_allclose(robot.handles['left_hand'][1], [.180305, 0, -.0380589785])
-    np.testing.assert_allclose(robot.handles['right_hand'][1], [.180305, 0, -.0380589785])
+    np.testing.assert_allclose(robot.handles['left_hand'][1], [.2483, 0, -.0141299543])
+    np.testing.assert_allclose(robot.handles['right_hand'][1], [.2483, 0, -.0141299543])
     assert robot.model.body('right_scoop_link').id == robot.ids['left_hand']
     assert robot.model.body('left_end_support_link').id == robot.ids['right_hand']
     home_data = robot.data(robot.home)
@@ -47,7 +47,9 @@ def test_gripper_fingerprint_is_stable_and_pd_physics_runs(monkeypatch):
     project['keyframes'][0]['duration'] = .1
     worker_robot = Robot()
     assert worker_robot.fingerprint == editor_robot.fingerprint
-    assert len(editor_robot.compatible_fingerprints) == 6
+    assert len(editor_robot.compatible_fingerprints) == 9
+    assert 'f977bcfcf16e4ce34ab63ce3bb1dc7dd5e9051d8bd9268f344fca8f401007a8e' in editor_robot.compatible_fingerprints
+    assert 'e716799a332a289a06f6d904413fde62cd395601a610cc3414268e47f7aa8525' in editor_robot.compatible_fingerprints
     for old_hash in editor_robot.compatible_fingerprints - {editor_robot.fingerprint}:
         legacy_project = new_project(editor_robot)
         legacy_project['model_sha256'] = old_hash

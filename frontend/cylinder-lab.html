@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<meta name="description" content="원통 꺼내기 궤적의 2D 물리 검증"/>
+<title>Cylinder Scoop Lab</title>
+<style>
+:root{font-family:Inter,'Noto Sans KR',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#dce5ee;background:#0e141b;font-size:13px;--line:#293440;--muted:#8799ab;--mint:#80efc5;--panel:#17202a}
+*{box-sizing:border-box}body{margin:0;background:#0e141b}
+button,input,select{font:inherit;color:#dce5ee;background:#222e3a;border:1px solid #35424f;border-radius:5px;padding:5px 8px}
+button{cursor:pointer}button:hover:not(:disabled){background:#304051}button:disabled{opacity:.45;cursor:default}
+button.primary{background:#80efc5;color:#0e141b;border-color:#80efc5;font-weight:600}
+.lab{display:grid;grid-template-columns:300px minmax(0,1fr) 300px;height:100vh}
+aside{padding:14px;overflow:auto;border-right:1px solid var(--line);background:var(--panel)}
+aside.right{border-right:0;border-left:1px solid var(--line)}
+h1{font-size:15px;margin:0 0 4px}h2{font-size:11px;letter-spacing:.8px;color:var(--muted);margin:16px 0 6px;text-transform:uppercase}
+.hint{color:var(--muted);font-size:11px;line-height:1.5;margin:4px 0}
+label.row{display:grid;grid-template-columns:1fr 92px;gap:6px;align-items:center;margin:4px 0;font-size:12px}
+label.row small{display:block;color:var(--muted);font-size:10px}
+h2 .save-section{float:right;min-height:0;padding:1px 8px;font-size:10px;letter-spacing:0;text-transform:none;color:#a4f0d3;border-color:#3f7f6b;background:#15302a}
+h2 .save-section.saved{color:#0e141b;background:#80efc5;border-color:#80efc5}
+.term-label{display:block;min-width:0}
+label.check{display:flex;gap:6px;align-items:center;margin:6px 0;font-size:12px}label.check input{width:auto}
+select,input{width:100%}
+.tabs{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:12px 0 4px}.tabs button[aria-pressed=true]{border-color:#80efc5;background:#203f36;color:#a4f0d3}
+#pick-mode[aria-pressed=true]{border-color:#ffd166;background:#3a3020;color:#ffe3a3}
+.buttons{display:flex;flex-wrap:wrap;gap:5px;margin:8px 0}.buttons button{flex:1 1 auto;font-size:12px}
+.buttons button.saved{color:#0e141b;background:#80efc5;border-color:#80efc5}
+.stage{display:flex;flex-direction:column;min-width:0}
+.canvas-wrap{flex:1;position:relative;min-height:0}canvas{width:100%;height:100%;display:block;touch-action:none}
+.transport{display:flex;gap:8px;align-items:center;padding:8px 12px;border-top:1px solid var(--line)}
+.transport input[type=range]{flex:1}
+.result{padding:10px;border-radius:6px;border:1px solid #344657;background:#101820;margin:6px 0}
+.result.ok{border-color:#3f9c7c;background:#10251f}.result.fail{border-color:#9c5a3f;background:#261812}
+.metric{display:flex;justify-content:space-between;font-size:12px;margin:3px 0}.metric b{font-variant-numeric:tabular-nums;font-weight:500}
+.steps{max-height:28vh;overflow:auto;font-size:11px;border:1px solid var(--line);border-radius:5px}
+.steps div{padding:3px 6px;border-bottom:1px solid #1d2731;display:flex;justify-content:space-between;gap:6px}
+.steps div.now{background:#203832;color:#a4f0d3}
+.points{display:grid;gap:4px}
+.point{display:grid;grid-template-columns:14px 20px 1fr 58px 44px 22px;gap:4px;align-items:center;font-size:11px;padding:3px;border:1px solid transparent;border-radius:4px}
+.point.selected{border-color:#80efc5;background:#15302a}.point input{padding:3px 4px;font-size:11px}.point button{padding:2px 4px;font-size:11px}
+.point .xy{color:var(--muted);font-variant-numeric:tabular-nums}
+.drag-handle{cursor:grab;color:#6f8699;font-size:12px;line-height:1;user-select:none;text-align:center}.drag-handle:active{cursor:grabbing}
+.point.dragging{opacity:.4}.point.drop-before{box-shadow:0 -2px 0 #ffd166}.point.drop-after{box-shadow:0 2px 0 #ffd166}
+.points-head{display:grid;grid-template-columns:14px 20px 1fr 58px 44px 22px;gap:4px;font-size:10px;color:var(--muted)}
+.term-icon{display:inline-grid;place-items:center;width:15px;height:15px;min-height:0;margin:0 0 0 4px;padding:0;border:1px solid #4d6173;border-radius:50%;background:transparent;color:#8fb3c9;font:italic 600 10px Georgia,serif;line-height:1;vertical-align:1px;cursor:help}
+.term-icon:hover,.term-icon[aria-expanded=true]{border-color:#80efc5;color:#a4f0d3;background:#1b332d}
+.term-pop{position:fixed;z-index:50;max-width:290px;padding:10px 12px;border:1px solid #4d6173;border-radius:7px;background:#1b2631;box-shadow:0 10px 26px #000a;font-size:12px;line-height:1.55;color:#dce5ee}
+.term-pop b{display:block;margin-bottom:4px;color:#a4f0d3;font-size:12px}
+.batch-table{display:grid;gap:3px;margin-bottom:6px}.batch-row{display:grid;grid-template-columns:30px 1fr 34px 58px;gap:4px;align-items:center;padding:4px 6px;border:1px solid #2b3a47;border-radius:4px;background:#121c25;font-size:11px;cursor:pointer;text-align:left;color:#dce5ee}
+.batch-row:hover{border-color:#587086}.batch-row.viewing{border-color:#80efc5;background:#15302a}.batch-row b{font-variant-numeric:tabular-nums}.batch-row .ok{color:#7fe3b0}.batch-row .fail{color:#ff9f7a}.batch-row .pending{color:var(--muted)}
+.batch-row small{grid-column:2/-1;color:var(--muted);font-size:10px;line-height:1.35}
+.legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--muted);padding:6px 12px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+[hidden]{display:none!important}
+@media(max-width:900px){.lab{grid-template-columns:1fr;height:auto}.canvas-wrap{height:60vh}aside{border:0}}
+</style>
+</head>
+<body>
+<div class="lab">
+  <aside>
+    <h1>원통 꺼내기 2D 물리 검증</h1>
+    <p class="hint">파지법은 장착 툴에 저장합니다. 프로젝트는 용기·상자와의 충돌을 확인할 검증 장면으로 사용합니다.</p>
+    <h2>툴 파지법</h2>
+    <label class="row">장착 툴<select id="mounted-tool" aria-label="작업 툴"></select></label>
+    <p class="hint" id="mounted-tool-info"></p>
+    <h2>검증 장면</h2>
+    <label class="row">장면 프로젝트<small>파지법과 별개인 검증용 장면</small><select id="project"></select></label>
+    <label class="row">시뮬레이션 대상 원통<small>처음에는 가장 위 용기가 선택됩니다. 목록이나 캔버스에서 바꿀 수 있습니다.</small><select id="target"></select></label>
+    <label class="row">대상 원통 지름 (m)<small>선택한 용기별로 저장 · 질량은 유지</small><input id="cylinder-diameter" type="number" step="0.001" min="0.01" max="0.5"/></label>
+    <div class="buttons"><button id="cylinder-diameter-reset">불러온 지름으로</button><button id="cylinder-diameter-save">지름 저장</button></div>
+    <label class="row">예시 데모<select id="demo-select" aria-label="예시 데모"></select></label>
+    <label class="row">상자 기울기 (pitch, °)<small>검증 장면별로 저장 · 상자와 용기가 함께 회전</small><input id="box-pitch" type="number" step="1" min="-90" max="90"/></label>
+    <div class="buttons"><button id="box-pitch-reset">원래 기울기로</button><button id="box-pitch-save">기울기 저장</button></div>
+    <div class="tabs" role="tablist"><button id="tab-draw" aria-pressed="true">직접 그리기</button><button id="tab-auto" aria-pressed="false">자동 계획</button></div>
+    <section id="draw-panel">
+      <p class="hint">빈 곳 클릭: 점 추가 · 점 드래그: 이동 · 점의 손잡이 드래그: 날 각도 · 점 더블클릭: 각도 자동 · 점 우클릭: 삭제 · 휠: 확대 · Shift+드래그: 화면 이동 · Ctrl+Z: 되돌리기 · Ctrl+Shift+Z: 다시 실행</p>
+      <h2>파지점 <button type="button" class="save-section" data-save="grasp" title="현재 툴의 값을 저장합니다.">저장</button></h2>
+      <label class="check"><input type="checkbox" id="show-grasp" checked/>파지점 표시</label>
+      <div id="grasp-coefficients"></div>
+      <div class="buttons"><button id="grasp-defaults">이 툴 계수 기본값</button></div>
+      <p class="hint" id="grasp-info"></p>
+      <div class="buttons"><button id="from-grasp">파지점에서 시작</button><button id="undo-point">마지막 점 삭제</button><button id="clear-points">모두 지우기</button></div>
+      <div class="buttons"><button id="share-path">현재 경로를 이 툴의 공통 파지법으로 저장</button><button id="detach-path" hidden>이 용기만 개별 경로로</button><button id="restore-individual" hidden>기존 개별 경로 불러오기</button><button id="reset-to-shared" hidden>툴 공통 파지법으로 되돌리기</button></div>
+      <p class="hint" id="path-template-info">툴 공통 파지법은 다른 장면의 용기에도 위치를 맞춰 적용합니다. 바닥·벽 근처 용기는 개별 경로로 수정할 수 있습니다.</p>
+      <label class="row">접촉 면<small>경로 기준 위·아래로 툴 단면을 뒤집습니다.</small><select id="flip"><option value="0">윗면 접촉</option><option value="1">아랫면 접촉</option></select></label>
+      <label class="check"><input type="checkbox" id="snap" checked/>원통 표면에 붙이기</label>
+      <label class="row">쐐기 깊이 (m)<small>붙일 때 표면 안쪽으로</small><input id="snap-wedge" type="number" step="0.001" value="0.003"/></label>
+      <h2>단계 나누기 <button type="button" class="save-section" data-save="stepping" title="이 칸의 현재 값을 저장합니다. 다음에 페이지를 열면 이 값으로 시작합니다.">저장</button></h2>
+      <label class="row">한 걸음 거리 (m)<input id="step-m" type="number" step="0.005" value="0.02"/></label>
+      <label class="row">한 걸음 각도 (°)<input id="step-deg" type="number" step="1" value="10"/></label>
+      <label class="row">속도 (m/s)<input id="speed" type="number" step="0.01" value="0.06"/></label>
+      <label class="row">회전 속도 (°/s)<input id="turn" type="number" step="5" value="40"/></label>
+      <label class="row">단계 최소 시간 (s)<input id="min-step" type="number" step="0.05" value="0.15"/></label>
+      <div class="buttons"><button id="export">JSON 내보내기</button><button id="import">JSON 불러오기</button><input id="import-file" type="file" accept="application/json" hidden/></div>
+    </section>
+    <section id="auto-panel" hidden><h2>자동 계획 파라미터 <button type="button" class="save-section" data-save="auto" title="이 칸의 현재 값을 저장합니다. 다음에 페이지를 열면 이 값으로 시작합니다.">저장</button></h2><div id="params"></div><div class="buttons"><button id="reset">기본값</button><button id="to-draw" title="계획된 경로(왼손)를 그린 점으로 바꿔 직접 고칩니다">그리기로 옮기기</button></div></section>
+    <h2>물리 <button type="button" class="save-section" data-save="physics" title="이 칸의 현재 값을 저장합니다. 다음에 페이지를 열면 이 값으로 시작합니다.">저장</button></h2>
+    <label class="row">원통 재질<select id="material"><option value="rigid">강체</option><option value="soft">말랑 (종이 용기)</option></select></label>
+    <label class="row">형상<small>말랑할 때 원통 외곽</small><select id="soft-shape"><option value="smooth">원 (매끈)</option><option value="beads">구슬 고리 (울퉁불퉁)</option></select></label>
+    <label class="row">찌그러짐 (mm)<small>10 N으로 누를 때</small><input id="soft-mm" type="number" step="0.5" value="5"/></label>
+    <label class="row">말랑 범위<select id="soft-scope"><option value="neighbors">대상 + 이웃</option><option value="all">전체</option></select></label>
+    <label class="row">원통 질량 (kg)<small>비우면 프로젝트 값</small><input id="mass" type="number" step="0.1" min="0.01" placeholder="프로젝트 값"/></label>
+    <h2>마찰 <button type="button" class="save-section" data-save="friction" title="이 칸의 현재 값을 저장합니다. 다음에 페이지를 열면 이 값으로 시작합니다.">저장</button></h2>
+    <label class="row">원통 마찰계수<small>원통끼리, 원통 쪽 값</small><input id="mu-cylinder" type="number" step="0.05" min="0" value="0.7"/></label>
+    <label class="row">날 마찰계수<input id="mu-blade" type="number" step="0.05" min="0" value="0.5"/></label>
+    <label class="row">상자 마찰계수<input id="mu-wall" type="number" step="0.05" min="0" value="0.7"/></label>
+    <label class="row">구름 저항 (1/s)<small>강체 원통의 회전 감쇠</small><input id="rolling" type="number" step="0.5" min="0" value="0"/></label>
+    <p class="hint">두 면이 닿을 때 마찰은 √(a·b)로 섞입니다. 예: 원통 0.7 × 날 0.5 → 0.59.</p>
+    <label class="row">최대 힘 (N)<input id="force" type="number" step="5" value="60"/></label>
+    <label class="row">끝 자세 허용 (mm)<input id="tracking" type="number" step="1" value="10"/></label>
+    <div style="display:flex;gap:6px;margin-top:12px"><button id="select-sim-target" aria-pressed="false">캔버스에서 용기 선택</button><button class="primary" id="run">시뮬레이션</button></div>
+    <h2>경로 생성</h2>
+    <div class="buttons"><button id="pick-mode" aria-pressed="false">경로 생성</button><button id="pick-reset">처음부터</button></div>
+    <p class="hint" id="pick-status">켜고 캔버스에서 꺼낼 라면용기를 클릭하세요.</p>
+    <p class="hint" id="status"></p>
+  </aside>
+  <main class="stage">
+    <div class="canvas-wrap"><canvas id="view"></canvas></div>
+    <div class="legend"><span><i style="background:#e8a33d"></i>대상 원통</span><span><i style="background:#56708a"></i>다른 원통</span><span><i style="background:#8a6b4a"></i>상자</span><span><i style="background:#80efc5"></i>날</span><span><i style="background:transparent;border:1px dashed #d9f"></i><span>날 (명령)</span></span><span><i style="background:#ffd166"></i>그린 점</span><span><i style="background:#55e7c1;border-radius:50%"></i>파지점</span><span>● <span>나뉜 단계</span></span><span>TCP</span></div>
+    <div class="transport"><button id="play">▶</button><input id="scrub" type="range" min="0" max="0" value="0"/><span id="time">0.00 s</span></div>
+  </main>
+  <aside class="right">
+    <h2>결과</h2>
+    <div id="result" class="result">아직 실행하지 않았습니다.</div>
+    <section id="batch-panel" hidden>
+      <h2>경로 생성 기록</h2>
+      <p class="hint" id="batch-summary"></p>
+      <div class="batch-table" id="batch-table"></div>
+    </section>
+    <section id="points-panel">
+      <h2>그린 점 <span id="point-count"></span></h2>
+      <div class="points-head"><span></span><span>#</span><span>먼 쪽 / 위 (mm)</span><span>각도 (°)</span><span>단계</span><span></span></div>
+      <div class="points" id="points"></div>
+      <p class="hint">좌표는 대상 원통 중심 기준(먼 쪽 = 상자 안쪽 위로, 위 = 상자 입구 방향)입니다. 각도·단계를 비우면 자동입니다. 단계는 앞 점에서 이 점까지를 나누는 수입니다. 왼쪽 ⋮⋮를 끌어 순서를 바꿀 수 있습니다.</p>
+    </section>
+    <h2>단계</h2>
+    <div class="steps" id="steps"></div>
+  </aside>
+</div>
+<div class="term-pop" id="term-pop" role="dialog" aria-live="polite" hidden></div>
+<script type="module" src="/app/cylinder-lab.ts"></script>
+</body>
+</html>

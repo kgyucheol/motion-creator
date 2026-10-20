@@ -55,6 +55,7 @@ def adapter(z0, z1):
 # ---------------- V 주걱 (scoop) : 링크 원점 = 플랜지면 중심, x = 그리퍼 방향, z = 윗면 법선 ----------------
 X0, LP = 0.060 - FLANGE_X, 0.230                                          # 목 시작 x, 전체 길이
 FZ = CubicSpline([0, 0.03, 0.07, 0.12, 0.165, 0.20, 0.23], [0.004, 0.002, -0.010, -0.030, -0.038, -0.030, -0.014])  # 옆에서 본 V
+TIP_X, TIP_Z = X0 + LP - 2e-4, float(FZ(LP - 2e-4))                         # 실제 메시 끝 윗면의 중앙
 DISH = 1.8                                                                # 폭 방향 오목 (가장자리 +11.5 mm)
 def hw(u):                                                                # 위에서 본 밥주걱 반폭 (목 32 → 최대 160 mm)
     if u < 0.05: return 0.016
@@ -75,14 +76,15 @@ def make_scoop(sign):
     ub = np.r_[np.linspace(0.05, 0.19, 8), np.linspace(0.19, LP - 2e-4, 6)[1:]]; sb = np.sin(np.linspace(-np.pi/2, np.pi/2, 7))
     cols = [scoop_patch(ue[i], ue[i+1], se[j], se[j+1], 7, 7).convex_hull
             for ue, se in ((un, sn), (ub, sb)) for i in range(len(ue) - 1) for j in range(len(se) - 1)]
-    u = np.linspace(0, LP, 4001); us = u[np.argmin(FZ(u))]
-    tcp = (X0 + us, 0.0, float(FZ(us)))                                  # 오목면 최저점 (묶음이 앉는 곳)
+    tcp = (TIP_X, 0.0, TIP_Z)                                               # 주걱 맨 끝 윗면
     return body, ad, cols, prims, tcp
 
-# ---------------- ㄴ 끝단 받침 (end_support) : 평판 180×90×4 + 윗면 홈 3줄 + 바깥쪽 옆벽 ----------------
+# ---------------- ㄴ 끝단 받침 (end_support) : 원래 180×90×4 판을 주걱 끝까지 늘리고 올림 ----------------
 PT, PB, WALL_H = -0.030, -0.034, 0.036
 PX0, PX1, PW = 0.0535 - FLANGE_X, 0.2335 - FLANGE_X, 0.090
 WX_FULL = 0.160 - FLANGE_X                                                # 옆벽이 최대 높이가 되는 x
+SUPPORT_SCALE_X = (TIP_X - PX0) / (PX1 - PX0)
+SUPPORT_RISE_Z = TIP_Z - PT
 def make_end_support(sign, groove_depth, groove_width):
     outline = sbox(PX0, -PW/2, PX1, PW/2).buffer(-0.005).buffer(0.005)
     grooves = unary_union([LineString([(0.100 - FLANGE_X, yc), (0.200 - FLANGE_X, yc)]).buffer(groove_width/2) for yc in (-0.022, 0.0, 0.022)])
@@ -93,9 +95,16 @@ def make_end_support(sign, groove_depth, groove_width):
     y0 = 0.041 if sign > 0 else -0.045                                    # 옆벽 = 몸 바깥쪽
     wall.vertices = np.c_[v[:, 0], y0 + v[:, 2], v[:, 1]]; wall.invert(); wall.fix_normals()
     body = union([base, toplayer, wall])
+    # Extend the plate to the scoop tip and raise its contact face to the same
+    # flange-relative height. The adapter stays fixed at the wrist flange.
+    for mesh in (body, wall):
+        vertices = mesh.vertices.copy()
+        vertices[:, 0] = PX0 + (vertices[:, 0] - PX0) * SUPPORT_SCALE_X
+        vertices[:, 2] += SUPPORT_RISE_Z
+        mesh.vertices = vertices
     ad, prims = adapter(PT, 0.014)
-    prims = prims + [('box', dict(size=(PX1 - PX0, PW, PT - PB)), ((PX0 + PX1)/2, 0, (PT + PB)/2), (0, 0, 0))]   # 판 (홈은 충돌체에서 생략)
-    tcp = (0.180305, 0.0, -0.0380589785)  # 주걱 TCP와 손목 기준 좌우 대칭인 제어점
+    prims = prims + [('box', dict(size=(TIP_X - PX0, PW, PT - PB)), ((PX0 + TIP_X)/2, 0, (PT + PB)/2 + SUPPORT_RISE_Z), (0, 0, 0))]   # 판 (홈은 충돌체에서 생략)
+    tcp = (TIP_X, 0.0, TIP_Z)
     return body, ad, [wall.convex_hull], prims, tcp
 
 # ---------------- 질량·관성 ----------------

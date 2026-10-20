@@ -1,0 +1,23 @@
+{
+  "format": "motioncreator.wbc_stand.v1",
+  "source": "decoupled_wbc standing with the neutral upper-body command, mean over the last 300 of 1800 sim steps",
+  "pelvis_height_m": 0.74744,
+  "pelvis_height_spread_m": 2.8e-05,
+  "joints": {
+    "left_hip_pitch_joint": -0.40578,
+    "left_hip_roll_joint": 0.03323,
+    "left_hip_yaw_joint": 0.03156,
+    "left_knee_joint": 0.73296,
+    "left_ankle_pitch_joint": -0.32306,
+    "left_ankle_roll_joint": -0.01086,
+    "right_hip_pitch_joint": -0.40937,
+    "right_hip_roll_joint": -0.03082,
+    "right_hip_yaw_joint": -0.03112,
+    "right_knee_joint": 0.73877,
+    "right_ankle_pitch_joint": -0.32559,
+    "right_ankle_roll_joint": 0.00389,
+    "waist_yaw_joint": 0.00113,
+    "waist_roll_joint": -0.00932,
+    "waist_pitch_joint": 0.05181
+  }
+}

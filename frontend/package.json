@@ -11,7 +11,8 @@
     "start": "vite preview --host 127.0.0.1 --port 3000 --strictPort",
     "lint": "oxlint",
     "format": "oxfmt",
-    "test:scene": "node --experimental-transform-types --test tests/robot-scene.test.mjs"
+    "test:scene": "node --experimental-transform-types --test tests/robot-scene.test.mjs tests/point-cloud.test.mjs tests/detected-objects.test.mjs",
+    "test:lab": "node --experimental-transform-types --test tests/drawn-path.test.mjs tests/cylinder-sim.test.mjs tests/lab-grasp.test.mjs tests/lab-batch.test.mjs tests/box-tilt.test.mjs"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",
@@ -23,6 +24,7 @@
     "embla-carousel-react": "8.5.2",
     "input-otp": "1.4.2",
     "lucide-react": "1.31.0",
+    "planck": "^1.4.2",
     "react": "19.2.6",
     "react-day-picker": "9.8.1",
     "react-dom": "19.2.6",

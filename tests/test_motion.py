@@ -450,3 +450,30 @@ def test_parallel_segment_compile_matches_sequential_and_reports_errors(robot, m
         _pool, motion._PARALLEL['pool'], motion._PARALLEL['robot'] = motion._PARALLEL['pool'], None, None
         _pool.shutdown()
         motion._COMPILE_CACHE.clear()
+
+
+def test_rename_project_keeps_the_saved_files_and_project_id(robot, tmp_path):
+    from motioncreator.motion import rename_project
+    project = new_project(robot)
+    first = save_bundle(robot, project, fps=10, directory=tmp_path)
+    folder = Path(first['directory'])
+    npz_before = (folder / 'motion.npz').read_bytes()
+    project_id = first['project']['project_id']
+    assert rename_project('0' * 32, 'x', tmp_path) == {'renamed': False}
+
+    renamed = rename_project(project_id, '라면 꺼내기 테스트', tmp_path)
+    assert renamed['renamed'] and renamed['display_name'] == '라면 꺼내기 테스트'
+    new_folder = tmp_path / renamed['folder']
+    assert new_folder.is_dir() and not folder.exists() and len(list(tmp_path.iterdir())) == 1
+    assert new_folder.name.startswith('라면_꺼내기_테스트_') and new_folder.name.endswith(project_id[:8])
+    assert (new_folder / 'motion.npz').read_bytes() == npz_before
+    stored = json.loads((new_folder / 'project.json').read_text(encoding='utf-8'))
+    assert stored['project_id'] == project_id and stored['name'] == '라면 꺼내기 테스트' and stored['name_mode'] == 'manual'
+    assert json.loads((new_folder / 'metadata.json').read_text(encoding='utf-8'))['display_name'] == '라면 꺼내기 테스트'
+
+    # Saving afterwards keeps updating the same folder instead of creating a copy.
+    again = save_bundle(robot, {**first['project'], 'name': '라면 꺼내기 테스트', 'name_mode': 'manual'}, fps=10, directory=tmp_path)
+    assert again['reused'] and Path(again['directory']) == new_folder and len(list(tmp_path.iterdir())) == 1
+
+    back = rename_project(project_id, '   ', tmp_path)
+    assert back['name_mode'] == 'auto' and back['display_name'].endswith('_' + first['project']['created_at'][:10].replace('-', ''))

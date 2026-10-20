@@ -1,8 +1,10 @@
 """MuJoCo FK and bounded, weighted whole-body IK. No dynamics stepping."""
 from pathlib import Path
 import hashlib
+import json
 import os
 import copy
+from functools import lru_cache
 import xml.etree.ElementTree as ET
 import numpy as np
 import mujoco
@@ -13,6 +15,7 @@ from .grip_geometry import grip_pad_center, grip_pad_half_size, grip_pad_rotatio
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / 'assets/g1/g1.xml'
+WBC_STAND_PATH = ROOT / 'configs/wbc_stand.json'
 HANDLES = {
     'pelvis': ('pelvis', (0, 0, 0), '골반'),
     'left_knee': ('left_knee_link', (0, 0, 0), '왼 무릎'),
@@ -27,6 +30,9 @@ HANDLES = {
     'right_shoulder': ('right_shoulder_pitch_link', (0, 0, 0), '오른 어깨'),
 }
 FEET = ('left_foot', 'right_foot')
+BODY_CLEARANCE_M = .02            # card and straight-path solves keep the arms (upper arm down) this far from the trunk
+CLEARANCE_WEIGHT = 60.            # per metre inside the clearance (a hand target weighs 28 per metre of error)
+CLEARANCE_LOOKAHEAD_M = .05       # geoms farther than the clearance plus this are not measured exactly
 ROTATABLE = ('pelvis', 'left_hand', 'right_hand', *FEET)
 BASIC_ROTATABLE = ROTATABLE
 HINGES = {key: key + '_joint' for key in ('left_elbow', 'right_elbow', 'left_knee', 'right_knee')}
@@ -96,13 +102,22 @@ ATTENTION_ELBOW = 1.3  # rad; pi/2 would hang the forearm perfectly straight
 ATTENTION_SHOULDER_ROLL = .2  # rad, keeps the hands off the thighs
 
 
+@lru_cache(maxsize=1)
+def _stock_tool_identity():
+    from .tool_model import DEFAULT_TOOLS
+    stock = Robot('g1-tools', DEFAULT_TOOLS)
+    return stock.fingerprint, frozenset(stock.compatible_fingerprints)
+
+
 class Robot:
-    def __init__(self, model_id=None):
+    def __init__(self, model_id=None, tools=None):
         self.model_id = model_id or os.environ.get('MOTIONCREATOR_MODEL', 'g1')
+        self.tools = None
         self.handles = dict(HANDLES)
         if self.model_id == 'g1-tools':
-            from .tool_model import tool_model_xml
-            self.xml, tool_handles = tool_model_xml()
+            from .tool_model import tool_model_xml, parse_tools
+            self.tools = tuple(tools) if tools else parse_tools(os.environ.get('MOTIONCREATOR_TOOLS'))
+            self.xml, tool_handles = tool_model_xml(self.tools)
             self.handles.update(tool_handles)
             self.model = mujoco.MjModel.from_xml_string(ET.tostring(self.xml, encoding='unicode'))
         elif self.model_id == 'g1':
@@ -121,6 +136,7 @@ class Robot:
         self.lower = np.r_[[-4, -4, .20], m.jnt_range[1:, 0]]
         self.upper = np.r_[[4, 4, 1.5], m.jnt_range[1:, 1]]
         self.home = m.qpos0.copy()
+        self.body_clearance_pairs = self._body_clearance_pairs()
         for side in ('left', 'right'):
             for name, value in [('hip_pitch', -.12), ('knee', .24), ('ankle_pitch', -.12), ('elbow', .15)]:
                 self.home[m.joint(f'{side}_{name}_joint').qposadr[0]] = value
@@ -135,6 +151,7 @@ class Robot:
         for side, sign in (('left', 1), ('right', -1)):
             self.attention[m.joint(f'{side}_elbow_joint').qposadr[0]] = ATTENTION_ELBOW
             self.attention[m.joint(f'{side}_shoulder_roll_joint').qposadr[0]] = sign * ATTENTION_SHOULDER_ROLL
+        self.wbc_stand = self._wbc_stand_pose()
         self.visual_ids = [i for i in range(m.ngeom) if m.geom_type[i] == mujoco.mjtGeom.mjGEOM_MESH and m.geom_group[i] == 1]
         if self.model_id == 'g1':
             fingerprint_source = MODEL_PATH.read_bytes()
@@ -147,6 +164,13 @@ class Robot:
             fingerprint_xml = copy.deepcopy(self.xml)
             for element in fingerprint_xml.iter():
                 element.attrib.pop('content_type', None)
+            # Mesh paths are absolute; drop the checkout root so every clone gets the same identity.
+            local_xml = copy.deepcopy(fingerprint_xml)
+            root = f'{ROOT}/'
+            for element in fingerprint_xml.iter():
+                for key, value in element.attrib.items():
+                    if value.startswith(root):
+                        element.set(key, value[len(root):])
             fingerprint_source = ET.tostring(fingerprint_xml)
         self.fingerprint = hashlib.sha256(fingerprint_source).hexdigest()
         self.compatible_fingerprints = {self.fingerprint}
@@ -159,19 +183,63 @@ class Robot:
             # TCP. The 29 joints and physical geoms did not change, so saved
             # projects using the earlier TCP calibration remain editable.
             self.compatible_fingerprints.update({
+                # Saved stock-tool projects from before the portable fingerprint change.
+                'f977bcfcf16e4ce34ab63ce3bb1dc7dd5e9051d8bd9268f344fca8f401007a8e',
+                # Previous stock pair: scoop TCP at its bowl and the shorter support plate.
+                'e716799a332a289a06f6d904413fde62cd395601a610cc3414268e47f7aa8525',
                 'b9c00efdb6e538fea6383b620c4e09e6ce2e638dd6ce1cf9348810cb601d7f3e',
                 'd270539dbd3c592d46a7721e623c4b71d9be7b73ad7437a5531ec3161519aa45',
                 'bde0de43b90b2ff14ebf6641393c1347bd6b1e82620ffcc90d155cfa6ff1163a',
             })
             # Projects created by the first gripper-model load in older builds
             # may contain MuJoCo's inferred STL content_type attributes.
-            legacy_xml = copy.deepcopy(fingerprint_xml)
+            # Projects saved before the paths were made relative carry this checkout's absolute paths.
+            self.compatible_fingerprints.add(hashlib.sha256(ET.tostring(local_xml)).hexdigest())
+            legacy_xml = copy.deepcopy(local_xml)
             for mesh in legacy_xml.findall('./asset/mesh'):
                 mesh.set('content_type', 'model/stl')
             self.compatible_fingerprints.add(hashlib.sha256(ET.tostring(legacy_xml)).hexdigest())
 
+        self.model_revision = self.fingerprint
+        if self.model_id == 'g1-tools':
+            from .tool_model import DEFAULT_TOOLS
+            if self.tools != DEFAULT_TOOLS:
+                # Any tool pair keeps the same 29 joints and qpos layout, so authored motions must stay
+                # portable between pairs (that is the point of swapping tools to verify a motion): every
+                # pair shares the stock pair's project identity. Caches and visuals still key on the pair.
+                identity, compatible = _stock_tool_identity()
+                self.fingerprint, self.compatible_fingerprints = identity, set(compatible)
+
+    @property
+    def visual_revision(self):
+        """Cache-busting id for the served GLB; stock models keep the plain fingerprint prefix."""
+        from .tool_model import DEFAULT_TOOLS
+        if self.tools is None or self.tools == DEFAULT_TOOLS:
+            return self.fingerprint[:16]
+        return hashlib.sha256(self.cache_key.encode()).hexdigest()[:16]
+
+    @property
+    def cache_key(self):
+        """Identity for cached kinematics/physics: the motion identity plus the mounted tools."""
+        return self.fingerprint if self.tools is None else f'{self.fingerprint}:{":".join(self.tools)}'
+
     def xml_root(self):
         return copy.deepcopy(self.xml)
+
+    def _wbc_stand_pose(self):
+        """Default stand with the lower body the decoupled-WBC actually holds (see scripts/measure_wbc_stand.py).
+
+        Motion authored on `home` (knee 0.24 rad) assumes a taller stance than the controller delivers (knee ~0.74 rad,
+        pelvis ~4 cm lower), so the upper body ends up lower and further from the target at run time.
+        """
+        data = json.loads(WBC_STAND_PATH.read_text())
+        pose = self.home.copy()
+        for name, value in data['joints'].items():
+            pose[self.model.joint(name).qposadr[0]] = value
+        pose[3:7] = [1., 0., 0., 0.]
+        pose[2] = 0.
+        pose[2] -= min(self.point(self.data(pose), k)[0][2] for k in FEET)   # feet on the floor, as for `home`
+        return pose
 
     def validate_q(self, value):
         q = np.array(value, dtype=float, copy=True)
@@ -207,9 +275,28 @@ class Robot:
         aa, bb = ancestors(self.ids[a]), ancestors(self.ids[b])
         return min(i + bb.index(n) for i, n in enumerate(aa) if n in bb)
 
+    def _body_clearance_pairs(self):
+        """(arm geom, trunk geom) collision pairs an arm must keep clear of: everything from the upper arm (shoulder yaw
+        link) down, including a mounted tool, against the pelvis, torso, logo and head."""
+        m = self.model
+        trunk_bodies = {'pelvis', 'pelvis_contour_link', 'torso_link', 'logo_link', 'head_link'}
+
+        def chain(body):
+            names = set()
+            while body:
+                names.add(m.body(body).name)
+                body = m.body_parentid[body]
+            return names
+        collidable = [g for g in range(m.ngeom) if m.geom_contype[g] or m.geom_conaffinity[g]]
+        trunk = [g for g in collidable if m.body(m.geom_bodyid[g]).name in trunk_bodies]
+        arms = [g for g in collidable if chain(m.geom_bodyid[g]) & {'left_shoulder_yaw_link', 'right_shoulder_yaw_link'}]
+        return [(a, b) for a in arms for b in trunk]
+
     def solve(self, q, anchor, focus=None, target=None, pins=FEET, resistance=1., mode='elastic', targets=None, max_nfev=50,
               posture_reference=None, posture_weight=.055, selected_targets=None, orientation_targets=None,
-              joint_targets=None, angle_pins=()):
+              joint_targets=None, angle_pins=(), orientation_tolerance=0., clearance=0.):
+        # orientation_tolerance (rad): an orientation target within this angle costs nothing; past it only the excess counts.
+        # clearance (m): the arms are pushed away from the trunk when closer than this (0 = no check).
         q, anchor = self.validate_q(q), self.validate_q(anchor)
         selected_targets = dict(selected_targets or {})
         orientation_targets = dict(orientation_targets or {})
@@ -322,11 +409,22 @@ class Robot:
                 if k in orientation_targets or k in orientation_locks or (k in pins and k in FEET):
                     w = 90. if k in orientation_locks or (k in pins and k in FEET) else 18.
                     err = Rotation.from_matrix(r @ tr.T).as_rotvec()
-                    residuals.append(w * err)
+                    band = np.eye(3)
+                    angle = np.linalg.norm(err)
+                    if orientation_tolerance and k in orientation_targets and k not in orientation_locks:
+                        if angle <= orientation_tolerance:
+                            excess, band = np.zeros(3), np.zeros((3, 3))
+                        else:      # e - t e/|e| and its derivative
+                            axis = err / angle
+                            excess = err - orientation_tolerance * axis
+                            band = np.eye(3) - orientation_tolerance / angle * (np.eye(3) - np.outer(axis, axis))
+                    else:
+                        excess = err
+                    residuals.append(w * excess)
                     if jac:
                         if jrot is None:
                             _, jrot = jacobian(p, self.ids[k], self.orientation_ids[k])
-                        matrices.append(w * left_jacobian_inverse(err) @ jrot)
+                        matrices.append(w * band @ left_jacobian_inverse(err) @ jrot)
                 if k in FEET:
                     for offset in ((-.085, -.03, 0), (-.085, .03, 0), (.085, -.03, 0), (.085, .03, 0)):
                         corner = p + r @ offset
@@ -344,6 +442,20 @@ class Robot:
                 residuals.append(np.array([120.*(x[index]-value)]))
                 if jac:
                     row = np.zeros((1, n)); row[0, index] = 120.; matrices.append(row)
+            if clearance:
+                fromto = np.zeros(6)
+                for a, b in self.body_clearance_pairs:
+                    distance = mujoco.mj_geomDistance(self.model, d, a, b, clearance + CLEARANCE_LOOKAHEAD_M, fromto)
+                    residuals.append(np.array([CLEARANCE_WEIGHT * max(0., clearance - distance)]))
+                    if jac:
+                        row = np.zeros((1, n))
+                        gap = fromto[3:] - fromto[:3]
+                        if distance < clearance and np.linalg.norm(gap) > 1e-9:
+                            normal = np.sign(distance or 1.) * gap / np.linalg.norm(gap)     # from the arm toward the trunk
+                            arm_point, _ = jacobian(fromto[:3].copy(), self.model.geom_bodyid[a])
+                            trunk_point, _ = jacobian(fromto[3:].copy(), self.model.geom_bodyid[b])
+                            row[0] = -CLEARANCE_WEIGHT * normal @ (trunk_point - arm_point)
+                        matrices.append(row)
             residuals.append(posture_weight*(x-posture_x))
             if jac:
                 matrices.append(posture_weight*np.eye(n))
@@ -385,6 +497,18 @@ class Robot:
                         'angle_error_deg': angular_error, 'rotation_errors_deg': rotation_errors,
                         'joint_errors_deg': joint_errors,
                         'angle_pin_error_deg': float(np.rad2deg(angle_pin_error))}
+
+    @property
+    def arm_geom_ids(self):
+        """Visual geoms attached to the arms (from the shoulder down, hands and tools included), as the strings state() uses."""
+        roots = {self.model.body(f'{side}_shoulder_pitch_link').id for side in ('left', 'right')}
+        def on_arm(body):
+            while body > 0:
+                if body in roots:
+                    return True
+                body = int(self.model.body_parentid[body])
+            return False
+        return [str(i) for i in self.visual_ids if on_arm(int(self.model.geom_bodyid[i]))]
 
     def state(self, q):
         d = self.data(q)

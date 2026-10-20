@@ -12,6 +12,7 @@ frontend/.vinext/
 *.log
 
 .conda-policy/
+.motioncreator-server.json
 tasks/
 assets/g1/robot-g1.glb
 assets/g1/robot-g1-tools.glb
@@ -28,3 +29,9 @@ assets/g1/robot-g1-tools.glb
 /assets/ramen_scan/*.glb
 /assets/ramen_scan/*.png
 /assets/ramen_scan/*.json
+assets/tools/.generated/
+
+# Controller runtime (sim2sim) working files
+/build/
+/logs/
+/data/

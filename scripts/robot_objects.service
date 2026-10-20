@@ -1,0 +1,18 @@
+[Unit]
+Description=YOLO-seg detector for rows of ramen containers (color + cloud in, JSON out on port 55558)
+After=robot-cloud.service
+Wants=robot-cloud.service
+
+[Service]
+Type=simple
+User=unitree
+WorkingDirectory=/home/unitree/robot_cloud
+CPUAffinity=3 4 5 6
+ExecStart=/home/unitree/robot_cloud/venv/bin/python /home/unitree/robot_cloud/robot_object_detector.py --model /home/unitree/robot_cloud/models/ramen_container.onnx --threads 4
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

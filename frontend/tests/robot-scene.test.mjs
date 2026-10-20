@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
-import { RobotScene, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
+import { RobotScene, D435_COLOR_INTRINSICS, setPerspectiveIntrinsics, adjustedHeadCameraPose, defaultHeadCameraAdjust, canRotateSelection, rotationBlocked, headCameraViewQuaternion, horizontalFovForVertical, setPerspectiveFovs, verticalFovForHorizontal, jointControls, jointForRing, COMBINED_JOINTS } from '../lib/robot-scene.ts';
 import { rotatedGroupTargets, incrementRotation, quaternionFromDegrees, eulerDegrees, canMirrorSelection, isJointPairSelection, mirrorFrameHandle, mirroredJointSign, pairedJointTargets, translatedTargets } from '../lib/pose-transforms.ts';
 
 test('a symmetric hinge pair supports one active ring and mirrored axis deltas', () => {
@@ -769,4 +769,121 @@ test('symmetric translation mirrors across the torso plane for arms and the pelv
   assert.ok(Math.abs(spread.right_hand[0] - .26) < 1e-9 && Math.abs(spread.left_hand[0] + .25) < 1e-9);
   const forward = along([0, .01, 0]);
   assert.ok(Math.abs(forward.right_hand[1] - .51) < 1e-9 && Math.abs(forward.left_hand[1] - .51) < 1e-9);
+});
+
+test('PiP source switch streams the real head camera and releases it when switching back', () => {
+  const attributes = new Map();
+  const feed = { hidden: true, src: '', removeAttribute(name) { if (name === 'src') this.src = ''; } };
+  const label = { textContent: 'HEAD CAM · SIM' };
+  const split = { hidden: true };
+  const sources = ['sim', 'real', 'compare'].map(source => ({ dataset: { source }, setAttribute: (name, value) => attributes.set(source, value) }));
+  const controls = [{ disabled: false }];
+  const overlay = {
+    classList: { toggle(name, on) { attributes.set(`class:${name}`, on); } },
+    style: { setProperty() {} },
+    querySelector: selector => selector === '.head-camera-feed' ? feed : selector === '.head-camera-compare' ? split : label,
+    querySelectorAll: selector => selector.includes('.head-camera-source') ? sources : selector.includes('.head-camera-aspects') ? [{ disabled: false }] : controls,
+  };
+  const timers = [];
+  const previous = { window: globalThis.window, fetch: globalThis.fetch };
+  globalThis.window = { setInterval: callback => timers.push(callback) || timers.length, clearInterval: () => {} };
+  globalThis.fetch = async () => ({ json: async () => ({ receiving: true }) });
+  try {
+    const viewer = Object.create(RobotScene.prototype);
+    viewer.headCameraOverlay = overlay;
+    viewer.headCameraStatusTimer = null;
+    viewer.headCameraSplit = 50;
+    viewer.syncHeadCameraFovControls = () => {};
+    viewer.headCameraIntrinsics = { ...D435_COLOR_INTRINSICS };
+    Object.assign(viewer, { headCameraHorizontalFov: 60, headCameraVerticalFov: 35, headCameraAspect: 4 / 3 });
+    viewer.setHeadCameraSource('real');
+    assert.equal(feed.src, '/api/head-camera/stream');
+    assert.equal(feed.hidden, false);
+    assert.equal(attributes.get('real'), 'true');
+    assert.equal(attributes.get('sim'), 'false');
+    assert.equal(controls[0].disabled, true);
+    assert.equal(split.hidden, true);
+    viewer.setHeadCameraSource('compare');
+    assert.equal(feed.src, '/api/head-camera/stream');
+    assert.equal(feed.hidden, false);
+    assert.equal(attributes.get('class:compare'), true);
+    assert.equal(attributes.get('compare'), 'true');
+    assert.equal(split.hidden, false);
+    assert.equal(controls[0].disabled, true);
+    assert.ok(Math.abs(viewer.headCameraHorizontalFov - 69.77) < .01 && Math.abs(viewer.headCameraVerticalFov - 43.03) < .01);
+    assert.equal(viewer.headCameraAspect, 848 / 480);                                  // the real image's own aspect
+    viewer.setHeadCameraSource('sim');
+    assert.equal(split.hidden, true);
+    assert.deepEqual([viewer.headCameraHorizontalFov, viewer.headCameraVerticalFov, viewer.headCameraAspect], [60, 35, 4 / 3]);
+    assert.equal(feed.src, '');
+    assert.equal(feed.hidden, true);
+    assert.equal(label.textContent, 'HEAD CAM · SIM');
+    assert.equal(controls[0].disabled, false);
+  } finally {
+    globalThis.window = previous.window;
+    globalThis.fetch = previous.fetch;
+  }
+});
+
+test('PiP width can be resized within sensible bounds and keeps its aspect', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  viewer.headCameraAspect = null;
+  viewer.headCameraPosition = null;
+  viewer.headCameraWidth = 400;
+  const wide = viewer.headCameraRect(1200, 800);
+  assert.equal(wide.width, 400);
+  assert.ok(Math.abs(wide.height - 400 * 9 / 16) < 1e-9);
+  viewer.headCameraWidth = 10;
+  assert.equal(viewer.headCameraRect(1200, 800).width, 120);
+  viewer.headCameraWidth = 5000;
+  assert.ok(viewer.headCameraRect(600, 400).width <= 600 - 8);
+  viewer.headCameraWidth = 5000;
+  const tall = viewer.headCameraRect(1200, 200);
+  assert.ok(tall.top + tall.height <= 200);
+});
+
+test('the head camera adjustment moves the lens in link axes and turns the view about the link axes', () => {
+  const identity = [0, 0, 0, 1];
+  const none = adjustedHeadCameraPose([1, 2, 3], identity);
+  assert.deepEqual(none.position.toArray(), [1, 2, 3]);
+  assert.ok(none.quaternion.angleTo(headCameraViewQuaternion(identity)) < 1e-9);
+  const yawed = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2).toArray();
+  const moved = adjustedHeadCameraPose([0, 0, 0], yawed, { offset: [10, 30, 20], rotation: [0, 0, 0] });
+  [-0.03, 0.01, 0.02].forEach((value, axis) => assert.ok(Math.abs(moved.position.getComponent(axis) - value) < 1e-9));
+  const forwardOf = quaternion => new THREE.Vector3(0, 0, -1).applyQuaternion(quaternion);
+  const down = adjustedHeadCameraPose([0, 0, 0], identity, { offset: [0, 0, 0], rotation: [0, 5, 0] });
+  assert.ok(forwardOf(down.quaternion).z < 0 && Math.abs(forwardOf(down.quaternion).z + Math.sin(5 * Math.PI / 180)) < 1e-9);
+  const left = adjustedHeadCameraPose([0, 0, 0], identity, { offset: [0, 0, 0], rotation: [0, 0, 5] });
+  assert.ok(forwardOf(left.quaternion).y > 0);
+});
+
+test('the point cloud origin adjustment defaults to zero because the compare view uses the real intrinsics', () => {
+  const adjust = defaultHeadCameraAdjust();
+  assert.deepEqual(adjust.offset, [0, 0, 0]);
+  assert.deepEqual(adjust.rotation, [0, 0, 0]);
+  assert.notEqual(defaultHeadCameraAdjust(), adjust);          // callers mutate their own copy
+});
+
+test('with the real intrinsics a cloud point lands on the pixel it came from', () => {
+  const k = D435_COLOR_INTRINSICS;
+  const camera = new THREE.PerspectiveCamera(42, k.width / k.height, .03, 20);
+  setPerspectiveIntrinsics(camera, k);
+  for (const [u, v, z] of [[0, 0, .5], [848, 480, .5], [428.874, 256.104, 1], [100, 400, .47], [700, 60, 2.5]]) {
+    const optical = [(u - k.cx) * z / k.fx, (v - k.cy) * z / k.fy, z];
+    const ndc = new THREE.Vector3(optical[0], -optical[1], -optical[2]).applyMatrix4(camera.projectionMatrix);   // optical -> three camera view axes
+    assert.ok(Math.abs((ndc.x + 1) / 2 * k.width - u) < 1e-6 && Math.abs((1 - ndc.y) / 2 * k.height - v) < 1e-6, `${u},${v}`);
+  }
+  const centered = new THREE.PerspectiveCamera(42, k.width / k.height, .03, 20);
+  const { elements } = camera.projectionMatrix;
+  assert.ok(elements[8] !== 0 && elements[9] !== 0);                                         // the optical center is off the image center
+  assert.equal(centered.projectionMatrix.elements[8], 0);
+});
+
+test('editing the virtual camera intrinsics changes the compare FOV and the aspect it locks to', () => {
+  const viewer = Object.create(RobotScene.prototype);
+  Object.assign(viewer, { headCameraSource: 'compare', headCameraIntrinsics: { ...D435_COLOR_INTRINSICS, width: 640, height: 480, fx: 600, fy: 600 }, syncHeadCameraFovControls() {} });
+  viewer.applyIntrinsicsToControls();
+  assert.ok(Math.abs(viewer.headCameraHorizontalFov - 2 * Math.atan(320 / 600) * 180 / Math.PI) < 1e-9);
+  assert.equal(viewer.headCameraAspect, 640 / 480);
+  assert.equal(viewer.dirty, true);
 });
