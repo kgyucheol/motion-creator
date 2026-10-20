@@ -110,6 +110,8 @@ export type CardMotion = {
   waist?: 'free' | 'lock';
   /** 손 각도 허용(도): 팔이 손 방향을 정확히 맞추지 못하면 목표 방향에서 이만큼까지 틀어져도 된다. 없으면 0. */
   angle_tolerance_deg?: number;
+  /** 물체 연결 카드: 각 손이 머리 카메라에서 자기 파지점을 바라보는 방향을 가리키게 손 방향을 돌린다(롤은 녹화 그대로). */
+  camera_aim?: boolean;
   max_shift_m?: number;
 };
 

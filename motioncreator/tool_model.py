@@ -8,6 +8,7 @@ from pathlib import Path
 
 import mujoco
 import numpy as np
+from scipy.spatial.transform import Rotation
 
 ROOT = Path(__file__).resolve().parents[1]
 URDF = ROOT / 'assets/g1_scoop_endsupport/g1_29dof_rev_1_0_scoop_endsupport.urdf'
@@ -69,6 +70,20 @@ def head_camera_spec():
         'optical_frame_declared': False,
         'intrinsics_declared': False,
     }
+
+
+def head_camera_pose(robot, qpos):
+    """World (position, rotation matrix) of the D435 link at `qpos` (built from its parent and the mount when the model lacks it)."""
+    specification = head_camera_spec()
+    data = robot.data(qpos)
+    try:
+        body = robot.model.body(specification['link']).id
+        return data.xpos[body].copy(), data.xmat[body].reshape(3, 3).copy()
+    except KeyError:
+        body = robot.model.body(specification['parent_link']).id
+        parent_rotation = data.xmat[body].reshape(3, 3)
+        return (data.xpos[body] + parent_rotation @ np.asarray(specification['mount_xyz_m']),
+                parent_rotation @ Rotation.from_euler('xyz', specification['mount_rpy_rad']).as_matrix())
 
 
 def _default_tool_source():

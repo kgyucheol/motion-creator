@@ -163,3 +163,28 @@ def test_an_angle_tolerance_turns_the_hands_only_as_far_as_needed_instead_of_ben
     spec['angle_tolerance_deg'] = 60
     with pytest.raises(ValueError):
         validate_motion(spec)
+
+
+def test_camera_aim_points_each_hand_along_the_line_of_sight_to_its_grasp_point_and_keeps_its_roll(robot):
+    from motioncreator.tool_model import head_camera_pose
+    project = json.loads(EXAMPLE.read_text())
+    cube = project['scene_objects'][0]
+    aimed = with_ends(copy.deepcopy(project), cylinder(np.add(cube['position'], [.02, 0, 0]), .5))
+    aimed['keyframes'][2]['motion']['camera_aim'] = True
+    resolved, reports = resolve_project_motions(robot, aimed, advise=False)
+    assert reports[2]['status'] in ('ok', 'approx')
+    recorded_end, end = np.asarray(project['keyframes'][2]['qpos']), np.asarray(resolved['keyframes'][2]['qpos'])
+    camera = head_camera_pose(robot, recorded_end)[0]
+    before, after = robot.data(recorded_end), robot.data(end)
+    for hand in ('left_hand', 'right_hand'):
+        position, matrix = robot.point(after, hand)
+        pointing = position - after.xpos[robot.orientation_ids[hand]]
+        sight = position - camera
+        assert np.degrees(np.arccos(pointing @ sight / np.linalg.norm(pointing) / np.linalg.norm(sight))) < 6
+        old_position, old_matrix = robot.point(before, hand)
+        local = old_matrix.T @ (old_position - before.xpos[robot.orientation_ids[hand]])
+        side = np.cross(local, [0, 0, 1.])                                    # a hand axis across the pointing one
+        swing = Rotation.align_vectors([matrix @ local], [old_matrix @ local])[0]
+        assert np.degrees(np.arccos(np.clip((matrix @ side) @ swing.apply(old_matrix @ side) / np.linalg.norm(side) ** 2, -1, 1))) < 6
+    point = copy.deepcopy(project['keyframes'][5]['motion'])
+    assert 'camera_aim' not in validate_motion({**point, 'camera_aim': True})     # a point target ignores it

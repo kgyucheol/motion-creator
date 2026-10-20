@@ -20,6 +20,7 @@ from .dynamic_clip import (APPROX_DEG, APPROX_MM, ARM_WAIST_COLUMNS, DEFAULT_MAX
                            RELAXATIONS, WAIST_MODES, _level, object_delta, scene_object_pose)
 from .robot import FEET, Robot
 from .row_ends import SHAPES, row_goals, row_of
+from .tool_model import head_camera_pose
 
 SEARCH_STEPS = 7
 REACH_MM, REACH_DEG = 10., 5.        # a hand this close to its goal counts as having reached it; past that the move stops short
@@ -95,6 +96,10 @@ def validate_motion(spec):
         raise ValueError(f'Hand angle tolerance must be 0–{MAX_ANGLE_TOLERANCE_DEG:.0f} degrees')
     if tolerance:
         out['angle_tolerance_deg'] = float(tolerance)
+    if spec.get('camera_aim') not in (None, False, True):
+        raise ValueError('Camera aim must be on or off')
+    if spec.get('camera_aim') and target['kind'] == 'object':      # a point target has no grasp point to look at: ignored
+        out['camera_aim'] = True
     return out
 
 
@@ -144,7 +149,11 @@ def _hand_goals(robot: Robot, end_q, spec, project, index):
     data = robot.data(end_q)
     hands = {f'{side}_hand': robot.point(data, f'{side}_hand') for side in spec['hands']}
     if target['kind'] == 'object':
-        return _row_end_goals(spec, hands, project, index)
+        aim = None
+        if spec.get('camera_aim'):          # the way each hand points: from its wrist to its TCP, in the hand frame
+            pointing = {hand: matrix.T @ (position - data.xpos[robot.orientation_ids[hand]]) for hand, (position, matrix) in hands.items()}
+            aim = head_camera_pose(robot, end_q)[0], {hand: axis / np.linalg.norm(axis) for hand, axis in pointing.items()}
+        return _row_end_goals(spec, hands, project, index, aim)
     middle = np.mean([position for position, _ in hands.values()], axis=0)
     reference = {'position': middle.tolist(), 'quaternion_xyzw': [0., 0., 0., 1.]}
     now_position, now_quaternion = target['point'], [0., 0., 0., 1.]
@@ -156,11 +165,13 @@ def _hand_goals(robot: Robot, end_q, spec, project, index):
     return goals, {'shift_mm': shift * 1000, 'rotation_deg': angle, 'hands': hands}, None
 
 
-def _row_end_goals(spec, hands, project, index):
+def _row_end_goals(spec, hands, project, index, aim=None):
     """Goals that put each hand at its end of the tracked object (see row_ends), plus the card's own TCP offset.
 
     A card without `ends` (saved before every object target became a row-end grasp) takes the tracked object, as it
-    was at `reference_pose`, as its reference."""
+    was at `reference_pose`, as its reference. With `aim` = (head camera position, {hand: pointing axis in the hand
+    frame}) each hand is then swung, by the smallest turn, to point along the camera's line of sight to its goal: the
+    hand reaches in the way the robot looks at the grasp point, keeping the recorded roll about that line."""
     from .motion import project_scene_objects
     target = spec['target']
     item = next((item for item in project_scene_objects(project) if item.get('id') == target['object_id']), None)
@@ -174,9 +185,18 @@ def _row_end_goals(spec, hands, project, index):
     offset = spec['offset']
     turn = Rotation.from_euler('z', offset['yaw_deg'], degrees=True)
     goals = {hand: (position + np.asarray(offset['position']), turn * rotation) for hand, (position, rotation) in goals.items()}
+    if aim is not None:
+        camera, pointing = aim
+        goals = {hand: (position, _swing_to(rotation, pointing[hand], position - camera)) for hand, (position, rotation) in goals.items()}
     shift = max(float(np.linalg.norm(goals[hand][0] - hands[hand][0])) for hand in goals)
     angle = max(float(np.degrees((goals[hand][1] * Rotation.from_matrix(hands[hand][1]).inv()).magnitude())) for hand in goals)
     return goals, {'shift_mm': shift * 1000, 'rotation_deg': angle, 'hands': hands}, None
+
+
+def _swing_to(rotation, local_axis, direction):
+    """`rotation` turned by the smallest rotation that makes its `local_axis` point along `direction`."""
+    swing, _ = Rotation.align_vectors([direction / np.linalg.norm(direction)], [rotation.apply(local_axis)])
+    return swing * rotation
 
 
 ROW_RELAXATIONS = (*RELAXATIONS, (.02, 400))       # row-end grasps may straighten the elbows freely: last, nearly no posture preference
